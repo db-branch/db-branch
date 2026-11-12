@@ -20,7 +20,7 @@ export function Banner({ role, onSwitch, home }: { role: Role | null; onSwitch: 
         <span>View as</span>
         {(["admin", "developer"] as const).map((r) => (
           <button key={r} type="button" aria-pressed={current === r} className={current === r ? "on" : ""} onClick={() => pick(r)}>
-            {r === "admin" ? "Admin" : "Developer"}
+            {r === "admin" ? "Admin console" : "Developer page"}
           </button>
         ))}
       </span>
