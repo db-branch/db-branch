@@ -277,7 +277,8 @@ POST /v1/branches/feature-x/checkpoints
 
 - 一覧は ZFS から読む（Raft には置かない）。担当ノード以外に届いた要求は担当ノードへ転送する
 - `size` はそのチェックポイントだけが持つ容量、`line` は履歴の線の番号（復元のたびに新しい線ができる）、`auto` は復元の前にシステムが取ったもの、`current` は現在のデータの元になったもの
-- 上限は設定 `branch.max_checkpoints`（既定 20）。超える作成は `409 conflict`。復元の前に自動で取る 1 件だけは上限を 1 つ超えてよい
+- 上限は設定 `branch.max_checkpoints`（既定 20）。数えるのは手動のチェックポイントだけで、超える作成は `409 conflict`。復元の前に自動で取る `before-restore-<時刻>` は数えず、復元を断る理由にもならない。自動のものは新しい 5 件だけ残り、6 件目ができる復元は一番古いものを通常の削除と同じ手順で消す
+- 作成（`201`）の応答には、ブランチの使用量（ライブ + 履歴）がプールの空きの半分を超えるとき `warning`（英文の文字列）が付く。作成は断らない。空きが不明なら付かない
 - 復元（`branch.restore`）はブランチが `ready` のときだけ。何も失わない（今の状態は `before-restore-<時刻>` として残り、他のチェックポイントも全て残る）。進捗は `cloning` `stopping` `checkpointing` `swapping` `promoting` `starting`
 - 名前の重複は `409 already_exists`、存在しないチェックポイントは `404`、不正な名前は `400`
 - 所有者と管理者だけが使える。ログインなしの呼び出しや `open` のブランチは対象外
@@ -314,6 +315,7 @@ POST /v1/branches
   "expires_at": "2026-11-12T12:00:00Z",
   "reset_at": "2026-11-09T12:00:08Z",
   "storage": { "used": 1048576, "referenced": 524288000 },
+  "checkpoints": true,
   "connection": {
     "host": "node2",
     "port": 33061,
@@ -332,6 +334,7 @@ POST /v1/branches
 - `status_reason`: `failed`・`lost` のときに短い英文
 - `expires_at`: 期限なしなら `null`。コンソールは `created_at` から `expires_at` までの残りで TTL バーを描く
 - `storage.used` はこのブランチ固有の差分、`storage.referenced` はベースと共有している分を含む全体（ZFS の値そのまま）
+- `checkpoints`: ブランチを持つノードのストレージがチェックポイントに対応しているか（そのノード自身の ZFS なら `true`。モジュール／共有ストレージでは `false`。クラスタではブランチのノードが報告した値で、未報告の古いノードも `false`）。`false` のとき、チェックポイントの API は `409`（エラーコード `checkpoints_unavailable`）を返し、コンソールはチェックポイントの操作を出さない
 - `connection`: 直接つなぐ場合。ProxySQL を使う場合は `routing` を見る（フェーズ 3 以降。それまでは `null`）
 - `operation`: 進行中のオペレーションがあればその ID とkind。なければ `null`
 - `GET /v1/branches/{name}/dsn` は `{"dsn": "mysql://app.feature-x:<password>@node2:33061/app"}` を返す。パスワードは一覧・単体取得には含めない。この呼び出しは読み取りだが監査イベントを出す

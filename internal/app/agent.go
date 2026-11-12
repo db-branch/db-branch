@@ -214,6 +214,7 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	startModules(ctx, a, cfg, node, mods, log)
 	if cl != nil {
 		cl.modules = srv.Modules
+		cl.checkpoints = svcCheckpoints(a)
 		cl.beatNow()
 	}
 	problems := &moduleProblems{m: map[string]string{}}

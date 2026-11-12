@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api, Branch } from "../api";
-import { checkpointNameProblem, hasHistory, MAX_CHECKPOINT_NAME, newestFirst, notes, savedLabel } from "../lib/checkpoints";
+import { checkpointNameProblem, hasHistory, MAX_CHECKPOINT_NAME, newestFirst, notes, savedLabel, spaceWarning } from "../lib/checkpoints";
 import { bytes, relative } from "../lib/format";
 import { t } from "../lib/i18n";
 import { useLive } from "../lib/live";
@@ -20,6 +20,7 @@ export function CheckpointPanel({ branch: b, ready, allow, onChange }: { branch:
   const [asking, setAsking] = useState<Asking>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState("");
+  const [warning, setWarning] = useState("");
   const [working, setWorking] = useState(false);
   const problem = checkpointNameProblem(name);
   const noRole = t("Your role cannot do this.");
@@ -53,7 +54,11 @@ export function CheckpointPanel({ branch: b, ready, allow, onChange }: { branch:
     e.preventDefault();
     if (problem || saveWhy) return;
     const label = name.trim();
-    run(api.createCheckpoint(b.name, label || undefined), label ? t(savedLabel(label)) : t("Saved checkpoint")).then(() => setName(""));
+    setWarning("");
+    run(
+      api.createCheckpoint(b.name, label || undefined).then((cp) => setWarning(spaceWarning(cp))),
+      label ? t(savedLabel(label)) : t("Saved checkpoint"),
+    ).then(() => setName(""));
   };
 
   const rows = list ? newestFirst(list) : [];
@@ -84,6 +89,11 @@ export function CheckpointPanel({ branch: b, ready, allow, onChange }: { branch:
           {note}
         </p>
       )}
+      {warning && (
+        <p className="cps-warning small" role="status">
+          {warning}
+        </p>
+      )}
       <ErrorLine error={error ?? loadError} />
       {list && rows.length === 0 && <p className="muted small">{t("No checkpoints yet.")}</p>}
       {rows.length > 0 && (
@@ -109,7 +119,7 @@ export function CheckpointPanel({ branch: b, ready, allow, onChange }: { branch:
                 <div className="confirm" role="group" aria-label={asking.what === "restore" ? `Restore ${c.name}` : `Delete ${c.name}`} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), setAsking(null))}>
                   <span role="alert">
                     {asking.what === "restore"
-                      ? t("Restore {name} to {checkpoint}? Nothing is lost: the current state is saved first as a before-restore checkpoint, and every other checkpoint stays.", { name: b.name, checkpoint: c.name })
+                      ? t("Restore {name} to {checkpoint}? Nothing is lost: the current state is saved first as a before-restore checkpoint (the newest five are kept), and every other checkpoint stays.", { name: b.name, checkpoint: c.name })
                       : t("Delete checkpoint {checkpoint}? The other checkpoints are not affected.", { checkpoint: c.name })}
                   </span>
                   <span className="confirm-buttons">

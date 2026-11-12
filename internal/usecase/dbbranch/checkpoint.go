@@ -36,9 +36,13 @@ func (s *Service) maxCheckpoints() int {
 	return domain.DefaultMaxCheckpoints
 }
 
+// CheckpointsAvailable reports whether this node's storage supports
+// checkpoints (its own ZFS, not module or shared storage).
+func (s *Service) CheckpointsAvailable() bool { return s.Lineage != nil }
+
 func (s *Service) requireLineage() error {
 	if s.Lineage == nil {
-		return fmt.Errorf("%w: checkpoints need this node's own ZFS storage", domain.ErrConflict)
+		return domain.ErrCheckpointsUnavailable
 	}
 	return nil
 }
@@ -159,7 +163,7 @@ func (s *Service) CreateCheckpoint(ctx context.Context, n domain.Name, name stri
 	if _, _, taken := domain.FindCheckpoint(lines, name); taken {
 		return domain.Checkpoint{}, fmt.Errorf("checkpoint %s of branch %s: %w", name, n, domain.ErrAlreadyExists)
 	}
-	if err := domain.CheckLimit(n.String(), len(domain.ListCheckpoints(lines, "")), s.maxCheckpoints(), false); err != nil {
+	if err := domain.CheckLimit(n.String(), domain.CountManual(domain.ListCheckpoints(lines, "")), s.maxCheckpoints()); err != nil {
 		return domain.Checkpoint{}, err
 	}
 	liveLine, ok := liveOf(lines)
@@ -224,6 +228,12 @@ func (s *Service) DeleteCheckpoint(ctx context.Context, n domain.Name, name stri
 	if err := br.CanCheckpoint(); err != nil {
 		return err
 	}
+	return s.deleteCheckpointLocked(ctx, n, name)
+}
+
+// deleteCheckpointLocked is DeleteCheckpoint without the checks of the
+// branch's state; the caller holds s.mu.
+func (s *Service) deleteCheckpointLocked(ctx context.Context, n domain.Name, name string) error {
 	lines, err := s.family(ctx, n)
 	if err != nil {
 		return err
@@ -243,6 +253,26 @@ func (s *Service) DeleteCheckpoint(ctx context.Context, n domain.Name, name stri
 	}
 	s.collectLogged(ctx, n)
 	return nil
+}
+
+// rotateAuto keeps the newest domain.MaxAutoCheckpoints automatic
+// checkpoints of branch n and deletes the older ones the normal way (lines
+// and garbage are handled there). It never fails a restore: a problem is
+// logged and the next restore tries again.
+func (s *Service) rotateAuto(ctx context.Context, n domain.Name) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lines, err := s.family(ctx, n)
+	if err != nil {
+		s.logf("branch %s: rotating automatic checkpoints: %v", n, err)
+		return
+	}
+	for _, c := range domain.AutoToRotate(domain.ListCheckpoints(lines, ""), domain.MaxAutoCheckpoints) {
+		if err := s.deleteCheckpointLocked(ctx, n, c.Name); err != nil {
+			s.logf("branch %s: deleting old automatic checkpoint %s: %v", n, c.Name, err)
+			return
+		}
+	}
 }
 
 func (s *Service) collectLogged(ctx context.Context, n domain.Name) {

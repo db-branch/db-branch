@@ -250,3 +250,46 @@ func TestCheckpoint_ログインなしの主体は開いたブランチでも断
 		}
 	}
 }
+
+func TestBranch_チェックポイントの可否をノードの能力から返す(t *testing.T) {
+	f := checkpointFixture(t)
+	_, body := f.do(t, "GET", "/v1/branches/x", nil)
+	if body["checkpoints"] != true {
+		t.Errorf("checkpoints = %v, want true", body["checkpoints"])
+	}
+	f.branches.noCheckpoints = true
+	_, body = f.do(t, "GET", "/v1/branches/x", nil)
+	if body["checkpoints"] != false {
+		t.Errorf("checkpoints = %v, want false on module storage", body["checkpoints"])
+	}
+	_, list := f.do(t, "GET", "/v1/branches", nil)
+	if list["items"].([]any)[0].(map[string]any)["checkpoints"] != false {
+		t.Errorf("list = %v", list)
+	}
+}
+
+func TestCheckpoints_ストレージが対応しないと専用コードの409を返す(t *testing.T) {
+	f := checkpointFixture(t)
+	f.branches.cpErr = fmt.Errorf("%w: %w", domain.ErrCheckpointsUnavailable, domain.ErrConflict)
+	resp, body := f.do(t, "POST", "/v1/branches/x/checkpoints", nil)
+	if resp.StatusCode != 409 || errCode(body) != "checkpoints_unavailable" {
+		t.Errorf("%d %v", resp.StatusCode, body)
+	}
+}
+
+func TestCreateCheckpoint_ブランチの使用量がプール空きの半分を超えたら警告を付ける(t *testing.T) {
+	f := checkpointFixture(t)
+	f.srv.PoolFree = func() uint64 { return 1 << 20 } // the branch uses 1 MiB (live and history)
+	resp, body := f.do(t, "POST", "/v1/branches/x/checkpoints", map[string]any{"name": "c9"})
+	if resp.StatusCode != 201 || body["name"] != "c9" || !strings.Contains(fmt.Sprint(body["warning"]), "half of the pool's free space") {
+		t.Errorf("%d %v", resp.StatusCode, body)
+	}
+	f.srv.PoolFree = func() uint64 { return 10 << 20 }
+	if _, body = f.do(t, "POST", "/v1/branches/x/checkpoints", map[string]any{"name": "c10"}); body["warning"] != nil {
+		t.Errorf("plenty of space: %v", body)
+	}
+	f.srv.PoolFree = nil
+	if _, body = f.do(t, "POST", "/v1/branches/x/checkpoints", map[string]any{"name": "c11"}); body["warning"] != nil {
+		t.Errorf("pool size unknown: %v", body)
+	}
+}

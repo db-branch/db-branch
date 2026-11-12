@@ -151,9 +151,6 @@ func (s *Service) beginRestore(ctx context.Context, n domain.Name, name string) 
 	if _, _, ok := domain.FindCheckpoint(lines, name); !ok {
 		return br, restoreIntent{}, fmt.Errorf("checkpoint %s of branch %s: %w", name, n, domain.ErrNotFound)
 	}
-	if err := domain.CheckLimit(n.String(), len(domain.ListCheckpoints(lines, "")), s.maxCheckpoints(), true); err != nil {
-		return br, restoreIntent{}, err
-	}
 	in := restoreIntent{
 		Op: opRestore, Source: domain.CheckpointSnapshot(name), NewLine: domain.NextLine(lines),
 		Auto: domain.UniqueCheckpointName(lines, domain.AutoCheckpointName("restore", s.Clock())),
@@ -247,6 +244,9 @@ func (s *Service) continueRestore(ctx context.Context, br domain.Branch, in rest
 		return err
 	}
 	s.collectLogged(ctx, br.Name)
+	if in.Auto != "" {
+		s.rotateAuto(ctx, br.Name)
+	}
 	return nil
 }
 

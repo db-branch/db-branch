@@ -667,3 +667,5 @@ li.brow.skeleton { height: 56px; border-radius: 0; border-bottom: 2px solid var(
 .cp-actions { display: inline-flex; align-items: center; gap: var(--s2); }
 .cp .confirm { flex: 1 1 100%; }
 .field-error { color: var(--bad); margin: 0; }
+
+.cps-warning { color: var(--warn); margin: 0.4rem 0; }

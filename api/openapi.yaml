@@ -179,7 +179,11 @@ paths:
       summary: Save the running branch's state as a checkpoint (a ZFS snapshot; instant, the server keeps running).
       description: |
         409 when the branch is not ready, the name is taken, or the branch holds
-        `branch.max_checkpoints` checkpoints already (default 20).
+        `branch.max_checkpoints` checkpoints of its own already (default 20; the automatic
+        before-restore checkpoints are not counted). The answer carries `warning` when the branch
+        (data and history) uses more than half of the pool's free space; the checkpoint is saved anyway. 409 with the error code
+        `checkpoints_unavailable` when the node's storage does not support checkpoints (see
+        `checkpoints` of the branch); this goes for every checkpoint endpoint.
       x-dbb-action: branch.checkpoint
       parameters:
         - $ref: '#/components/parameters/CSRF'
@@ -211,8 +215,9 @@ paths:
       operationId: restoreCheckpoint
       summary: Put the branch back to a checkpoint. Nothing is lost.
       description: |
-        The current state is saved first as the checkpoint `before-restore-<time>` (it may exceed
-        `branch.max_checkpoints` by one), then the server restarts on the restored data. Every
+        The current state is saved first as the checkpoint `before-restore-<time>` (automatic
+        checkpoints do not count toward `branch.max_checkpoints` and never block a restore; the
+        newest 5 are kept, and a restore that adds a sixth deletes the oldest), then the server restarts on the restored data. Every
         checkpoint stays restorable, any number of times. Operation kind `branch.restore`; phases
         `cloning`, `stopping`, `checkpointing`, `swapping`, `promoting`, `starting`.
       x-dbb-action: branch.restore
@@ -881,6 +886,7 @@ components:
         line: { type: integer, description: The line of history it was taken on; a restore starts a new one. 0 is the branch's first. }
         auto: { type: boolean, description: Taken by the system before a restore. }
         current: { type: boolean, description: The branch's data descends from this checkpoint. }
+        warning: { type: string, description: Only on the answer to a save, when the branch (data and history) uses more than half of the pool's free space. }
     Branch:
       type: object
       required: [name, status, base, snapshot, runtime, node, created_at, expires_at, storage]
@@ -898,6 +904,14 @@ components:
         reset_at:
           oneOf: [{ $ref: '#/components/schemas/Timestamp' }, { type: 'null' }]
         storage: { $ref: '#/components/schemas/Storage' }
+        checkpoints:
+          type: boolean
+          description: |
+            Whether the node holding the branch supports checkpoints (its own ZFS storage; false on
+            module or shared storage, where the checkpoint endpoints answer 409
+            `checkpoints_unavailable`). In a cluster this is the branch's node's own report, so it is
+            false for a node that has not reported it (older versions). Clients hide checkpoint
+            controls when it is false.
         connection:
           type: [object, 'null']
           properties:

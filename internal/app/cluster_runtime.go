@@ -38,6 +38,8 @@ type clusterRuntime struct {
 	replicate chan struct{}
 	// syncRuntimes asks for a runtime check now.
 	syncRuntimes chan struct{}
+	// checkpoints is whether this node's storage supports checkpoints, for the heartbeat.
+	checkpoints bool
 	// modules are the modules this agent runs, for the heartbeat.
 	modules []string
 	// moduleChanged is called when the recorded modules change. Optional.
@@ -186,6 +188,11 @@ func (c *clusterRuntime) Forward(node string) (http.Handler, error) {
 func (c *clusterRuntime) BranchUsage(node, branch string) (domain.Usage, bool) {
 	u, ok := c.store.State().Nodes[node].Usage[branch]
 	return u, ok
+}
+
+// NodeCheckpoints implements httpapi.Cluster.
+func (c *clusterRuntime) NodeCheckpoints(node string) bool {
+	return c.store.State().Nodes[node].Checkpoints
 }
 
 // NodeHost implements httpapi.Cluster.

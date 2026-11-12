@@ -29,6 +29,9 @@ type Node struct {
 	// Usage is the space each branch on the node uses, by branch name, so
 	// every node can show it.
 	Usage map[string]Usage `json:"usage,omitempty"`
+	// Checkpoints is whether the node's storage supports branch checkpoints
+	// (its own ZFS). Nodes from before checkpoints do not report it.
+	Checkpoints bool `json:"checkpoints,omitempty"`
 	// Protocol is the newest cluster protocol the node's binary speaks
 	// (0 for binaries from before protocols were reported, meaning 1).
 	Protocol int `json:"protocol,omitempty"`

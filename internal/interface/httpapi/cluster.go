@@ -65,6 +65,8 @@ type Cluster interface {
 	NodeHost(node string) string
 	// BranchUsage is the space a branch on another node uses, as last reported.
 	BranchUsage(node, branch string) (domain.Usage, bool)
+	// NodeCheckpoints reports whether node, as last reported, supports checkpoints.
+	NodeCheckpoints(node string) bool
 	// AddRuntime asks every node to install ref; RemoveRuntime withdraws it.
 	AddRuntime(ctx context.Context, ref domain.RuntimeRef) error
 	RemoveRuntime(ctx context.Context, ref domain.RuntimeRef) error
