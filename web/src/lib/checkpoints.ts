@@ -39,6 +39,12 @@ export function showCheckpoints(b: { checkpoints?: boolean }, allow: (action: st
   return b.checkpoints === true && ["branch.checkpoint", "branch.restore", "branch.checkpoint_delete"].some(allow);
 }
 
+// spaceWarning: the warning the server attaches to a saved checkpoint when the
+// branch (data and history) uses more than half of the pool's free space.
+export function spaceWarning(cp: { warning?: string }): string {
+  return (cp.warning ?? "").trim();
+}
+
 export function savedLabel(name: string): string {
   return `Saved checkpoint ${name}`;
 }

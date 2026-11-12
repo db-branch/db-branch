@@ -19,6 +19,8 @@ type checkpointView struct {
 	Line      int    `json:"line"`
 	Auto      bool   `json:"auto"`
 	Current   bool   `json:"current"`
+	// Warning is set when the branch uses more than half of the pool's free space.
+	Warning string `json:"warning,omitempty"`
 }
 
 func checkpointPath(n domain.Name, rest ...string) string {
@@ -50,6 +52,9 @@ func (a *App) checkpointCommand() *cobra.Command {
 				return a.printJSON(cp)
 			}
 			fmt.Fprintf(a.Stdout, "Saved checkpoint %s of %s\n", cp.Name, n)
+			if cp.Warning != "" {
+				fmt.Fprintf(a.Stderr, "Warning: %s\n", cp.Warning)
+			}
 			return nil
 		})),
 	}
@@ -135,7 +140,7 @@ func (a *App) restoreCheckpoint(noWait *bool) func(*cobra.Command, []string) err
 		if err := a.start(cmd.Context(), c, "POST", checkpointPath(n, cp, "restore"), nil, *noWait); err != nil || *noWait {
 			return err
 		}
-		fmt.Fprintf(a.Stdout, "Restored %s to %s. Nothing was lost: the state it left is kept as a before-restore checkpoint.\n", n, cp)
+		fmt.Fprintf(a.Stdout, "Restored %s to %s. Nothing was lost: the state it left is kept as a before-restore checkpoint (the newest five of those are kept).\n", n, cp)
 		return nil
 	}))
 }

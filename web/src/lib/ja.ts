@@ -230,8 +230,8 @@ export const ja: Record<string, string> = {
   "No checkpoints yet.": "チェックポイントはまだありません。",
   "At most {max} characters.": "最大 {max} 文字です。",
   "Use lowercase letters, digits and hyphens, not at the ends.": "小文字の英字・数字・ハイフンが使えます（先頭と末尾にハイフンは置けません）。",
-  "Restore {name} to {checkpoint}? Nothing is lost: the current state is saved first as a before-restore checkpoint, and every other checkpoint stays.":
-    "{name} を {checkpoint} の状態に戻しますか？ 何も失われません。いまの状態は先に before-restore のチェックポイントとして保存され、ほかのチェックポイントもすべて残ります。",
+  "Restore {name} to {checkpoint}? Nothing is lost: the current state is saved first as a before-restore checkpoint (the newest five are kept), and every other checkpoint stays.":
+    "{name} を {checkpoint} の状態に戻しますか？ 何も失われません。いまの状態は先に before-restore のチェックポイントとして保存され（新しい 5 件が残ります）、ほかのチェックポイントもすべて残ります。",
   "Delete checkpoint {checkpoint}? The other checkpoints are not affected.": "チェックポイント {checkpoint} を削除しますか？ ほかのチェックポイントには影響しません。",
   "The branch's data descends from this checkpoint.": "この Branch のデータは、このチェックポイントから続いています。",
   "Saved automatically before a restore.": "復元の前に自動で保存されました。",

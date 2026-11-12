@@ -26,7 +26,7 @@ export type Branch = {
 // Checkpoint is a saved state of a branch. line is the line of history it was
 // taken on (a restore starts a new one); auto marks those taken before a
 // restore; current marks the one the branch's data descends from.
-export type Checkpoint = { name: string; created_at: string; size: number; line: number; auto: boolean; current: boolean };
+export type Checkpoint = { name: string; created_at: string; size: number; line: number; auto: boolean; current: boolean; warning?: string };
 
 export type Base = {
   name: string;

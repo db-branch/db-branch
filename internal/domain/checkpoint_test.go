@@ -2,6 +2,8 @@ package domain_test
 
 import (
 	"errors"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -120,19 +122,60 @@ func TestUniqueCheckpointName_重なる名前には番号を付ける(t *testing
 	}
 }
 
-func TestCheckLimit_手動は上限まで自動は上限を一つ超えて許す(t *testing.T) {
-	if err := domain.CheckLimit("x", 19, 20, false); err != nil {
+func TestCheckLimit_手動の数だけが上限に当たる(t *testing.T) {
+	if err := domain.CheckLimit("x", 19, 20); err != nil {
 		t.Errorf("19 of 20: %v", err)
 	}
-	if err := domain.CheckLimit("x", 20, 20, false); !errors.Is(err, domain.ErrConflict) {
+	err := domain.CheckLimit("x", 20, 20)
+	if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "limit 20") {
 		t.Errorf("20 of 20: %v", err)
 	}
-	if err := domain.CheckLimit("x", 20, 20, true); err != nil {
-		t.Errorf("auto at the limit: %v", err)
+}
+
+func cps(spec string) []domain.Checkpoint {
+	// "m1 a2 a3": m = manual, a = automatic; the number is the minute taken.
+	var out []domain.Checkpoint
+	for _, f := range strings.Fields(spec) {
+		min, _ := strconv.Atoi(f[1:])
+		out = append(out, domain.Checkpoint{Name: f, CreatedAt: now.Add(time.Duration(min) * time.Minute), Auto: f[0] == 'a'})
 	}
-	err := domain.CheckLimit("x", 21, 20, true)
-	if !errors.Is(err, domain.ErrConflict) {
-		t.Errorf("auto above the limit: %v", err)
+	return out
+}
+
+func TestCountManual_自動のチェックポイントは数えない(t *testing.T) {
+	if got := domain.CountManual(cps("m1 a2 m3 a4 a5")); got != 2 {
+		t.Errorf("count = %d, want 2", got)
+	}
+}
+
+func names(list []domain.Checkpoint) []string {
+	var out []string
+	for _, c := range list {
+		out = append(out, c.Name)
+	}
+	return out
+}
+
+func TestAutoToRotate_新しい5件を残し古い自動から順に返す(t *testing.T) {
+	got := domain.AutoToRotate(cps("a7 m2 a1 a3 a5 a6 a4 a8 m9"), domain.MaxAutoCheckpoints)
+	if want := []string{"a1", "a3"}; !reflect.DeepEqual(names(got), want) {
+		t.Errorf("rotate = %v, want %v", names(got), want)
+	}
+	if got := domain.AutoToRotate(cps("a1 a2 a3 a4 a5 m6"), 5); len(got) != 0 {
+		t.Errorf("five automatic checkpoints are kept: %v", names(got))
+	}
+}
+
+func TestSpaceWarning_使用量がプール空きの半分を超えたら警告する(t *testing.T) {
+	if got := domain.SpaceWarning(50, 100); got != "" {
+		t.Errorf("exactly half: %q", got)
+	}
+	if got := domain.SpaceWarning(0, 0); got != "" {
+		t.Errorf("nothing known: %q", got)
+	}
+	got := domain.SpaceWarning(51, 100)
+	if !strings.Contains(got, "half") || !strings.Contains(got, "free space") {
+		t.Errorf("warning = %q", got)
 	}
 }
 

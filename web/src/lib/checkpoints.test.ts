@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Checkpoint } from "../api";
-import { checkpointNameProblem, hasHistory, MAX_CHECKPOINT_NAME, newestFirst, notes, savedLabel, showCheckpoints } from "./checkpoints";
+import { checkpointNameProblem, hasHistory, MAX_CHECKPOINT_NAME, newestFirst, notes, savedLabel, showCheckpoints, spaceWarning } from "./checkpoints";
 
 const cp = (name: string, at: string, over: Partial<Checkpoint> = {}): Checkpoint => ({ name, created_at: at, size: 0, line: 0, auto: false, current: false, ...over });
 
@@ -64,5 +64,15 @@ describe("showCheckpoints", () => {
   });
   it("権限が全く無ければ出さない", () => {
     expect(showCheckpoints({ checkpoints: true }, none)).toBe(false);
+  });
+});
+
+describe("spaceWarning", () => {
+  it("shows the server's warning of a freshly saved checkpoint, trimmed", () => {
+    expect(spaceWarning({ warning: "  uses more than half  " })).toBe("uses more than half");
+  });
+  it("is empty when there is none", () => {
+    expect(spaceWarning({})).toBe("");
+    expect(spaceWarning({ warning: "" })).toBe("");
   });
 });

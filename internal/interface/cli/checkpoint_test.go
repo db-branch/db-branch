@@ -134,3 +134,25 @@ func TestCheckpoint_ストレージが対応しないときは一行で伝える
 		}
 	}
 }
+
+func TestBranchCheckpoint_空き容量の警告は標準エラーに出す(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["POST /v1/branches/x/checkpoints"] = map[string]any{"name": "c1", "warning": "This branch uses more than half of the pool's free space."}
+	code, out, errOut := runAPI(t, api, "branch", "checkpoint", "x", "--name", "c1")
+	if code != 0 || !strings.Contains(out, "Saved checkpoint c1") || strings.Contains(out, "half") {
+		t.Errorf("exit %d out %q", code, out)
+	}
+	if !strings.Contains(errOut, "Warning: This branch uses more than half") {
+		t.Errorf("stderr = %q", errOut)
+	}
+}
+
+func TestBranchRestore_自動チェックポイントは新しい5件だけ残ると伝える(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["POST /v1/branches/x/checkpoints/c1/restore"] = accepted("op_7", "branch.restore")
+	api.answers["GET /v1/operations/op_7"] = map[string]any{"id": "op_7", "state": "succeeded"}
+	code, out, errOut := runAPI(t, api, "branch", "restore", "x", "c1")
+	if code != 0 || !strings.Contains(out, "newest five") {
+		t.Errorf("exit %d out %q err %q", code, out, errOut)
+	}
+}

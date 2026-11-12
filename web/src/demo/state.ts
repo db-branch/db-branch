@@ -176,7 +176,7 @@ export function seed(now: number): State {
         settings: [
           iv("branch.default_ttl", "Default TTL", "duration", "", "Lifetime of a branch made without one (empty: 7 days)."),
           iv("branch.memory_mb", "Branch memory (MB)", "int", "512"),
-          iv("branch.max_checkpoints", "Checkpoints per branch", "int", "20", "The most checkpoints one branch may hold. The checkpoint taken automatically before a restore may exceed it by one."),
+          iv("branch.max_checkpoints", "Checkpoints per branch", "int", "20", "The most checkpoints you take yourself that one branch may hold. The automatic before-restore checkpoints do not count (the newest five are kept)."),
           iv("branch.anonymous_ttl", "Anonymous branch TTL", "duration", "4h0m0s"),
           iv("branch.anonymous_max", "Anonymous branches", "int", "2"),
           iv("upload.max_mb", "Largest dump upload (MB)", "int", "20480"),

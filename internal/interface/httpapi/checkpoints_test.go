@@ -276,3 +276,20 @@ func TestCheckpoints_ストレージが対応しないと専用コードの409�
 		t.Errorf("%d %v", resp.StatusCode, body)
 	}
 }
+
+func TestCreateCheckpoint_ブランチの使用量がプール空きの半分を超えたら警告を付ける(t *testing.T) {
+	f := checkpointFixture(t)
+	f.srv.PoolFree = func() uint64 { return 1 << 20 } // the branch uses 1 MiB (live and history)
+	resp, body := f.do(t, "POST", "/v1/branches/x/checkpoints", map[string]any{"name": "c9"})
+	if resp.StatusCode != 201 || body["name"] != "c9" || !strings.Contains(fmt.Sprint(body["warning"]), "half of the pool's free space") {
+		t.Errorf("%d %v", resp.StatusCode, body)
+	}
+	f.srv.PoolFree = func() uint64 { return 10 << 20 }
+	if _, body = f.do(t, "POST", "/v1/branches/x/checkpoints", map[string]any{"name": "c10"}); body["warning"] != nil {
+		t.Errorf("plenty of space: %v", body)
+	}
+	f.srv.PoolFree = nil
+	if _, body = f.do(t, "POST", "/v1/branches/x/checkpoints", map[string]any{"name": "c11"}); body["warning"] != nil {
+		t.Errorf("pool size unknown: %v", body)
+	}
+}

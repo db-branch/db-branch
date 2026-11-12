@@ -1,6 +1,7 @@
 package dbbranch_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -184,27 +185,75 @@ func TestRestoreCheckpoint_受け付けない場合を断る(t *testing.T) {
 	}
 }
 
-func TestRestoreCheckpoint_自動の一件だけ上限を超えられる(t *testing.T) {
+func TestRestoreCheckpoint_自動のチェックポイントは上限に数えず復元を妨げない(t *testing.T) {
 	z := newZEnv(t)
 	z.history(t)
 	z.max = 2
-	z.restore(t, "c1") // 2 checkpoints + the automatic one
-	if got := len(z.names(t)); got != 3 {
+	z.restore(t, "c1") // two manual checkpoints: at the limit, restoring still works
+	z.restore(t, "c2")
+	z.restore(t, "c1")
+	if got := len(z.names(t)); got != 5 {
 		t.Fatalf("names = %v", z.names(t))
 	}
 	z.tick()
-	_, err := z.svc.RestoreCheckpoint(ctx, name("x"), "c2", nil)
-	if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "limit 2") {
-		t.Fatalf("error = %v, want a conflict naming the limit", err)
+	if _, err := z.svc.CreateCheckpoint(ctx, name("x"), "c3"); !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "limit 2") {
+		t.Fatalf("error = %v, want a conflict naming the limit for a manual checkpoint", err)
 	}
-	b, _ := z.store.GetBranch(ctx, name("x"))
-	if b.Status != domain.BranchReady {
-		t.Errorf("status = %s", b.Status)
-	}
-	if err := z.svc.DeleteCheckpoint(ctx, name("x"), z.autoName(t)); err != nil {
+	if err := z.svc.DeleteCheckpoint(ctx, name("x"), "c2"); err != nil {
 		t.Fatal(err)
 	}
-	z.restore(t, "c2")
+	z.checkpoint(t, "c3") // the automatic ones did not count
+}
+
+func TestRestoreCheckpoint_自動は新しい5件だけ残し古いものから消す(t *testing.T) {
+	z := newZEnv(t)
+	z.history(t)
+	var autos []string
+	autoNames := func() []string {
+		var out []string
+		for _, n := range z.names(t) {
+			if strings.HasPrefix(n, "before-restore-") {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	seen := map[string]bool{}
+	for i := 0; i < 7; i++ {
+		z.restore(t, []string{"c1", "c2"}[i%2])
+		for _, n := range autoNames() {
+			if !seen[n] {
+				seen[n] = true
+				autos = append(autos, n)
+			}
+		}
+		if got := len(autoNames()); got > 5 {
+			t.Fatalf("after restore %d: %d automatic checkpoints: %v", i+1, got, autoNames())
+		}
+	}
+	if len(autos) != 7 {
+		t.Fatalf("took %d automatic checkpoints: %v", len(autos), autos)
+	}
+	if got, want := autoNames(), autos[2:]; !eq(got, want) {
+		t.Errorf("automatic = %v, want the newest five %v", got, want)
+	}
+	names := strings.Join(z.names(t), " ")
+	if !strings.Contains(names, "c1") || !strings.Contains(names, "c2") {
+		t.Errorf("manual checkpoints must stay: %s", names)
+	}
+}
+
+func TestResetBranch_リセットは自動チェックポイントを増やさず回転もしない(t *testing.T) {
+	z := newZEnv(t)
+	z.history(t)
+	z.restore(t, "c1")
+	auto := z.autoName(t)
+	if _, err := z.svc.ResetBranch(ctx, name("x"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := z.names(t); !strings.Contains(strings.Join(got, " "), auto) || len(got) != 3 {
+		t.Errorf("names after reset = %v", got)
+	}
 }
 
 func TestDeleteCheckpoint_復元元の線が依存するものは見えなくして線ごと片付ける(t *testing.T) {
@@ -444,4 +493,32 @@ func TestRestoreCheckpoint_復旧中に再びクラッシュしても次の再�
 func (z *zenv) promoted() bool {
 	o := z.sim.ds[live].origin
 	return !strings.HasPrefix(o, history+"/") && strings.HasPrefix(o, "tank/db-branch/bases/")
+}
+
+// stuckSnapshots is storage that cannot destroy snapshots.
+type stuckSnapshots struct{ *zsim }
+
+func (stuckSnapshots) DestroySnapshot(context.Context, domain.Snapshot) error {
+	return errors.New("dataset is busy")
+}
+
+func TestRestoreCheckpoint_古い自動チェックポイントを消せなくても復元は成功する(t *testing.T) {
+	z := newZEnv(t)
+	z.history(t)
+	var logged []string
+	z.svc.Logf = func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }
+	for i := 0; i < 5; i++ {
+		z.restore(t, []string{"c1", "c2"}[i%2])
+	}
+	z.svc.Storage = stuckSnapshots{z.sim}
+	z.restore(t, "c1") // a sixth automatic checkpoint that cannot be rotated out
+	if got := len(z.names(t)); got != 8 {
+		t.Errorf("names = %v", z.names(t))
+	}
+	if len(logged) == 0 || !strings.Contains(strings.Join(logged, "\n"), "old automatic checkpoint") {
+		t.Errorf("log = %v", logged)
+	}
+	if b, _ := z.store.GetBranch(ctx, name("x")); b.Status != domain.BranchReady {
+		t.Errorf("status = %s", b.Status)
+	}
 }
