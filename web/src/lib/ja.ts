@@ -1,6 +1,8 @@
 // Japanese for the console. Keys are the English texts used with t().
 export const ja: Record<string, string> = {
   // Navigation and account
+  "Some nodes use other db-branch user ids than the cluster and take no new branches or replicas until they are fixed (db-branch cluster align-ids).":
+    "クラスタと異なる db-branch ユーザー ID を使っているノードがあります。修正するまで、そのノードには新しいブランチもレプリカも置かれません（db-branch cluster align-ids）。",
   "Sign in as someone else": "別のユーザーでサインイン",
   ", who is not an administrator.": "（管理者ではありません）",
   "Go to my branches": "自分のブランチへ",

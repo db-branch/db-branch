@@ -721,3 +721,25 @@ func TestStore_匿名の上限は全ノードが新しい版になるまで書�
 		t.Errorf("not stored: %+v", b.Anonymous)
 	}
 }
+
+func TestStore_クラスタのユーザーidは最初の記録が残り全メンバーが新版になるまで書かれない(t *testing.T) {
+	c := newCluster(t, 1)
+	l := c.leader(t)
+	if ids := l.ServiceIDs(); ids.Valid() {
+		t.Fatalf("before: %v", ids)
+	}
+	first := domain.ServiceIDs{UID: 109, GID: 112}
+	if err := l.InitServiceIDs(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	_ = l.InitServiceIDs(ctx, domain.ServiceIDs{UID: 103, GID: 109})
+	if ids := l.ServiceIDs(); ids != first {
+		t.Errorf("recorded %v", ids)
+	}
+	c2 := newCluster(t, 1)
+	l2 := c2.leader(t)
+	_ = l2.PutNode(ctx, domain.Node{Name: "old", Protocol: 14})
+	if err := l2.InitServiceIDs(ctx, first); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Errorf("an older member: %v", err)
+	}
+}

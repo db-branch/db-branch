@@ -28,6 +28,7 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/postgres"
 	"github.com/db-branch/db-branch/internal/infrastructure/runtimestore"
 	"github.com/db-branch/db-branch/internal/infrastructure/srcdump"
+	"github.com/db-branch/db-branch/internal/infrastructure/svcids"
 	"github.com/db-branch/db-branch/internal/infrastructure/zfs"
 	"github.com/db-branch/db-branch/internal/usecase/dbbranch"
 	"github.com/db-branch/db-branch/internal/usecase/runtime"
@@ -146,6 +147,7 @@ func New(cfg config.Config) (*App, error) {
 				RunRoot:      MySQLRunRoot,
 				Bind:         cfg.Bind,
 				Chown:        ChownTo(ServiceUser),
+				CheckOwner:   svcids.OwnerCheck(serviceUID),
 				StartTimeout: 2 * time.Minute,
 				PollInterval: 200 * time.Millisecond,
 			},
@@ -157,6 +159,7 @@ func New(cfg config.Config) (*App, error) {
 				Bind:         cfg.Bind,
 				User:         ServiceUser,
 				Chown:        ChownTo(ServiceUser),
+				CheckOwner:   svcids.OwnerCheck(serviceUID),
 				StartTimeout: 2 * time.Minute,
 				PollInterval: 200 * time.Millisecond,
 			},

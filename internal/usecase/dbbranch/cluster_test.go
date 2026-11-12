@@ -3,6 +3,7 @@ package dbbranch_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -227,5 +228,16 @@ func TestRuntimeInUse_自分のベースかブランチが使っていれば使�
 	_ = e.store.PutBranch(ctx, domain.Branch{Name: name("mine"), Node: "node1", Runtime: other})
 	if used, _ := e.svc.RuntimeInUse(ctx, other); !used {
 		t.Error("own branch")
+	}
+}
+
+func TestPlaceBranch_dbbranchのidがクラスタと違うノードには置かず理由を409で返す(t *testing.T) {
+	e := newEnv(t)
+	nodes := e.clustered()
+	e.withBase(t)
+	nodes.nodes[0].IDProblem = "uid 103 here, uid 109 in the cluster"
+	_, err := e.svc.PlaceBranch(ctx, dbbranch.CreateBranchRequest{Name: name("x"), Base: name("prod"), Node: "node1"})
+	if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "uid 103") {
+		t.Errorf("err = %v", err)
 	}
 }

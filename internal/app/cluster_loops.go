@@ -106,6 +106,7 @@ func (c *clusterRuntime) heartbeat(ctx context.Context, log *slog.Logger) {
 		if c.system != nil {
 			n.System = c.system(ctx)
 		}
+		n.ServiceIDs, n.IDProblem = c.checkServiceIDs(ctx, log)
 		if c.runtimes != nil {
 			n.Runtimes = c.runtimes(ctx)
 		}

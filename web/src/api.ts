@@ -136,13 +136,18 @@ export type ClusterNode = {
   metrics: Metrics | null;
   /** OS facts of the node; "unknown" for what an older node does not report. */
   system?: NodeSystem;
+  /** The node's local db-branch uid/gid, and how they differ from the cluster's (absent: they match). */
+  service_ids?: ServiceIds;
+  id_problem?: string;
 };
+
+export type ServiceIds = { uid: number; gid: number };
 
 export type NodeSystem = { distro: string; os: string; kernel: string; zfs: string };
 
 export type Metrics = { time: string; cpu: number; load1: number; mem_total: number; mem_used: number; net_rx: number; net_tx: number; arc: number };
 
-export type ClusterStatus = { mode: "single" | "cluster"; leader: string; protocol: number; nodes: ClusterNode[] };
+export type ClusterStatus = { mode: "single" | "cluster"; leader: string; protocol: number; service_ids?: ServiceIds; nodes: ClusterNode[] };
 
 export type UpdateCandidate = { version: string; kind: "minor" | "major"; requires?: string };
 export type NodeUpdate = { state: "pending" | "updating" | "done" | "failed"; from?: string; started_at?: string; finished_at?: string; error?: string };

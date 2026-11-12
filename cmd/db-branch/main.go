@@ -31,6 +31,7 @@ func main() {
 		ResetPassword: node.ResetPassword,
 		ClusterInit:   node.ClusterInit,
 		ClusterJoin:   node.ClusterJoin,
+		ClusterAlignIDs: node.AlignIDs,
 	}.Run(ctx, os.Args[1:])
 	stop()
 	os.Exit(code)

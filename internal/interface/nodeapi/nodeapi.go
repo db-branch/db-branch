@@ -48,6 +48,9 @@ type Server struct {
 	Artifact func(ctx context.Context, ref domain.RuntimeRef, arch string, part int) (io.ReadCloser, error)
 	// SendBase streams a base's snapshots (see dbbranch.Service.SendBase). Optional.
 	SendBase func(ctx context.Context, base domain.Name, from, to string, w io.Writer) error
+	// ServiceIDs returns the db-branch uid/gid of the cluster, told to nodes
+	// that join so they can adopt them before any data arrives. Optional.
+	ServiceIDs func() domain.ServiceIDs
 }
 
 // APIPrefix is where a member's /v1 API is mounted on the node API.
@@ -107,6 +110,9 @@ type joinRequest struct {
 type joinResponse struct {
 	CACert []byte `json:"ca_cert"`
 	CAKey  []byte `json:"ca_key"`
+	// ServiceIDs are the db-branch uid/gid the cluster uses (absent from
+	// members of older versions).
+	ServiceIDs *domain.ServiceIDs `json:"service_ids,omitempty"`
 }
 
 func (s *Server) join(w http.ResponseWriter, r *http.Request) {
@@ -122,8 +128,14 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cert, key := s.CA.PEM()
+	out := joinResponse{CACert: cert, CAKey: key}
+	if s.ServiceIDs != nil {
+		if ids := s.ServiceIDs(); ids.Valid() {
+			out.ServiceIDs = &ids
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(joinResponse{CACert: cert, CAKey: key})
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
@@ -307,12 +319,24 @@ func (c *Client) AddMember(ctx context.Context, apiAddr, id, raftAddr string) er
 	return c.post(ctx, apiAddr, "/internal/v1/voters", voterRequest{ID: id, RaftAddress: raftAddr}, nil)
 }
 
+// JoinInfo is what a member hands a joining node.
+type JoinInfo struct {
+	CACert, CAKey []byte
+	// ServiceIDs are the cluster's db-branch uid/gid (zero from a member of
+	// an older version, which does not know them).
+	ServiceIDs domain.ServiceIDs
+}
+
 // Join presents the token's secret to a member, trusting it only if its CA
 // matches the token's fingerprint, and returns the cluster CA.
-func Join(ctx context.Context, apiAddr string, tok clusterpki.Token) (caCert, caKey []byte, err error) {
+func Join(ctx context.Context, apiAddr string, tok clusterpki.Token) (JoinInfo, error) {
 	var out joinResponse
-	err = NewClient(clusterpki.PinnedTLS(tok.Fingerprint)).post(ctx, apiAddr, "/internal/v1/join", joinRequest{Secret: tok.Secret}, &out)
-	return out.CACert, out.CAKey, err
+	err := NewClient(clusterpki.PinnedTLS(tok.Fingerprint)).post(ctx, apiAddr, "/internal/v1/join", joinRequest{Secret: tok.Secret}, &out)
+	info := JoinInfo{CACert: out.CACert, CAKey: out.CAKey}
+	if out.ServiceIDs != nil {
+		info.ServiceIDs = *out.ServiceIDs
+	}
+	return info, err
 }
 
 // Proxy returns a handler that passes /v1 requests to the member at apiAddr,

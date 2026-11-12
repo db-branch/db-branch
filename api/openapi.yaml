@@ -1047,6 +1047,20 @@ components:
             os: { type: string, examples: [Ubuntu 26.04.1 LTS] }
             kernel: { type: string, examples: [7.0.0-14-generic], description: 'Running kernel release (uname -r).' }
             zfs: { type: string, examples: [2.4.0-1ubuntu1], description: 'ZFS userland version, with the kernel module version in parentheses when it differs.' }
+        service_ids:
+          description: The node's local db-branch user and group ids.
+          type: object
+          properties:
+            uid: { type: integer, examples: [109] }
+            gid: { type: integer, examples: [112] }
+        id_problem:
+          type: string
+          description: >-
+            Present when the node's db-branch uid/gid differ from the
+            cluster's (GET /v1/cluster also returns the cluster's as
+            service_ids). Such a node takes no new branches or replicas until
+            fixed with `db-branch cluster align-ids`; naming it explicitly
+            answers 409.
 
     OperationKind:
       type: string

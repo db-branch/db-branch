@@ -37,6 +37,9 @@ type Server struct {
 	User string
 	// Chown hands a path to User. Optional.
 	Chown func(path string) error
+	// CheckOwner fails with domain.ErrOwnership when path does not belong to
+	// User. Optional.
+	CheckOwner func(path string) error
 
 	StartTimeout time.Duration
 	PollInterval time.Duration
@@ -145,6 +148,11 @@ func (p *Server) ready(ctx context.Context, s domain.Server) bool {
 
 // Start starts the unit and waits until postgres accepts connections.
 func (p *Server) Start(ctx context.Context, s domain.Server) error {
+	if p.CheckOwner != nil {
+		if err := p.CheckOwner(s.DataDir); err != nil {
+			return err
+		}
+	}
 	if err := p.writeConfig(s); err != nil {
 		return err
 	}
@@ -153,12 +161,23 @@ func (p *Server) Start(ctx context.Context, s domain.Server) error {
 	}
 	deadline := time.Now().Add(p.StartTimeout)
 	for !p.ready(ctx, s) {
+		if p.exited(ctx, s) {
+			return domain.StartFailure(s.ID, p.journal(ctx, s))
+		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%s did not become ready within %s: %s", s.ID, p.StartTimeout, p.journal(ctx, s))
 		}
 		time.Sleep(p.PollInterval)
 	}
 	return nil
+}
+
+// exited reports whether the unit has stopped for good, so there is nothing
+// left to wait for.
+func (p *Server) exited(ctx context.Context, s domain.Server) bool {
+	out, _ := p.Run.Run(ctx, "systemctl", "is-active", unit(s))
+	st := strings.TrimSpace(string(out))
+	return st == "failed" || st == "inactive"
 }
 
 func (p *Server) journal(ctx context.Context, s domain.Server) string {

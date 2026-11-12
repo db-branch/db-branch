@@ -46,6 +46,11 @@ type Node struct {
 	// System describes the node's OS, kernel and ZFS (empty for nodes of
 	// versions that do not report it).
 	System NodeSystem `json:"system,omitzero"`
+	// ServiceIDs are the node's local db-branch uid/gid, and IDProblem how
+	// they differ from the cluster's (empty: they match, or the node is of a
+	// version that does not report it). Such a node takes no new branches.
+	ServiceIDs ServiceIDs `json:"service_ids,omitzero"`
+	IDProblem  string     `json:"id_problem,omitempty"`
 }
 
 // Unknown is what clients show for a system fact a node does not report.

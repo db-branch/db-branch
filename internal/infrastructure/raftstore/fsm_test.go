@@ -191,7 +191,7 @@ func TestProtocol_すべてのコマンドに必要な版があり最新の版�
 	for _, op := range []string{"put_base", "delete_base", "put_branch", "delete_branch", "put_node", "delete_node",
 		"set_join_secret", "insert_base", "insert_branch", "put_operation", "set_admin", "init_admin", "add_replica",
 		"add_runtime", "remove_runtime", "put_route_user", "delete_route_user", "put_module", "put_settings", "put_token", "delete_token",
-		"put_module_data", "delete_module_data", "start_trial", "set_base_refresh", "record_base_refresh_run", "clear_base_refresh", "set_base_replica_nodes", "remove_replica", "set_base_anonymous"} {
+		"put_module_data", "delete_module_data", "start_trial", "set_base_refresh", "record_base_refresh_run", "clear_base_refresh", "set_base_replica_nodes", "remove_replica", "set_base_anonymous", "init_service_ids"} {
 		n := raftstore.Command{Op: op}.Needs()
 		if n < 1 || n > raftstore.Protocol {
 			t.Errorf("%s needs %d", op, n)
@@ -431,5 +431,23 @@ func TestFSM_ノードのシステム情報とスナップショットの作成�
 	st := f.State()
 	if st.Nodes["node4"].System != n.System || st.Bases["prod"].Snapshots[0].Distro != "ubuntu-24.04" {
 		t.Errorf("state = %+v", st)
+	}
+}
+
+func TestFSM_ユーザーidは最初の記録だけが残り不完全なコマンドは拒否される(t *testing.T) {
+	f := raftstore.NewFSM()
+	apply(t, f, raftstore.InitServiceIDs(domain.ServiceIDs{UID: 109, GID: 112}))
+	apply(t, f, raftstore.InitServiceIDs(domain.ServiceIDs{UID: 103, GID: 109}))
+	if got := f.State().ServiceIDs; got == nil || *got != (domain.ServiceIDs{UID: 109, GID: 112}) {
+		t.Errorf("recorded %v", got)
+	}
+	if raftstore.InitServiceIDs(domain.ServiceIDs{UID: 1, GID: 1}).Needs() != 15 {
+		t.Error("init_service_ids needs protocol 15")
+	}
+	g := raftstore.NewFSM()
+	for _, c := range []raftstore.Command{{Op: "init_service_ids"}, raftstore.InitServiceIDs(domain.ServiceIDs{UID: 5})} {
+		if r := g.Apply(&raft.Log{Data: mustEncode(c)}); r == nil {
+			t.Errorf("%+v: want error", c)
+		}
 	}
 }
