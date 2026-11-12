@@ -138,9 +138,6 @@ func Test_モジュールはエージェントのブランチ操作を呼べる(
 	if err := h.RestoreCheckpoint(ctx, "x", "c1", "note"); err != nil {
 		t.Error(err)
 	}
-	if err := h.Reset(ctx, "x", "n"); err != nil {
-		t.Error(err)
-	}
 	if db, err := h.DB(ctx, "x"); err != nil || db.Socket != "/run/x" {
 		t.Errorf("db %+v %v", db, err)
 	}
@@ -160,7 +157,7 @@ func Test_モジュールはエージェントのブランチ操作を呼べる(
 	if err := h.EndOperation(ctx, id, ""); err != nil {
 		t.Error(err)
 	}
-	want := []string{"branch x", "branches", "graph x", "checkpoint x c9", "restore x c1 note", "reset x n", "db x", "open x c1", "close /mnt/x",
+	want := []string{"branch x", "branches", "graph x", "checkpoint x c9", "restore x c1 note", "db x", "open x c1", "close /mnt/x",
 		"start history.restore x", "report op_1 replaying", "end op_1 "}
 	if len(fh.calls) != len(want) {
 		t.Fatalf("calls = %q", fh.calls)
@@ -171,7 +168,7 @@ func Test_モジュールはエージェントのブランチ操作を呼べる(
 		}
 	}
 	// Failures arrive with their sentinel.
-	for _, op := range []string{"branch x", "branches", "graph x", "checkpoint x c9", "restore x c1 note", "reset x n", "db x", "open x c1", "close /mnt/x",
+	for _, op := range []string{"branch x", "branches", "graph x", "checkpoint x c9", "restore x c1 note", "db x", "open x c1", "close /mnt/x",
 		"start history.restore x", "report op_1 p", "end op_1 boom"} {
 		fh.fail = op
 		var err error
@@ -186,8 +183,6 @@ func Test_モジュールはエージェントのブランチ操作を呼べる(
 			_, err = h.CreateCheckpoint(ctx, "x", "c9")
 		case "restore x c1 note":
 			err = h.RestoreCheckpoint(ctx, "x", "c1", "note")
-		case "reset x n":
-			err = h.Reset(ctx, "x", "n")
 		case "db x":
 			_, err = h.DB(ctx, "x")
 		case "open x c1":

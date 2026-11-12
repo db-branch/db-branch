@@ -90,8 +90,6 @@ func (s *BranchHostServer) Call(c HostCall, out *HostReply) error {
 		out.Checkpoint, err = h.CreateCheckpoint(ctx, c.Name, c.Checkpoint)
 	case "restore":
 		err = h.RestoreCheckpoint(ctx, c.Name, c.Checkpoint, c.Note)
-	case "reset":
-		err = h.Reset(ctx, c.Name, c.Note)
 	case "db":
 		out.DB, err = h.DB(ctx, c.Name)
 	case "open-line":
@@ -144,11 +142,6 @@ func (h *hostRemote) CreateCheckpoint(_ context.Context, name, checkpoint string
 
 func (h *hostRemote) RestoreCheckpoint(_ context.Context, name, checkpoint, note string) error {
 	_, err := h.call(HostCall{Op: "restore", Name: name, Checkpoint: checkpoint, Note: note})
-	return err
-}
-
-func (h *hostRemote) Reset(_ context.Context, name, note string) error {
-	_, err := h.call(HostCall{Op: "reset", Name: name, Note: note})
 	return err
 }
 

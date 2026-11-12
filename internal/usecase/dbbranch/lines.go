@@ -33,9 +33,8 @@ func (m *lineMounts) take(dir string) (mounted, known bool) {
 	return mounted, known
 }
 
-// ResetPoint, as the checkpoint of OpenLine, names the branch's creation
-// state (the reset point). It cannot clash with a checkpoint name.
-const ResetPoint = "@reset"
+// ResetPoint is domain.ResetPoint.
+const ResetPoint = domain.ResetPoint
 
 // BranchAdmin is how a tool on this node reaches the branch's server as its
 // local admin.

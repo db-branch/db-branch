@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -323,7 +324,15 @@ func (z *zsim) Props(_ context.Context, name string) (map[string]string, error) 
 	return out, nil
 }
 
+// zfsValue is what the zfs driver accepts as a property value.
+var zfsValue = regexp.MustCompile(`^[A-Za-z0-9_.:/=-]+$`)
+
 func (z *zsim) SetProps(_ context.Context, target string, props map[string]string) error {
+	for k, v := range props {
+		if !zfsValue.MatchString(v) {
+			return fmt.Errorf("invalid zfs dataset: property %q=%q", k, v)
+		}
+	}
 	if err := z.mutate("zfs set %v %s", sortedPairs(props), target); err != nil {
 		return err
 	}

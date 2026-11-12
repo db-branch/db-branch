@@ -2,6 +2,7 @@ package dbbranch
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strconv"
@@ -52,7 +53,10 @@ func (in restoreIntent) head() string {
 	if in.Op != opRestore {
 		return ""
 	}
-	n, _ := domain.CheckpointOf(in.Source)
+	n, ok := domain.CheckpointOf(in.Source)
+	if !ok {
+		return "" // the creation state is no checkpoint
+	}
 	return n
 }
 
@@ -69,8 +73,23 @@ func (s *Service) writeIntent(ctx context.Context, n domain.Name, in restoreInte
 	}
 	return s.Lineage.SetProps(ctx, root, map[string]string{
 		domain.PropOp: in.Op, domain.PropSource: in.Source, domain.PropNewLine: strconv.Itoa(in.NewLine),
-		domain.PropAutoName: orNone(in.Auto), domain.PropNote: orNone(in.Note),
+		domain.PropAutoName: orNone(in.Auto), domain.PropNote: orNone(encodeNote(in.Note)),
 	})
+}
+
+// maxNote bounds a module's note (a zfs property holds 8 KiB once encoded).
+const maxNote = 4096
+
+// encodeNote writes a note as a zfs property value (the driver accepts only
+// letters, digits and a few signs).
+func encodeNote(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+
+func decodeNote(v string) string {
+	b, err := base64.RawURLEncoding.DecodeString(v)
+	if err != nil {
+		return "" // "-" (no note) and anything unreadable
+	}
+	return string(b)
 }
 
 // orNone stands for an empty value, which zfs cannot store.
@@ -102,9 +121,7 @@ func (s *Service) readIntent(ctx context.Context, n domain.Name) (restoreIntent,
 	if in.Auto == "-" {
 		in.Auto = ""
 	}
-	if in.Note = p[domain.PropNote]; in.Note == "-" {
-		in.Note = ""
-	}
+	in.Note = decodeNote(p[domain.PropNote])
 	return in, true, nil
 }
 
@@ -126,13 +143,20 @@ func (s *Service) RestoreCheckpoint(ctx context.Context, n domain.Name, name str
 
 // RestoreCheckpointWith is RestoreCheckpoint for a module: note is handed
 // to its RestoreFinisher once the checkpoint's data is in place and before
-// anyone can connect, so it can bring the branch forward from there.
+// anyone can connect, so it can bring the branch forward from there. The name
+// domain.ResetPoint restores the branch's creation state the same way (a
+// restore, not a reset: what the branch holds now is kept).
 func (s *Service) RestoreCheckpointWith(ctx context.Context, n domain.Name, name, note string, report Reporter) (domain.Branch, error) {
+	if len(note) > maxNote {
+		return domain.Branch{}, fmt.Errorf("%w: the note of a restore is at most %d bytes", domain.ErrInvalidName, maxNote)
+	}
 	if err := s.requireLineage(); err != nil {
 		return domain.Branch{}, err
 	}
-	if _, err := domain.ParseCheckpointName(name); err != nil {
-		return domain.Branch{}, err
+	if name != domain.ResetPoint {
+		if _, err := domain.ParseCheckpointName(name); err != nil {
+			return domain.Branch{}, err
+		}
 	}
 	br, in, err := s.beginRestore(ctx, n, name, note)
 	if err != nil {
@@ -160,14 +184,22 @@ func (s *Service) beginRestore(ctx context.Context, n domain.Name, name, note st
 	if err != nil {
 		return br, restoreIntent{}, err
 	}
-	if _, _, ok := domain.FindCheckpoint(lines, name); !ok {
+	source := domain.CheckpointSnapshot(name)
+	found := false
+	if name == domain.ResetPoint {
+		source = ResetSnapshot
+		_, found = domain.FindSnapshot(lines, ResetSnapshot)
+	} else {
+		_, _, found = domain.FindCheckpoint(lines, name)
+	}
+	if !found {
 		return br, restoreIntent{}, fmt.Errorf("checkpoint %s of branch %s: %w", name, n, domain.ErrNotFound)
 	}
 	if err := domain.CheckLimit(n.String(), len(domain.ListCheckpoints(lines, "")), s.maxCheckpoints(), true); err != nil {
 		return br, restoreIntent{}, err
 	}
 	in := restoreIntent{
-		Op: opRestore, Source: domain.CheckpointSnapshot(name), NewLine: domain.NextLine(lines),
+		Op: opRestore, Source: source, NewLine: domain.NextLine(lines),
 		Auto: domain.UniqueCheckpointName(lines, domain.AutoCheckpointName("restore", s.Clock())), Note: note,
 	}
 	br.Status = domain.BranchRestoring
@@ -450,7 +482,7 @@ func (s *Service) resumeFailedRestore(ctx context.Context, br domain.Branch) err
 // only its reset point, else (it holds checkpoints, or the reset point lives
 // on a line set aside) by swapping a clone of the reset point in, which keeps
 // the checkpoints. An interrupted swap is resumed.
-func (s *Service) resetBySwap(ctx context.Context, br domain.Branch, note string) (restoreIntent, bool, error) {
+func (s *Service) resetBySwap(ctx context.Context, br domain.Branch) (restoreIntent, bool, error) {
 	if s.Lineage == nil {
 		return restoreIntent{}, false, nil
 	}
@@ -461,10 +493,10 @@ func (s *Service) resetBySwap(ctx context.Context, br domain.Branch, note string
 	if err != nil {
 		return restoreIntent{}, false, err
 	}
-	if l, ok := liveOf(lines); ok && note == "" && len(l.Snapshots) == 1 && l.Snapshots[0].Name == ResetSnapshot {
+	if l, ok := liveOf(lines); ok && len(l.Snapshots) == 1 && l.Snapshots[0].Name == ResetSnapshot {
 		return restoreIntent{}, false, nil
 	}
-	in := restoreIntent{Op: opReset, Source: ResetSnapshot, NewLine: domain.NextLine(lines), Note: note}
+	in := restoreIntent{Op: opReset, Source: ResetSnapshot, NewLine: domain.NextLine(lines)}
 	return in, true, s.writeIntent(ctx, br.Name, in)
 }
 

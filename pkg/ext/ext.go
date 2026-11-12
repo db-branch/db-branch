@@ -343,8 +343,8 @@ func (list ServerOptioners) ServerOptions(ctx context.Context, b ServerBranch) (
 }
 
 // RestoreFinisher works on a branch's data right after a restore (of a
-// checkpoint, or the reset to its creation state) that a module started
-// with a note (BranchHost.RestoreCheckpoint, BranchHost.Reset): the data is
+// checkpoint, or of its creation state) that a module started
+// with a note (BranchHost.RestoreCheckpoint): the data is
 // in place, the server runs in maintenance mode (ServerBranch.Maintenance;
 // it takes no network connections) and nobody has connected yet. The module
 // reaches the server through BranchHost.DB. It runs again from the start
@@ -430,12 +430,11 @@ type BranchHost interface {
 	// CreateCheckpoint takes a checkpoint ("" names it from the time).
 	CreateCheckpoint(ctx context.Context, name, checkpoint string) (CheckpointInfo, error)
 	// RestoreCheckpoint restores the branch to a checkpoint and waits until
-	// it is done (the branch is ready again). A non-empty note is handed to
-	// the RestoreFinishers while the server is in maintenance mode.
+	// it is done (the branch is ready again). The checkpoint "@reset" is the
+	// branch's creation state. As for any restore, what the branch holds now
+	// is kept as a checkpoint. A non-empty note is handed to the
+	// RestoreFinishers while the server is in maintenance mode.
 	RestoreCheckpoint(ctx context.Context, name, checkpoint, note string) error
-	// Reset restores the branch's creation state, keeping its checkpoints,
-	// and waits. The note is as for RestoreCheckpoint.
-	Reset(ctx context.Context, name, note string) error
 	// DB is how to reach the branch's server as its local admin (a socket
 	// on this node; BinDir holds the client tools, which need LibDir).
 	DB(ctx context.Context, name string) (DBAccess, error)

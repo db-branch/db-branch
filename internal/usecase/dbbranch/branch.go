@@ -226,22 +226,15 @@ func (s *Service) transitionBranch(ctx context.Context, name domain.Name, check 
 
 // ResetBranch discards every change since the reset point.
 func (s *Service) ResetBranch(ctx context.Context, name domain.Name, report Reporter) (domain.Branch, error) {
-	return s.ResetBranchWith(ctx, name, "", report)
-}
-
-// ResetBranchWith is ResetBranch for a module: note is handed to its
-// RestoreFinisher once the reset data is in place (before anyone can
-// connect), so it can bring the branch forward from the reset point.
-func (s *Service) ResetBranchWith(ctx context.Context, name domain.Name, note string, report Reporter) (domain.Branch, error) {
 	br, err := s.transitionBranch(ctx, name, domain.Branch.CanReset, domain.BranchResetting)
 	if err != nil {
 		return br, err
 	}
-	return s.doReset(ctx, br, note, report)
+	return s.doReset(ctx, br, report)
 }
 
-func (s *Service) doReset(ctx context.Context, br domain.Branch, note string, report Reporter) (domain.Branch, error) {
-	if in, swap, err := s.resetBySwap(ctx, br, note); err != nil {
+func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter) (domain.Branch, error) {
+	if in, swap, err := s.resetBySwap(ctx, br); err != nil {
 		// Nothing was touched: the branch is still what it was.
 		br.Status = domain.BranchReady
 		return br, errors.Join(err, s.Store.PutBranch(ctx, br))
@@ -366,7 +359,7 @@ func (s *Service) Recover(ctx context.Context) error {
 			}
 			errs = append(errs, err)
 		case domain.BranchResetting:
-			_, err := s.doReset(ctx, br, "", nil)
+			_, err := s.doReset(ctx, br, nil)
 			errs = append(errs, err)
 		case domain.BranchRestoring:
 			errs = append(errs, s.resumeRestore(ctx, br))

@@ -16,7 +16,6 @@ import (
 // hostService is what the node's branch service offers modules beyond Branches.
 type hostService interface {
 	RestoreCheckpointWith(ctx context.Context, n domain.Name, name, note string, report dbbranch.Reporter) (domain.Branch, error)
-	ResetBranchWith(ctx context.Context, n domain.Name, note string, report dbbranch.Reporter) (domain.Branch, error)
 	BranchAdmin(ctx context.Context, n domain.Name) (domain.AdminAccess, error)
 	OpenLine(ctx context.Context, n domain.Name, line int, checkpoint string) (string, error)
 	CloseLine(ctx context.Context, dir string) error
@@ -140,26 +139,15 @@ func (h *branchHost) RestoreCheckpoint(ctx context.Context, name, checkpoint, no
 	if err != nil {
 		return err
 	}
-	if _, err := domain.ParseCheckpointName(checkpoint); err != nil {
-		return err
+	if checkpoint != domain.ResetPoint {
+		if _, err := domain.ParseCheckpointName(checkpoint); err != nil {
+			return err
+		}
 	}
 	if err := b.CanCheckpoint(); err != nil {
 		return err
 	}
 	_, err = hs.RestoreCheckpointWith(ctx, b.Name, checkpoint, note, nil)
-	h.s.publishBranch(ctx, svc, b.Name)
-	return err
-}
-
-func (h *branchHost) Reset(ctx context.Context, name, note string) error {
-	svc, hs, b, err := h.local(ctx, name)
-	if err != nil {
-		return err
-	}
-	if err := b.CanReset(); err != nil {
-		return err
-	}
-	_, err = hs.ResetBranchWith(ctx, b.Name, note, nil)
 	h.s.publishBranch(ctx, svc, b.Name)
 	return err
 }

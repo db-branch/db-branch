@@ -19,11 +19,6 @@ func (f *fakeBranches) RestoreCheckpointWith(_ context.Context, n domain.Name, c
 	return domain.Branch{}, f.cpErr
 }
 
-func (f *fakeBranches) ResetBranchWith(_ context.Context, n domain.Name, note string, _ dbbranch.Reporter) (domain.Branch, error) {
-	f.record(fmt.Sprintf("reset-with %s %q", n, note))
-	return domain.Branch{}, f.cpErr
-}
-
 func (f *fakeBranches) BranchAdmin(_ context.Context, n domain.Name) (domain.AdminAccess, error) {
 	f.record("admin " + n.String())
 	return domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/" + n.String() + ".sock", User: "root", BinDir: "/rt/bin", LibDir: "/rt/lib"}, f.cpErr
@@ -89,10 +84,10 @@ func TestBranchHost_チェックポイントの構造を返し作成と復元と
 	if err := h.RestoreCheckpoint(ctx, "x", "c1", "line=0"); err != nil {
 		t.Error(err)
 	}
-	if err := h.Reset(ctx, "x", "line=0"); err != nil {
+	if err := h.RestoreCheckpoint(ctx, "x", "@reset", "line=0"); err != nil {
 		t.Error(err)
 	}
-	if got := f.branches.calls[len(f.branches.calls)-2:]; got[0] != `restore-with x c1 "line=0"` || got[1] != `reset-with x "line=0"` {
+	if got := f.branches.calls[len(f.branches.calls)-2:]; got[0] != `restore-with x c1 "line=0"` || got[1] != `restore-with x @reset "line=0"` {
 		t.Errorf("calls = %v", f.branches.calls)
 	}
 	if err := h.RestoreCheckpoint(ctx, "x", "Bad Name", ""); !errors.Is(err, domain.ErrInvalidName) {
@@ -103,9 +98,6 @@ func TestBranchHost_チェックポイントの構造を返し作成と復元と
 	f.branches.branches["x"] = b
 	if err := h.RestoreCheckpoint(ctx, "x", "c1", ""); !errors.Is(err, domain.ErrConflict) {
 		t.Errorf("busy restore: %v", err)
-	}
-	if err := h.Reset(ctx, "x", ""); !errors.Is(err, domain.ErrConflict) {
-		t.Errorf("busy reset: %v", err)
 	}
 	f.branches.cpErr = errors.New("no zfs")
 	for name, call := range map[string]func() error{
@@ -144,7 +136,6 @@ func TestBranchHost_サーバーへの入口と線の読み取りを渡す(t *te
 	for _, call := range []func() error{
 		func() error { _, err := h.DB(ctx, "nope"); return err },
 		func() error { _, err := h.OpenLine(ctx, "nope", 0, ""); return err },
-		func() error { return h.Reset(ctx, "nope", "") },
 		func() error { return h.RestoreCheckpoint(ctx, "nope", "c1", "") },
 		func() error { _, err := h.CreateCheckpoint(ctx, "nope", ""); return err },
 		func() error { _, err := h.Graph(ctx, "nope"); return err },

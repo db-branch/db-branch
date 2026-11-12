@@ -18,6 +18,10 @@ import (
 // ResetSnapshot is the per-branch snapshot taken right after init SQL.
 const ResetSnapshot = "reset"
 
+// ResetPoint names the branch's creation state where a checkpoint is asked
+// for (restore by a module, OpenLine). It cannot clash with a checkpoint name.
+const ResetPoint = "@reset"
+
 const (
 	// CheckpointPrefix starts the ZFS snapshot name of every checkpoint.
 	CheckpointPrefix = "ckpt-"
