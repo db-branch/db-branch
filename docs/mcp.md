@@ -33,4 +33,4 @@ claude mcp add --transport http db-branch https://<node>:7080/v1/mcp --header "A
 
 ## 確認（2026-11-10）
 
-0101m でトークンを発行し、0103m の MCP に curl で JSON-RPC を送った。create_branch（init SQL でマスキング）→ ブランチは 0102m に配置 → query でマスク済みの行を取得 → DELETE で 2 行 → reset_branch で 2 行に戻る → delete_branch。branches のトークンでベースを消そうとすると 403、トークンなしは 401。
+node1 でトークンを発行し、node3 の MCP に curl で JSON-RPC を送った。create_branch（init SQL でマスキング）→ ブランチは node2 に配置 → query でマスク済みの行を取得 → DELETE で 2 行 → reset_branch で 2 行に戻る → delete_branch。branches のトークンでベースを消そうとすると 403、トークンなしは 401。

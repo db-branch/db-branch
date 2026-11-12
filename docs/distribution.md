@@ -49,4 +49,4 @@ sudo db-branch init --pool <pool>
 
 ## 検証（2026-11-10）
 
-使い捨ての鍵で署名したリポジトリを 0101m から HTTP で配り、0103m で `apt update`（署名の検証）→ `apt install db-branch` を実行し、db-branch の更新と db-branch-proxysql の追加、`proxysql` の取得がリポジトリから行われることを確認した。試験用の設定は削除済み。
+使い捨ての鍵で署名したリポジトリを node1 から HTTP で配り、node3 で `apt update`（署名の検証）→ `apt install db-branch` を実行し、db-branch の更新と db-branch-proxysql の追加、`proxysql` の取得がリポジトリから行われることを確認した。試験用の設定は削除済み。

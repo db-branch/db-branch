@@ -52,7 +52,7 @@ A base is a ZFS dataset holding a loaded database. A branch is a ZFS clone of a 
 
 - **Core (this repository), Apache-2.0:** branches, bases, runtimes, clustering, CLI, API, web console, MCP, monitoring, notifications, anonymous (no sign-in) branches with limits, scheduled base refresh, backup of cluster state.
 - **Free modules** in the same apt repository: `proxysql`, `greenmask`, `greenmask-mysql`, `anon` (routing and data masking).
-- **Paid modules** (auth/SSO, audit, masking governance, FSx storage) are separate, closed-source packages, self-hosted and enabled with a licence key (monthly, yearly or one-time). See [docs/modules.md](docs/modules.md) for the extension points they use.
+- **Paid modules** (auth/SSO, audit, masking governance, FSx storage) are separate, closed-source packages, self-hosted and enabled with a licence key (monthly or yearly). See [docs/modules.md](docs/modules.md) for the extension points they use.
 
 There is no hosted or cloud version of db-branch.
 
