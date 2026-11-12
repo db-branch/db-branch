@@ -61,6 +61,13 @@ func (s *Service) Replicate(ctx context.Context) error {
 		return err
 	}
 	nodes, _ := s.nodes(ctx) // unknown nodes only loosen the distribution check below
+	for _, n := range nodes {
+		if n.Name == s.Node && n.IDProblem != "" {
+			// Received data would not belong to the user that runs the
+			// servers here; wait until the node's ids are fixed.
+			return nil
+		}
+	}
 	var errs []error
 	for _, b := range bases {
 		if s.owns(b.Node) || b.Node == "" {

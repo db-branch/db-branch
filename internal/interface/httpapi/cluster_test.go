@@ -695,3 +695,23 @@ func TestCluster_単一ノードでも自分のシステム情報を返す(t *te
 		t.Errorf("system = %v", sys)
 	}
 }
+
+func TestCluster_クラスタのdbbranchのidと食い違うノードを理由つきで返す(t *testing.T) {
+	f := newFixture(t)
+	f.srv.Cluster = &fakeCluster{status: httpapi.ClusterStatus{Mode: "cluster", Leader: "n1", ServiceIDs: domain.ServiceIDs{UID: 109, GID: 112}, Nodes: []httpapi.NodeStatus{
+		{Name: "n1", ServiceIDs: domain.ServiceIDs{UID: 109, GID: 112}},
+		{Name: "n2", ServiceIDs: domain.ServiceIDs{UID: 103, GID: 109}, IDProblem: "ids differ"},
+	}}}
+	_, body := f.do(t, "GET", "/v1/cluster", nil)
+	if ids := body["service_ids"].(map[string]any); ids["uid"] != float64(109) || ids["gid"] != float64(112) {
+		t.Errorf("cluster ids = %v", ids)
+	}
+	nodes := body["nodes"].([]any)
+	if _, has := nodes[0].(map[string]any)["id_problem"]; has {
+		t.Errorf("n1 = %v", nodes[0])
+	}
+	n2 := nodes[1].(map[string]any)
+	if n2["id_problem"] != "ids differ" || n2["service_ids"].(map[string]any)["uid"] != float64(103) {
+		t.Errorf("n2 = %v", n2)
+	}
+}

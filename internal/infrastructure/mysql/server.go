@@ -35,6 +35,9 @@ type Server struct {
 	Bind string
 	// Chown hands a path to the unprivileged service user. Optional.
 	Chown func(path string) error
+	// CheckOwner fails with domain.ErrOwnership when path does not belong to
+	// the user the server runs as. Optional.
+	CheckOwner func(path string) error
 
 	StartTimeout time.Duration
 	PollInterval time.Duration
@@ -129,6 +132,11 @@ func (m *Server) PrepareClone(_ context.Context, s domain.Server) error {
 
 // Start starts the unit and waits until mysqld answers on its socket.
 func (m *Server) Start(ctx context.Context, s domain.Server) error {
+	if m.CheckOwner != nil {
+		if err := m.CheckOwner(s.DataDir); err != nil {
+			return err
+		}
+	}
 	if err := m.writeConfig(s); err != nil {
 		return err
 	}
@@ -140,11 +148,22 @@ func (m *Server) Start(ctx context.Context, s domain.Server) error {
 		if _, err := m.Run.Run(ctx, m.bin(s, "mysqladmin"), "--socket="+m.socket(s), "-uroot", "ping"); err == nil {
 			return nil
 		}
+		if m.exited(ctx, s) {
+			return domain.StartFailure(s.ID, m.tailLog(s, 0))
+		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%s did not become ready within %s: %s", s.ID, m.StartTimeout, m.tailLog(s, 0))
 		}
 		time.Sleep(m.PollInterval)
 	}
+}
+
+// exited reports whether the unit has stopped for good (mysqld gave up), so
+// there is nothing left to wait for.
+func (m *Server) exited(ctx context.Context, s domain.Server) bool {
+	out, _ := m.Run.Run(ctx, "systemctl", "is-active", unit(s))
+	st := strings.TrimSpace(string(out))
+	return st == "failed" || st == "inactive"
 }
 
 // Running reports whether the unit is active.

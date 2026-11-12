@@ -45,6 +45,11 @@ type NodeStatus struct {
 	// System is the node's OS, kernel and ZFS version; what an older node
 	// does not report reads "unknown".
 	System domain.NodeSystem `json:"system"`
+	// ServiceIDs are the node's db-branch uid/gid and IDProblem how they
+	// differ from the cluster's (empty: they match). Such a node takes no new
+	// branches or replicas until fixed.
+	ServiceIDs domain.ServiceIDs `json:"service_ids"`
+	IDProblem  string            `json:"id_problem,omitempty"`
 }
 
 // ClusterStatus is the membership seen from this node.
@@ -55,6 +60,9 @@ type ClusterStatus struct {
 	// Protocol is what every node speaks; features needing more wait for the
 	// remaining nodes to be upgraded.
 	Protocol int `json:"protocol"`
+	// ServiceIDs are the db-branch uid/gid every node should use (zero until
+	// the cluster has recorded them).
+	ServiceIDs domain.ServiceIDs `json:"service_ids"`
 }
 
 // Cluster is present when the node runs in cluster mode.
@@ -224,7 +232,7 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
 		}
 		nodes = append(nodes, v)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"mode": st.Mode, "leader": st.Leader, "protocol": st.Protocol, "nodes": nodes})
+	writeJSON(w, http.StatusOK, map[string]any{"mode": st.Mode, "leader": st.Leader, "protocol": st.Protocol, "service_ids": st.ServiceIDs, "nodes": nodes})
 }
 
 func (s *Server) clusterToken(local bool) http.HandlerFunc {

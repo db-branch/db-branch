@@ -563,6 +563,7 @@ GET /v1/cluster
 ```
 
 - `system`: ノードの OS（ディストリビューションのキー `distro`、表示名 `os`）、カーネル（`uname -r`）、ZFS の版（ユーザーランド。カーネルモジュールの版が違えば `2.3.1-1 (kmod 2.2.2-0ubuntu9)` のように続ける）。ハートビートで運ばれ、古いノードが報告しない項目は `"unknown"`。ノードごとに OS が違うクラスタでの PostgreSQL の扱いは [mixed-os.md](mixed-os.md)。PostgreSQL のベースを別ディストリビューションのノードに置く指定（`node`、`replica_nodes`）は `409 conflict` で断られる
+- `service_ids` / `id_problem`: ノードの `db-branch` ユーザーの uid/gid と、クラスタのものと食い違うときの理由（[service-user-ids.md](service-user-ids.md)）。`GET /v1/cluster` のトップレベルの `service_ids` はクラスタの値。食い違うノードには新しいブランチもレプリカも置かれず、`node` で指定すると `409 conflict`
 - `status`: `up` / `down` / `joining` / `leaving`
 - 単一ノード構成でも同じ形で返す（`voters: 1`）
 - コンソールは `capacity.allocated / capacity.size` で容量バーを描き、80% で琥珀色、90% で赤にする

@@ -34,6 +34,11 @@ export function Cluster() {
         )}
       </header>
       <ErrorLine error={error} />
+      {cluster?.nodes.some((n) => n.id_problem) && (
+        <p className="warn" role="alert">
+          {t("Some nodes use other db-branch user ids than the cluster and take no new branches or replicas until they are fixed (db-branch cluster align-ids).")}
+        </p>
+      )}
       <div className="nodes">
         {cluster?.nodes.map((n) => (
           <NodeColumn
@@ -89,6 +94,16 @@ function NodeColumn({ node, branches }: { node: ClusterNode; branches: { name: s
               {node.arc_problem}
             </span>
           )}
+        </div>
+      )}
+      {node.id_problem && (
+        <div className="node-section">
+          <h3>{t("db-branch ids")}</h3>
+          <span className="mono">{node.service_ids ? `uid ${node.service_ids.uid} / gid ${node.service_ids.gid}` : "—"}</span>
+          <span className="warn" role="alert">
+            {" "}
+            {node.id_problem}
+          </span>
         </div>
       )}
       <NodeSystemInfo system={node.system} />

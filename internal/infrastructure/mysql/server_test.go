@@ -29,6 +29,7 @@ type fakeSystem struct {
 	shutdownOK bool   // whether stopping writes "Shutdown complete"
 	errorLog   string
 	failOn     string
+	crashes    bool // mysqld exits right after starting
 }
 
 func (f *fakeSystem) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -58,6 +59,9 @@ func (f *fakeSystem) RunInput(_ context.Context, in io.Reader, name string, args
 		}
 		f.active = false
 	case strings.HasPrefix(call, "systemctl is-active"):
+		if f.crashes && f.active {
+			return []byte("failed\n"), &execx.Error{Command: call, Err: errors.New("exit 3")}
+		}
 		if f.active {
 			return []byte("active\n"), nil
 		}
@@ -506,5 +510,45 @@ func TestAdmin_ソケットのrootで入る道を返す(t *testing.T) {
 	f.srv.Bind = "192.0.2.10"
 	if a := f.srv.Admin(f.spec); a.Host != "192.0.2.10" {
 		t.Errorf("bound to one address: %+v", a)
+	}
+}
+
+func TestStart_サーバーが権限エラーで落ちたら待たずにErrOwnershipで失敗する(t *testing.T) {
+	f := newFixture(t)
+	f.sys.pingFails = 1 << 30
+	f.sys.crashes = true
+	f.srv.StartTimeout = time.Minute
+	appendFile(f.sys.errorLog, "[ERROR] File './binlog.index' not found (OS errno 13 - Permission denied)\n")
+
+	begin := time.Now()
+	err := f.srv.Start(ctx, f.spec)
+	if !errors.Is(err, domain.ErrOwnership) || !strings.Contains(err.Error(), "binlog.index") {
+		t.Fatalf("error = %v", err)
+	}
+	if time.Since(begin) > 5*time.Second {
+		t.Error("waited for the timeout")
+	}
+}
+
+func TestStart_落ちた理由が権限でなくても待たずに失敗する(t *testing.T) {
+	f := newFixture(t)
+	f.sys.pingFails = 1 << 30
+	f.sys.crashes = true
+	f.srv.StartTimeout = time.Minute
+	appendFile(f.sys.errorLog, "[ERROR] bad option\n")
+	err := f.srv.Start(ctx, f.spec)
+	if err == nil || errors.Is(err, domain.ErrOwnership) || !strings.Contains(err.Error(), "bad option") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestStart_データディレクトリの所有者が違えば起動せずに失敗する(t *testing.T) {
+	f := newFixture(t)
+	f.srv.CheckOwner = func(string) error { return domain.ErrOwnership }
+	if err := f.srv.Start(ctx, f.spec); !errors.Is(err, domain.ErrOwnership) {
+		t.Fatalf("error = %v", err)
+	}
+	if f.sys.called("systemctl start") {
+		t.Error("started anyway")
 	}
 }

@@ -27,6 +27,7 @@ type fakeSystem struct {
 	stopResult string
 	state      string // pg_controldata "Database cluster state"
 	failOn     string
+	crashes    bool
 	initdb     func(dataDir string)
 }
 
@@ -61,6 +62,9 @@ func (f *fakeSystem) RunInput(_ context.Context, in io.Reader, name string, args
 	case strings.HasPrefix(call, "systemctl stop"), strings.HasPrefix(call, "systemctl kill"):
 		f.active = false
 	case strings.HasPrefix(call, "systemctl is-active"):
+		if f.crashes && f.active {
+			return []byte("failed\n"), &execx.Error{Command: call, Err: errors.New("exit 3")}
+		}
 		if f.active {
 			return []byte("active\n"), nil
 		}
@@ -75,6 +79,9 @@ func (f *fakeSystem) RunInput(_ context.Context, in io.Reader, name string, args
 	case strings.Contains(call, "pg_controldata"):
 		return []byte("pg_control version number:            1800\nDatabase cluster state:               " + f.state + "\n"), nil
 	case strings.HasPrefix(call, "journalctl"):
+		if f.crashes {
+			return []byte("FATAL: could not open file \"postgresql.conf\": Permission denied\n"), nil
+		}
 		return []byte("FATAL: something\n"), nil
 	}
 	return nil, nil
@@ -351,5 +358,27 @@ func TestAdmin_ソケットの信頼された管理者で入る道を返す(t *t
 	a := f.srv.Admin(f.spec)
 	if a.Engine != domain.Postgres || a.User != "postgres" || a.Port != f.spec.Port || a.BinDir != filepath.Join(f.rt, "bin") || a.LibDir != filepath.Join(f.rt, "lib") || !strings.HasSuffix(a.Socket, f.spec.ID) || a.Host != "127.0.0.1" {
 		t.Errorf("%+v", a)
+	}
+}
+
+func TestStart_サーバーが権限エラーで落ちたら待たずにErrOwnershipで失敗する(t *testing.T) {
+	f := newFixture(t)
+	f.sys.notReady = 1 << 30
+	f.sys.crashes = true
+	f.srv.StartTimeout = time.Minute
+	err := f.srv.Start(ctx, f.spec)
+	if !errors.Is(err, domain.ErrOwnership) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestStart_データディレクトリの所有者が違えば起動せずに失敗する(t *testing.T) {
+	f := newFixture(t)
+	f.srv.CheckOwner = func(string) error { return domain.ErrOwnership }
+	if err := f.srv.Start(ctx, f.spec); !errors.Is(err, domain.ErrOwnership) {
+		t.Fatalf("error = %v", err)
+	}
+	if f.sys.called("systemctl start") {
+		t.Error("started anyway")
 	}
 }

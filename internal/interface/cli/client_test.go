@@ -13,8 +13,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/interface/cli"
+	"github.com/db-branch/db-branch/internal/usecase/idalign"
 )
 
 // fakeAPI answers requests from a table keyed by "METHOD path".
@@ -985,5 +987,57 @@ func TestBaseShow_匿名の上限を表示する(t *testing.T) {
 	_, out, _ := runAPI(t, api, "base", "show", "big")
 	if !strings.Contains(out, "Without sign-in:") || !strings.Contains(out, "up to 2 branches") {
 		t.Errorf("show lacks the limits:\n%s", out)
+	}
+}
+
+func TestClusterStatus_dbbranchのidが食い違うノードを問題として示す(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["GET /v1/cluster"] = map[string]any{"mode": "cluster", "leader": "n1", "service_ids": map[string]any{"uid": 109, "gid": 112}, "nodes": []any{
+		map[string]any{"name": "n1"},
+		map[string]any{"name": "n3", "id_problem": "the db-branch user and group are uid 103 / gid 109 here"},
+	}}
+	_, out, _ := runAPI(t, api, "cluster", "status")
+	for _, want := range []string{"runs db-branch as uid 109 / gid 112", "PROBLEM on n3", "uid 103 / gid 109 here", "no new branches or replicas"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "PROBLEM on n1") {
+		t.Errorf("n1 is fine:\n%s", out)
+	}
+}
+
+func TestClusterAlignIDs_クラスタのidを取得して差し込まれた処理に渡す(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["GET /v1/cluster"] = map[string]any{"mode": "cluster", "service_ids": map[string]any{"uid": 109, "gid": 112}}
+	var got domain.ServiceIDs
+	var res idalign.Result
+	var alignErr error
+	run := func() (int, string, string) {
+		var out, errOut bytes.Buffer
+		app := cli.App{Stdout: &out, Stderr: &errOut, Client: func(string) cli.Client { return api },
+			ClusterAlignIDs: func(_ context.Context, _ config.Config, ids domain.ServiceIDs) (idalign.Result, error) {
+				got = ids
+				return res, alignErr
+			}}
+		code := app.Run(context.Background(), []string{"--config", filepath.Join(t.TempDir(), "none.toml"), "cluster", "align-ids"})
+		return code, out.String(), errOut.String()
+	}
+	res = idalign.Result{Changed: true, From: domain.ServiceIDs{UID: 103, GID: 109}, To: domain.ServiceIDs{UID: 109, GID: 112}}
+	if code, out, _ := run(); code != 0 || got != res.To || !strings.Contains(out, "from uid 103 / gid 109 to uid 109 / gid 112") {
+		t.Errorf("changed: %d %q %v", code, out, got)
+	}
+	res = idalign.Result{To: domain.ServiceIDs{UID: 109, GID: 112}}
+	if code, out, _ := run(); code != 0 || !strings.Contains(out, "Already") {
+		t.Errorf("unchanged: %d %q", code, out)
+	}
+	alignErr = errors.New("uid 109 belongs to the user postgres")
+	if code, _, errOut := run(); code == 0 || !strings.Contains(errOut, "postgres") {
+		t.Errorf("refused: %d %q", code, errOut)
+	}
+	alignErr = nil
+	api.answers["GET /v1/cluster"] = map[string]any{"mode": "cluster"}
+	if code, _, errOut := run(); code == 0 || !strings.Contains(errOut, "not recorded") {
+		t.Errorf("no ids: %d %q", code, errOut)
 	}
 }

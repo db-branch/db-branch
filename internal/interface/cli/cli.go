@@ -12,7 +12,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
+	"github.com/db-branch/db-branch/internal/usecase/idalign"
 )
 
 // App is the db-branch command line application. The hooks are supplied by
@@ -35,6 +37,9 @@ type App struct {
 	ClusterInit func(ctx context.Context, cfg config.Config) error
 	// ClusterJoin joins the cluster that addr belongs to.
 	ClusterJoin func(ctx context.Context, cfg config.Config, addr, token string) error
+	// ClusterAlignIDs moves this node's db-branch user and group to the ids
+	// the cluster uses.
+	ClusterAlignIDs func(ctx context.Context, cfg config.Config, ids domain.ServiceIDs) (idalign.Result, error)
 	// Poll is how often operations are polled while waiting.
 	Poll time.Duration
 

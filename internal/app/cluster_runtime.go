@@ -157,12 +157,12 @@ func (c *clusterRuntime) Status(ctx context.Context) (httpapi.ClusterStatus, err
 			voters[sv.ID] = sv.Voter
 		}
 	}
-	st := httpapi.ClusterStatus{Mode: "cluster", Leader: leader, Protocol: c.store.ClusterProtocol()}
+	st := httpapi.ClusterStatus{Mode: "cluster", Leader: leader, Protocol: c.store.ClusterProtocol(), ServiceIDs: c.store.ServiceIDs()}
 	now := time.Now()
 	for _, n := range nodes {
 		st.Nodes = append(st.Nodes, httpapi.NodeStatus{
 			Name: n.Name, Host: n.Host, Address: n.Address, Version: n.Version, Leader: n.Name == leader, Voter: voters[n.Name],
-			Down: n.Down(now, NodeDownAfter), LastSeen: n.LastSeen, PoolSize: n.PoolSize, PoolFree: n.PoolFree, Runtimes: n.Runtimes, Modules: n.Modules, Metrics: n.Metrics, ModuleProblems: n.ModuleProblems, ArcMaxMB: n.ArcMaxMB, ArcProblem: n.ArcProblem, System: n.System,
+			Down: n.Down(now, NodeDownAfter), LastSeen: n.LastSeen, PoolSize: n.PoolSize, PoolFree: n.PoolFree, Runtimes: n.Runtimes, Modules: n.Modules, Metrics: n.Metrics, ModuleProblems: n.ModuleProblems, ArcMaxMB: n.ArcMaxMB, ArcProblem: n.ArcProblem, System: n.System, ServiceIDs: n.ServiceIDs, IDProblem: n.IDProblem,
 			Protocol: max(n.Protocol, 1),
 		})
 	}

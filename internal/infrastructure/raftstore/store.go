@@ -474,6 +474,20 @@ func (s *Store) PutSettings(ctx context.Context, scope string, values map[string
 	return s.Apply(ctx, PutSettings(scope, values))
 }
 
+// ServiceIDs returns the db-branch user and group ids the cluster agreed on
+// (the zero value before they are recorded).
+func (s *Store) ServiceIDs() domain.ServiceIDs {
+	if ids := s.fsm.State().ServiceIDs; ids != nil {
+		return *ids
+	}
+	return domain.ServiceIDs{}
+}
+
+// InitServiceIDs records ids unless the cluster has some already.
+func (s *Store) InitServiceIDs(ctx context.Context, ids domain.ServiceIDs) error {
+	return s.Apply(ctx, InitServiceIDs(ids))
+}
+
 // TrialStarted is when the cluster's trial began (zero before it did).
 func (s *Store) TrialStarted(context.Context) (time.Time, error) {
 	return domain.TrialStartedIn(s.fsm.State().Settings[domain.TrialScope]), nil

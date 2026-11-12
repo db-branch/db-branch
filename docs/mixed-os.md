@@ -15,6 +15,8 @@
 
 取得結果は 1 時間キャッシュする（再起動やパッケージ更新がなければ変わらず、ハートビートは数秒おきのため）。`GET /v1/cluster`、`db-branch cluster status`（OS 列）、コンソールの Cluster ページに出る。
 
+ディストリビューションが違うと `db-branch` ユーザーの uid/gid も違いやすい（24.04 と 26.04 など）。ベースのコピーは数値の所有者のまま運ばれるので、クラスタ全体で揃える。参加時の付け替えと食い違いの扱いは [service-user-ids.md](service-user-ids.md)。
+
 ## なぜ PostgreSQL だけか
 
 PostgreSQL は文字列の並び順を glibc のロケールデータ（または ICU）で決め、B-tree インデックスはその順序で作られる。別のリリースのノードでデータディレクトリを開くと、ロケールデータが違えばインデックスが壊れたように見え（検索漏れ、一意制約の破れ）、`collation version mismatch` の警告も出る。

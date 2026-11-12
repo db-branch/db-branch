@@ -93,6 +93,16 @@ func (p Placement) Choose() (string, error) {
 			ok = append(ok, c)
 		}
 	}
+	var sound []string
+	for _, c := range ok {
+		if nodes[c].IDProblem == "" {
+			sound = append(sound, c)
+		}
+	}
+	if len(sound) == 0 && len(ok) > 0 {
+		return "", ErrNodeIDMismatch(ok[0], nodes[ok[0]].IDProblem)
+	}
+	ok = sound
 	if p.Distro != "" {
 		var same []string
 		for _, c := range ok {

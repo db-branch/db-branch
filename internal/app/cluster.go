@@ -22,6 +22,7 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/filestore"
 	"github.com/db-branch/db-branch/internal/infrastructure/raftstore"
 	"github.com/db-branch/db-branch/internal/interface/nodeapi"
+	"github.com/db-branch/db-branch/internal/usecase/idalign"
 )
 
 // Cluster ports (design.md §8, docs/cluster-plan.md).
@@ -114,11 +115,19 @@ func (n Node) ClusterJoin(ctx context.Context, cfg config.Config, addr, token st
 	if !strings.Contains(addr, ":") {
 		addr = net.JoinHostPort(addr, strconv.Itoa(NodeAPIPort))
 	}
-	certPEM, keyPEM, err := nodeapi.Join(ctx, addr, tok)
+	info, err := nodeapi.Join(ctx, addr, tok)
 	if err != nil {
 		return err
 	}
-	ca, err := clusterpki.ParseCA(certPEM, keyPEM)
+	// Before any data arrives: bases keep their numeric owners when copied
+	// between nodes, so this node's db-branch ids must be the cluster's.
+	if _, err := n.alignServiceIDs(ctx, cfg, info.ServiceIDs); err != nil {
+		if !errors.Is(err, idalign.ErrIDTaken) {
+			_ = n.Restart(ctx) // services may have been stopped
+		}
+		return err
+	}
+	ca, err := clusterpki.ParseCA(info.CACert, info.CAKey)
 	if err != nil {
 		return err
 	}
@@ -177,7 +186,7 @@ func startCluster(ctx context.Context, cfg config.Config, pool string, api http.
 		_ = store.Close()
 		return nil, fmt.Errorf("node API listen: %w", err)
 	}
-	c.server = &http.Server{Handler: (&nodeapi.Server{Store: store, Client: client, CA: ca, API: api, SendBase: send, Artifact: artifacts}).Handler(), TLSConfig: cert.ServerTLS(false), ReadHeaderTimeout: 10 * time.Second}
+	c.server = &http.Server{Handler: (&nodeapi.Server{Store: store, Client: client, CA: ca, API: api, SendBase: send, Artifact: artifacts, ServiceIDs: c.clusterServiceIDs}).Handler(), TLSConfig: cert.ServerTLS(false), ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = c.server.ServeTLS(l, "", "") }()
 
 	if fresh && cc.Bootstrap {
