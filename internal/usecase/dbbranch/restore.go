@@ -396,7 +396,7 @@ func (s *Service) hideLive(ctx context.Context, br domain.Branch, in restoreInte
 	}
 	if in.Auto != "" {
 		report.report("checkpointing")
-		if err := s.ensureAuto(ctx, liveDS, in.Auto, line); err != nil {
+		if err := s.ensureAuto(ctx, liveDS, in.Auto, props); err != nil {
 			return err
 		}
 	}
@@ -409,7 +409,7 @@ func (s *Service) hideLive(ctx context.Context, br domain.Branch, in restoreInte
 
 // ensureAuto takes the automatic checkpoint unless an earlier attempt did,
 // and labels it either way.
-func (s *Service) ensureAuto(ctx context.Context, dataset, name string, line int) error {
+func (s *Service) ensureAuto(ctx context.Context, dataset, name string, props map[string]string) error {
 	snaps, err := s.Lineage.SnapshotInfos(ctx, dataset)
 	if err != nil {
 		return err
@@ -417,10 +417,10 @@ func (s *Service) ensureAuto(ctx context.Context, dataset, name string, line int
 	snap := domain.Snapshot{Dataset: dataset, Name: domain.CheckpointSnapshot(name)}
 	for _, x := range snaps {
 		if x.Name == snap.Name {
-			return s.labelCheckpoint(ctx, snap, line, true)
+			return s.labelCheckpoint(ctx, snap, props, true)
 		}
 	}
-	return s.takeCheckpoint(ctx, domain.Line{Dataset: dataset, Props: map[string]string{domain.PropLine: strconv.Itoa(line)}}, name, true)
+	return s.takeCheckpoint(ctx, domain.Line{Dataset: dataset, Props: props}, name, true)
 }
 
 // abortRestore undoes a restore that failed before anything was moved: the

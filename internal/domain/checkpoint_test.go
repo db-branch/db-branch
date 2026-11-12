@@ -234,3 +234,41 @@ func TestSnapshotLine_チェックポイントは取った線をリセットは�
 		t.Error("lines of snapshots")
 	}
 }
+
+func TestLineViews_データセットを失った線もチェックポイントから描く(t *testing.T) {
+	// Line 0's dataset was promoted away; its checkpoints now sit on line 2's dataset,
+	// and line 1 (a restore from line 0's c1) remembers where it came from on them.
+	lines := []domain.Line{{Dataset: "b/x", Live: true, Props: map[string]string{domain.PropLine: "2", domain.PropFrom: "ckpt-auto", domain.PropParent: "1"},
+		Snapshots: []domain.SnapshotInfo{
+			{Name: "reset"},
+			{Name: "ckpt-c1", Props: map[string]string{domain.PropLine: "0"}},
+			{Name: "ckpt-auto", Props: map[string]string{domain.PropLine: "1", domain.PropFrom: "ckpt-c1", domain.PropParent: "0"}},
+		}}}
+	got := domain.LineViews(lines)
+	if len(got) != 3 {
+		t.Fatalf("got %+v", got)
+	}
+	if got[0].Line != 0 || got[0].Live || got[0].Parent != nil || got[0].From != "" {
+		t.Errorf("line 0 = %+v", got[0])
+	}
+	if got[1].Line != 1 || got[1].Parent == nil || *got[1].Parent != 0 || got[1].From != "c1" {
+		t.Errorf("line 1 = %+v", got[1])
+	}
+	if got[2].Line != 2 || !got[2].Live || got[2].Parent == nil || *got[2].Parent != 1 || got[2].From != "auto" {
+		t.Errorf("line 2 = %+v", got[2])
+	}
+}
+
+func TestNewestCheckpointOfLine_線の最後のチェックポイントとそれを持つデータセットを返す(t *testing.T) {
+	lines := []domain.Line{
+		{Dataset: "a", Snapshots: []domain.SnapshotInfo{{Name: "reset"}, {Name: "ckpt-old", Created: now, Props: line(0)}}},
+		{Dataset: "b", Snapshots: []domain.SnapshotInfo{{Name: "ckpt-new", Created: now.Add(time.Hour), Props: line(0)}, {Name: "ckpt-other", Created: now.Add(2 * time.Hour), Props: line(1)}}},
+	}
+	ds, s, ok := domain.NewestCheckpointOfLine(lines, 0)
+	if !ok || ds != "b" || s.Name != "ckpt-new" {
+		t.Errorf("got %s %+v %v", ds, s, ok)
+	}
+	if _, _, ok := domain.NewestCheckpointOfLine(lines, 7); ok {
+		t.Error("a line without checkpoints")
+	}
+}

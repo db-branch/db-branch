@@ -62,7 +62,7 @@ func TestSnapshotInfos_作成順に時刻と容量とクローンと自前のプ
 		t.Errorf("checkpoint = %+v", c)
 	}
 	assertCalls(t, f, call{"zfs", "get", "-Hp", "-d", "1", "-t", "snapshot", "-o", "name,property,value,source",
-		"createtxg,creation,used,clones,db-branch:line,db-branch:auto", "tank/b/x"})
+		"createtxg,creation,used,clones,db-branch:line,db-branch:auto,db-branch:from,db-branch:parent", "tank/b/x"})
 }
 
 func TestSnapshotInfos_壊れた出力と不正な名前はエラー(t *testing.T) {

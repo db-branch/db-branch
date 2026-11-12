@@ -212,15 +212,24 @@ func (s *Service) takeCheckpoint(ctx context.Context, line domain.Line, name str
 	if err := s.Storage.Snapshot(ctx, snap); err != nil {
 		return err
 	}
-	return s.labelCheckpoint(ctx, snap, lineNumber(line.Props), auto)
+	return s.labelCheckpoint(ctx, snap, line.Props, auto)
 }
 
-func (s *Service) labelCheckpoint(ctx context.Context, snap domain.Snapshot, line int, auto bool) error {
+// labelCheckpoint records on the snapshot the line it belongs to, and where
+// that line came from: a line that a later restore promotes away loses its
+// dataset, and the checkpoints are all that is left to draw it from.
+func (s *Service) labelCheckpoint(ctx context.Context, snap domain.Snapshot, lineProps map[string]string, auto bool) error {
 	flag := "off"
 	if auto {
 		flag = "on"
 	}
-	if err := s.Lineage.SetProps(ctx, snap.String(), map[string]string{domain.PropLine: strconv.Itoa(line), domain.PropAuto: flag}); err != nil {
+	props := map[string]string{domain.PropLine: strconv.Itoa(lineNumber(lineProps)), domain.PropAuto: flag}
+	for _, k := range []string{domain.PropFrom, domain.PropParent} {
+		if v := lineProps[k]; v != "" {
+			props[k] = v
+		}
+	}
+	if err := s.Lineage.SetProps(ctx, snap.String(), props); err != nil {
 		return errors.Join(err, s.Storage.DestroySnapshot(ctx, snap))
 	}
 	return nil

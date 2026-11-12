@@ -113,3 +113,22 @@ func TestOpenLine_リセット点が無ければ見つからない(t *testing.T)
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestOpenLine_データセットが無くなった線は最後のチェックポイントを開く(t *testing.T) {
+	z := newZEnv(t)
+	z.history(t)
+	z.restore(t, "c1")
+	auto := z.autoName(t)
+	z.restore(t, auto) // line 0's dataset is promoted away and collected; its checkpoints live on
+	if _, ok := z.sim.ds[history+"/0"]; ok {
+		t.Fatal("the test expects line 0's dataset to be gone")
+	}
+	dir, err := z.svc.OpenLine(ctx, name("x"), 0, "")
+	if err != nil || !z.j.has("mount ro "+live+"@ckpt-"+auto) {
+		t.Fatalf("dir=%q err=%v journal=%v", dir, err, z.j.entries)
+	}
+	g, _ := z.svc.CheckpointGraph(ctx, name("x"))
+	if len(g.Lines) != 3 || g.Lines[0].Line != 0 || g.Lines[1].Parent == nil || g.Lines[2].Parent == nil || *g.Lines[2].Parent != 0 {
+		t.Errorf("graph lines = %+v", g.Lines)
+	}
+}

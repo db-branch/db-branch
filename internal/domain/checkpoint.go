@@ -363,27 +363,70 @@ type LineView struct {
 }
 
 // LineViews lists the lines of the family by number (the restore in
-// progress is not a line yet).
+// progress is not a line yet). A line whose dataset a later restore promoted
+// away is known by its checkpoints, which carry where it came from.
 func LineViews(lines []Line) []LineView {
-	out := []LineView{}
-	for _, l := range lines {
-		if l.Pending {
-			continue
-		}
-		v := LineView{Line: lineNumber(l.Props), Live: l.Live}
-		if from := l.Props[PropFrom]; from != "" {
+	byLine := map[int]LineView{}
+	origin := func(v *LineView, props map[string]string) {
+		if from := props[PropFrom]; from != "" && v.From == "" {
 			v.From = from
 			if n, ok := CheckpointOf(from); ok {
 				v.From = n
 			}
-			if p, err := strconv.Atoi(l.Props[PropParent]); err == nil {
+			if p, err := strconv.Atoi(props[PropParent]); err == nil {
 				v.Parent = &p
 			}
 		}
+	}
+	for _, l := range lines {
+		if l.Pending {
+			continue
+		}
+		for _, s := range l.Snapshots {
+			if _, ok := CheckpointOf(s.Name); !ok {
+				continue
+			}
+			n := lineNumber(s.Props)
+			v := byLine[n]
+			v.Line = n
+			origin(&v, s.Props)
+			byLine[n] = v
+		}
+	}
+	for _, l := range lines {
+		if l.Pending {
+			continue
+		}
+		n := lineNumber(l.Props)
+		v := byLine[n]
+		v.Line, v.Live = n, l.Live
+		origin(&v, l.Props)
+		byLine[n] = v
+	}
+	out := make([]LineView, 0, len(byLine))
+	for _, v := range byLine {
 		out = append(out, v)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Line < out[j].Line })
 	return out
+}
+
+// NewestCheckpointOfLine finds the newest checkpoint taken on a line and the
+// dataset that holds it now (the data of a line whose own dataset is gone).
+func NewestCheckpointOfLine(lines []Line, line int) (string, SnapshotInfo, bool) {
+	var best SnapshotInfo
+	dataset, found := "", false
+	for _, l := range lines {
+		for _, s := range l.Snapshots {
+			if _, ok := CheckpointOf(s.Name); !ok || lineNumber(s.Props) != line {
+				continue
+			}
+			if !found || s.Created.After(best.Created) {
+				dataset, best, found = l.Dataset, s, true
+			}
+		}
+	}
+	return dataset, best, found
 }
 
 func lineNumber(props map[string]string) int {

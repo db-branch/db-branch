@@ -98,6 +98,11 @@ func (s *Service) OpenLine(ctx context.Context, n domain.Name, line int, checkpo
 		}
 		return s.mountLine(ctx, l.Dataset)
 	}
+	// A line whose dataset a restore promoted away lives on in its checkpoints:
+	// its last one was taken when it was set aside.
+	if ds, info, ok := domain.NewestCheckpointOfLine(lines, line); ok {
+		return s.mountLine(ctx, ds+"@"+info.Name)
+	}
 	return "", fmt.Errorf("line %d of branch %s: %w", line, n, domain.ErrNotFound)
 }
 
