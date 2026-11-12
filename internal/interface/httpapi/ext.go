@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/pkg/ext"
 )
 
@@ -75,7 +76,7 @@ func (s *Server) extAPI(w http.ResponseWriter, r *http.Request) {
 		action = "ext." + module + ".read"
 	}
 	serve := func(w http.ResponseWriter, r *http.Request) {
-		if s.forward(w, r, r.URL.Query().Get("node")) {
+		if s.forward(w, r, s.extNode(r)) {
 			return
 		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxExtBody+1))
@@ -128,6 +129,33 @@ func (s *Server) extAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.guard(action, serve)(w, r)
+}
+
+// extNode is the node that answers a module request: the one named by
+// ?node=, else, for a path below /branches/<name>/, the node holding that
+// branch (a module sees only its own node's branches, see ext.BranchHost).
+func (s *Server) extNode(r *http.Request) string {
+	if node := r.URL.Query().Get("node"); node != "" {
+		return node
+	}
+	rest, ok := strings.CutPrefix("/"+r.PathValue("path"), "/branches/")
+	if !ok || s.Branches == nil {
+		return ""
+	}
+	name, _, _ := strings.Cut(rest, "/")
+	n, err := domain.ParseName(name)
+	if err != nil {
+		return ""
+	}
+	svc, err := s.Branches()
+	if err != nil {
+		return ""
+	}
+	b, err := svc.GetBranch(r.Context(), n)
+	if err != nil {
+		return ""
+	}
+	return b.Node
 }
 
 // modulePages lists the loaded modules' console pages, by module.

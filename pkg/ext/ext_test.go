@@ -223,3 +223,52 @@ func TestCombine_更新後のマスク実行を持つモジュールがなけれ
 		t.Errorf("%v", out.RefreshFollower)
 	}
 }
+
+type optioner struct {
+	lines []string
+	err   error
+}
+
+func (o optioner) ServerOptions(context.Context, ext.ServerBranch) (ext.ServerOptions, error) {
+	return ext.ServerOptions{Config: o.lines}, o.err
+}
+
+func TestCombine_サーバーの追加設定は全モジュール分をつなぎ一つの失敗で全体が失敗する(t *testing.T) {
+	out := ext.Combine([]ext.Module{{ServerOptioner: optioner{lines: []string{"a=1"}}}, {Name: "none"}, {ServerOptioner: optioner{lines: []string{"b=2"}}}})
+	got, err := out.ServerOptioner.ServerOptions(ctx, ext.ServerBranch{Name: "x"})
+	if err != nil || len(got.Config) != 2 || got.Config[0] != "a=1" || got.Config[1] != "b=2" {
+		t.Errorf("got %v %v", got, err)
+	}
+	no := errors.New("no licence")
+	bad := ext.Combine([]ext.Module{{ServerOptioner: optioner{lines: []string{"a=1"}}}, {ServerOptioner: optioner{err: no}}})
+	if _, err := bad.ServerOptioner.ServerOptions(ctx, ext.ServerBranch{}); !errors.Is(err, no) {
+		t.Errorf("err = %v", err)
+	}
+	if ext.Combine([]ext.Module{{Name: "a"}}).ServerOptioner != nil {
+		t.Error("no optioner")
+	}
+}
+
+type finisher struct {
+	err  error
+	note *string
+}
+
+func (f finisher) AfterRestore(_ context.Context, _ ext.ServerBranch, note string) error {
+	if f.note != nil {
+		*f.note += note
+	}
+	return f.err
+}
+
+func TestCombine_復元後の処理は全モジュールが走り失敗はまとめて返す(t *testing.T) {
+	var note string
+	boom := errors.New("boom")
+	out := ext.Combine([]ext.Module{{RestoreFinisher: finisher{err: boom}}, {RestoreFinisher: finisher{note: &note}}})
+	if err := out.RestoreFinisher.AfterRestore(ctx, ext.ServerBranch{}, "n"); !errors.Is(err, boom) || note != "n" {
+		t.Errorf("err %v note %q: the second module must still run", err, note)
+	}
+	if ext.Combine([]ext.Module{{Name: "a"}}).RestoreFinisher != nil {
+		t.Error("no finisher")
+	}
+}

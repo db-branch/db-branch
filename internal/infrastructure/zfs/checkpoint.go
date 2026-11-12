@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -279,4 +281,48 @@ func (d *Driver) Mount(ctx context.Context, dataset string) error {
 		return nil
 	}
 	return err
+}
+
+// linesDir is where read-only mounts of lines and checkpoints are made.
+const linesDir = "/run"
+
+// MountReadOnly mounts target (a dataset, or dataset@snapshot) read-only in
+// a new directory and returns it. A dataset that a restore set aside is not
+// mounted by zfs (canmount=off); the kernel mounts it all the same.
+func (d *Driver) MountReadOnly(ctx context.Context, target string) (string, error) {
+	if err := checkTarget(target); err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp(orDefault(d.RunDir, linesDir), "db-branch-line-")
+	if err != nil {
+		return "", err
+	}
+	opts := "ro,zfsutil"
+	if strings.Contains(target, "@") {
+		opts = "ro"
+	}
+	if _, err := d.run.Run(ctx, "mount", "-t", "zfs", "-o", opts, target, dir); err != nil {
+		_ = os.Remove(dir)
+		return "", fmt.Errorf("mount %s: %w", target, err)
+	}
+	return dir, nil
+}
+
+// Unmount undoes MountReadOnly. It touches nothing else: dir must be one
+// MountReadOnly made.
+func (d *Driver) Unmount(ctx context.Context, dir string) error {
+	if filepath.Dir(dir) != filepath.Clean(orDefault(d.RunDir, linesDir)) || !strings.HasPrefix(filepath.Base(dir), "db-branch-line-") {
+		return fmt.Errorf("%w: %q is not a read-only mount of ours", ErrInvalidDataset, dir)
+	}
+	if _, err := d.run.Run(ctx, "umount", dir); err != nil {
+		return fmt.Errorf("umount %s: %w", dir, err)
+	}
+	return os.Remove(dir)
+}
+
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }

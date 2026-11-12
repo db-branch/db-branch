@@ -45,6 +45,10 @@ type fakeBranches struct {
 	// cps are the checkpoints every branch has; cpErr fails checkpoint calls.
 	cps   []domain.Checkpoint
 	cpErr error
+	// graph is the line structure CheckpointGraph answers.
+	graph domain.Graph
+	// lastCreate is the latest CreateBranch request.
+	lastCreate dbbranch.CreateBranchRequest
 }
 
 func (f *fakeBranches) PlaceRecreate(_ context.Context, n domain.Name) (string, error) {
@@ -91,6 +95,9 @@ func (f *fakeBranches) record(c string) {
 
 func (f *fakeBranches) CreateBranch(_ context.Context, r dbbranch.CreateBranchRequest, rep dbbranch.Reporter) (domain.Branch, error) {
 	f.record(fmt.Sprintf("create %s base=%s snap=%s ttl=%s sql=%q node=%s", r.Name, r.Base, r.Snapshot, r.TTL, r.InitSQL, r.Node))
+	f.mu.Lock()
+	f.lastCreate = r
+	f.mu.Unlock()
 	if rep != nil {
 		rep("cloning")
 	}
@@ -98,7 +105,7 @@ func (f *fakeBranches) CreateBranch(_ context.Context, r dbbranch.CreateBranchRe
 		return domain.Branch{}, f.fail
 	}
 	b := domain.Branch{Name: r.Name, Base: r.Base, Runtime: mysql84, Status: domain.BranchReady, Port: 40001, User: "branch", Password: "pw", CreatedAt: t0,
-		Owner: r.Owner, Access: r.Access}
+		Owner: r.Owner, Access: r.Access, Record: r.Record}
 	if r.TTL > 0 {
 		exp := t0.Add(r.TTL)
 		b.ExpiresAt = &exp

@@ -89,6 +89,7 @@ func (a *App) branchCommand() *cobra.Command {
 	var noWait bool
 
 	var base, snapshot, initSQL, initFile, ttl, node, owner, access string
+	var record bool
 	create := &cobra.Command{
 		Use:   "create <name> --base <base>",
 		Short: "Clone a base into a new branch",
@@ -121,6 +122,9 @@ func (a *App) branchCommand() *cobra.Command {
 			if access != "" {
 				body["access"] = access
 			}
+			if record {
+				body["record"] = true
+			}
 			if err := a.start(cmd.Context(), c, "POST", "/v1/branches", body, noWait); err != nil || noWait {
 				return err
 			}
@@ -134,6 +138,7 @@ func (a *App) branchCommand() *cobra.Command {
 	create.Flags().StringVar(&ttl, "ttl", "", "delete automatically after this long, e.g. 72h")
 	create.Flags().StringVar(&node, "node", "", "cluster node to create it on (default: chosen by load)")
 	create.Flags().StringVar(&owner, "owner", "", "who manages the branch (admins only; default: you)")
+	create.Flags().BoolVar(&record, "record", false, "record the branch's changes so it can be restored to any point (needs the history module)")
 	create.Flags().StringVar(&access, "access", "", "private (own password, owner and admins only) or open (anyone, shared password)")
 
 	list := &cobra.Command{

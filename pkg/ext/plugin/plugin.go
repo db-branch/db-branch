@@ -58,9 +58,12 @@ type Info struct {
 	Masker, MaskPolicy     bool
 	// RefreshFollower: the module says which mask runs follow a refresh.
 	RefreshFollower bool
-	Ports           map[string]int
-	Settings        []ext.Setting
-	Pages           []ext.Page
+	// ServerOptioner adds options to branch servers; RestoreFinisher works
+	// on a branch after a restore it started.
+	ServerOptioner, RestoreFinisher bool
+	Ports                           map[string]int
+	Settings                        []ext.Setting
+	Pages                           []ext.Page
 }
 
 // Serve runs m until the agent stops it. Call it from the module's main.
@@ -131,7 +134,8 @@ func (s *rpcServer) Info(_ struct{}, out *Info) error {
 		Router: s.m.Router != nil, Ports: s.m.Ports, Configurable: s.m.Configurable != nil, Settings: s.m.Settings,
 		Handler: s.m.Handler != nil, Pages: s.m.Pages, Starter: s.m.Starter != nil,
 		Storage: s.m.Storage != nil, SharedStorage: s.m.SharedStorage,
-		Masker: s.m.Masker != nil, MaskPolicy: s.m.MaskPolicy != nil, RefreshFollower: s.m.RefreshFollower != nil}
+		Masker: s.m.Masker != nil, MaskPolicy: s.m.MaskPolicy != nil, RefreshFollower: s.m.RefreshFollower != nil,
+		ServerOptioner: s.m.ServerOptioner != nil, RestoreFinisher: s.m.RestoreFinisher != nil}
 	return nil
 }
 
@@ -156,6 +160,8 @@ func (s *rpcServer) Serve(r ext.Request, out *ServeReply) error {
 type StartArgs struct {
 	Node, DataDir string
 	StoreID       uint32
+	// BranchesID is the broker stream of the agent's BranchHost (0: none).
+	BranchesID uint32
 }
 
 func (s *rpcServer) Start(a StartArgs, out *RPCError) error {
@@ -168,6 +174,14 @@ func (s *rpcServer) Start(a StartArgs, out *RPCError) error {
 		return nil
 	}
 	h := ext.Host{Node: a.Node, DataDir: a.DataDir, Store: &remoteStore{c: rpc.NewClient(conn)}}
+	if a.BranchesID != 0 {
+		bconn, err := s.broker.Dial(a.BranchesID)
+		if err != nil {
+			*out = toRPC(err)
+			return nil
+		}
+		h.Branches = &hostRemote{c: rpc.NewClient(bconn)}
+	}
 	*out = toRPC(s.m.Starter.Start(context.Background(), h))
 	return nil
 }
@@ -530,8 +544,13 @@ func (r *Remote) Serve(_ context.Context, req ext.Request) (ext.Response, error)
 func (r *Remote) Start(_ context.Context, h ext.Host) error {
 	id := r.broker.NextId()
 	go r.broker.AcceptAndServe(id, &StoreServer{S: h.Store})
+	args := StartArgs{Node: h.Node, DataDir: h.DataDir, StoreID: id}
+	if h.Branches != nil {
+		args.BranchesID = r.broker.NextId()
+		go r.broker.AcceptAndServe(args.BranchesID, &BranchHostServer{H: h.Branches})
+	}
 	var out RPCError
-	if err := r.c.Call("Plugin.Start", StartArgs{Node: h.Node, DataDir: h.DataDir, StoreID: id}, &out); err != nil {
+	if err := r.c.Call("Plugin.Start", args, &out); err != nil {
 		return err
 	}
 	return out.err()
@@ -720,6 +739,12 @@ func start(path string) (*Loaded, error) {
 	}
 	if info.Storage {
 		m.Storage, m.SharedStorage = storageRemote{remote}, info.SharedStorage
+	}
+	if info.ServerOptioner {
+		m.ServerOptioner = remote
+	}
+	if info.RestoreFinisher {
+		m.RestoreFinisher = remote
 	}
 	return &Loaded{Path: path, Info: info, Module: m, client: client}, nil
 }

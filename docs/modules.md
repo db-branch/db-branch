@@ -69,3 +69,19 @@ func main() {
 - **画面:** `Pages` に挙げたページ（HTML、スクリプトとスタイルは別ファイル）は、コンソールのナビに並び、枠の中に表示される（`/m/<モジュール><パス>`）。書き込みには `GET /v1/auth/session` の `csrf_token` を `X-CSRF-Token` に付ける
 - **クラスタ共通データ:** `Starter.Start` で受け取る `Host.Store` に、ユーザーや方針などの小さな記録を置ける（Raft で全ノードに複製。キー 256 バイト・値 64 KiB・1 モジュール 1 万件・8 MiB まで）。ログのような大量のデータは `Host.DataDir`（ノードごと）に置く
 - **ライセンス:** 有償モジュールは `Configure` で受け取る `ext.LicenseKey` を `pkg/ext/license` で確かめる。エラーを返すとコンソールのモジュール欄に表示される
+
+## ブランチの操作・サーバー設定・復元後の処理（history モジュール向け）
+
+ブランチの変更を記録し、任意の時点へ戻す有償モジュール `history`（`db-branch-modules` の `docs/history.md`）のために足した拡張ポイント。どれも既存のモジュールには影響しない（追加のみ。古いモジュールは何も変わらず動き、新しいモジュールが古い agent で動くときは `Host.Branches` が nil になる）。
+
+| 拡張点 | 内容 |
+|---|---|
+| `ext.ServerOptioner`（`Module.ServerOptioner`） | ブランチのサーバーの設定ファイルに行を足す。`ServerOptions(ctx, ServerBranch) (ServerOptions{Config []string}, error)`。agent がブランチのサーバー設定を書くたび（作成・再作成・再起動・復元）に呼ぶ。MySQL は `my.cnf` の `[mysqld]` に足す。PostgreSQL は未対応（無視） |
+| `ext.RestoreFinisher`（`Module.RestoreFinisher`） | 復元（チェックポイントの復元・リセット）の直後、サーバーが**保守モード**（`skip-networking`。誰も接続できない）で動いている間に呼ぶ。`AfterRestore(ctx, ServerBranch, note)`。モジュールが復元を頼んだときに渡した `note` がある復元でだけ呼ぶ。中断後はやり直すので、冪等に書く。失敗しても復元は戻さない（チェックポイントのデータのまま起動し、agent のログに残る） |
+| `ext.Host.Branches`（`ext.BranchHost`） | この**ノードの**ブランチを扱う口: `Branch` / `Branches` / `Graph`（チェックポイントと線の構造）/ `CreateCheckpoint` / `RestoreCheckpoint(name, checkpoint, note)`（完了まで待つ）/ `Reset(name, note)` / `DB`（管理者としてサーバーに入る口: ソケットとクライアントツール）/ `OpenLine`・`CloseLine`（ある線、またはあるチェックポイントの時点のデータを**読み取り専用**でマウント）/ `StartOperation`・`ReportOperation`・`EndOperation`（モジュールの操作をコンソールや `GET /v1/operations/{id}` に出す。1 時間で閉じなければ失敗） |
+| `/v1/ext/<モジュール>/branches/<名前>/...` | この形のパスは、そのブランチを持つノードのモジュールに自動で転送される（`?node=` を付けなくてよい） |
+
+- `ServerBranch` はブランチ名・所有者・エンジンと版・`Record`（作成時に記録を頼まれたか）・`Anonymous`（ログインなしで作られたブランチ。記録しない）・`Maintenance`。作成時にエラーを返すと作成が失敗する（`ErrForbidden` を包めば拒否として 403）。それ以降の起動ではオプションなしで起動して agent のログに残す（ライセンスの期限切れでブランチが止まらない）
+- `POST /v1/branches` の `record: true` は `ServerOptioner` が受け付けたときだけ通る。`GET /v1/capabilities` の `record` が true のとき、コンソールは作成画面にチェックボックスを出す
+- `GET /v1/branches/{name}/checkpoints` は `lines`（線の構造: 番号・現在の線か・親の線・元のチェックポイント）、`live`、`head` を足して返す。コンソールのグラフはこれで描く
+- ライセンス: `license.FeatureHistory`（`history`）。どのプランに入れるかは `pkg/ext/license` の `planFeatures` の 1 か所

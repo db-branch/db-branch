@@ -72,6 +72,16 @@ type Service struct {
 	// branch.max_checkpoints setting). Nil: domain.DefaultMaxCheckpoints.
 	MaxCheckpoints func() int
 
+	// ServerOptions asks modules for extra configuration of a branch's server
+	// each time its configuration is written (create, start, restore). Nil:
+	// none. An error leaves the server without the extras, except when the
+	// branch is created.
+	ServerOptions func(ctx context.Context, br domain.Branch, maintenance bool) ([]string, error)
+	// AfterRestore lets a module work on a restored branch's data while its
+	// server runs in maintenance mode (no network), before anyone can connect.
+	// note is what the module gave the restore. Nil: none.
+	AfterRestore func(ctx context.Context, br domain.Branch, note string) error
+
 	// Streams and Source copy base snapshots between nodes. Nil on a single node.
 	Streams domain.SnapshotStreams
 	Source  domain.SnapshotSource
@@ -88,6 +98,9 @@ type Service struct {
 	Launcher MaskLauncher
 	// Logf reports what the service skips on its own. Nil: silent.
 	Logf func(format string, args ...any)
+
+	// mounts are the directories OpenLine handed out and not yet closed.
+	mounts lineMounts
 
 	// refreshMu guards running, the bases being refreshed now.
 	refreshMu sync.Mutex
@@ -148,6 +161,29 @@ func (s *Service) spec(ctx context.Context, id, dataset string, rt domain.Runtim
 		return domain.Server{}, err
 	}
 	return domain.Server{ID: id, Runtime: rt, DataDir: info.Mountpoint, Port: port, MemoryMB: s.memory()}, nil
+}
+
+// branchSpec is spec for a branch's own server, with the extra configuration
+// modules ask for. maintenance starts the server for work on its data only.
+func (s *Service) branchSpec(ctx context.Context, br domain.Branch, dataset string, maintenance, strict bool) (domain.Server, error) {
+	spec, err := s.spec(ctx, branchServerID(br.Name), dataset, br.Runtime, br.Port)
+	if err != nil {
+		return spec, err
+	}
+	spec.Maintenance = maintenance
+	if s.ServerOptions == nil {
+		return spec, nil
+	}
+	extra, err := s.ServerOptions(ctx, br, maintenance)
+	switch {
+	case err == nil:
+		spec.Extra = extra
+	case strict:
+		return spec, fmt.Errorf("server options: %w", err)
+	case s.Logf != nil:
+		s.Logf("branch %s: starting without the options a module asked for: %v", br.Name, err)
+	}
+	return spec, nil
 }
 
 func baseServerID(n domain.Name) string   { return "base-" + n.String() }

@@ -2,7 +2,10 @@ package zfs_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -219,5 +222,81 @@ func TestMount_マウント済みは成功とみなす(t *testing.T) {
 	}
 	if err := zfs.New(f).Mount(ctx, "-x"); !errors.Is(err, zfs.ErrInvalidDataset) {
 		t.Errorf("bad dataset: %v", err)
+	}
+}
+
+func TestMountReadOnly_退避した線はzfsutil付きでスナップショットは付けずに読み取り専用でマウントする(t *testing.T) {
+	run := t.TempDir()
+	f := &fakeRunner{}
+	d := zfs.New(f)
+	d.RunDir = run
+
+	dir, err := d.MountReadOnly(ctx, "tank/h/x/0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(dir) != run || !strings.HasPrefix(filepath.Base(dir), "db-branch-line-") {
+		t.Errorf("dir = %s", dir)
+	}
+	if _, err := d.MountReadOnly(ctx, "tank/b/x@ckpt-c1"); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls[0][4] != "ro,zfsutil" || f.calls[0][5] != "tank/h/x/0" || f.calls[1][4] != "ro" || f.calls[1][5] != "tank/b/x@ckpt-c1" {
+		t.Errorf("calls = %q", f.calls)
+	}
+	if err := d.Unmount(ctx, dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("the directory should be gone: %v", err)
+	}
+	if f.calls[2][0] != "umount" || f.calls[2][1] != dir {
+		t.Errorf("calls = %q", f.calls)
+	}
+}
+
+func TestMountReadOnly_不正な名前とマウントの失敗は拒み後始末する(t *testing.T) {
+	run := t.TempDir()
+	d := zfs.New(&fakeRunner{})
+	d.RunDir = run
+	if _, err := d.MountReadOnly(ctx, "-x"); !errors.Is(err, zfs.ErrInvalidDataset) {
+		t.Errorf("bad name: %v", err)
+	}
+	bad := zfs.New(&fakeRunner{err: errors.New("busy")})
+	bad.RunDir = run
+	if _, err := bad.MountReadOnly(ctx, "tank/h/x/0"); err == nil {
+		t.Error("mount failure: want error")
+	}
+	if entries, _ := os.ReadDir(run); len(entries) != 0 {
+		t.Errorf("a failed mount leaves its directory: %v", entries)
+	}
+	missing := zfs.New(&fakeRunner{})
+	missing.RunDir = filepath.Join(run, "none")
+	if _, err := missing.MountReadOnly(ctx, "tank/h/x/0"); err == nil {
+		t.Error("no run directory: want error")
+	}
+}
+
+func TestUnmount_自分のマウントでなければ何もしない(t *testing.T) {
+	run := t.TempDir()
+	f := &fakeRunner{}
+	d := zfs.New(f)
+	d.RunDir = run
+	for _, dir := range []string{"/", "/etc", run, filepath.Join(run, "other"), filepath.Join(run, "db-branch-line-x", "sub")} {
+		if err := d.Unmount(ctx, dir); !errors.Is(err, zfs.ErrInvalidDataset) {
+			t.Errorf("Unmount(%s) = %v", dir, err)
+		}
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("calls = %q", f.calls)
+	}
+	failing := zfs.New(&fakeRunner{err: errors.New("busy")})
+	failing.RunDir = run
+	if err := failing.Unmount(ctx, filepath.Join(run, "db-branch-line-1")); err == nil {
+		t.Error("umount failure: want error")
+	}
+	def := zfs.New(f)
+	if err := def.Unmount(ctx, "/run/other"); !errors.Is(err, zfs.ErrInvalidDataset) {
+		t.Errorf("default dir: %v", err)
 	}
 }

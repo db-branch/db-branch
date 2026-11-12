@@ -130,6 +130,27 @@ func (s *Service) ListCheckpoints(ctx context.Context, n domain.Name) ([]domain.
 	return domain.ListCheckpoints(lines, head), nil
 }
 
+// CheckpointGraph returns the checkpoints and the structure of the lines
+// they are on: which line is live, and from which line and checkpoint each
+// other line was restored.
+func (s *Service) CheckpointGraph(ctx context.Context, n domain.Name) (domain.Graph, error) {
+	if err := s.requireLineage(); err != nil {
+		return domain.Graph{}, err
+	}
+	if _, err := s.ownBranch(ctx, n); err != nil {
+		return domain.Graph{}, err
+	}
+	lines, err := s.family(ctx, n)
+	if err != nil {
+		return domain.Graph{}, err
+	}
+	head, live := "", 0
+	if l, ok := liveOf(lines); ok {
+		head, live = l.Props[domain.PropHead], lineNumber(l.Props)
+	}
+	return domain.Graph{Checkpoints: domain.ListCheckpoints(lines, head), Lines: domain.LineViews(lines), Live: live, Head: head}, nil
+}
+
 // CreateCheckpoint takes a checkpoint of the running branch. The server
 // keeps running: the data directory and its write-ahead log are in one
 // dataset, so the snapshot is what a crash would leave, which the database

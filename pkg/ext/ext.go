@@ -290,8 +290,179 @@ type Store interface {
 	Delete(ctx context.Context, key string) error
 }
 
+// ServerBranch is a branch whose database server is being configured.
+type ServerBranch struct {
+	Name  string `json:"name"`
+	Owner string `json:"owner"`
+	// Engine is "mysql" or "postgres"; Version the runtime's.
+	Engine  string `json:"engine"`
+	Version string `json:"version"`
+	// Record: recording was asked for when the branch was created.
+	Record bool `json:"record"`
+	// Anonymous: made without a login (open to anyone). Never record these.
+	Anonymous bool `json:"anonymous"`
+	// Maintenance: the server is started only to work on its data (see
+	// RestoreFinisher); it takes no network connections.
+	Maintenance bool `json:"maintenance"`
+}
+
+// ServerOptions are what a module adds to a branch's server.
+type ServerOptions struct {
+	// Config are further lines for the server's configuration file. MySQL:
+	// lines of the [mysqld] section of my.cnf (e.g. "log_bin=binlog").
+	// PostgreSQL: not applied yet. Lines that clash with the agent's own
+	// settings are the module's responsibility.
+	Config []string `json:"config,omitempty"`
+}
+
+// ServerOptioner adds options to branch servers. The agent asks each time
+// it writes a branch's server configuration: when the branch is created or
+// recreated, started again (agent or node restart) and restored. An error at
+// creation fails the creation (and is shown to the person creating it, an
+// error wrapping ErrForbidden as a refusal); at any later start the server
+// starts without the options and the error is logged, so a lapsed licence
+// never keeps a branch down.
+type ServerOptioner interface {
+	ServerOptions(ctx context.Context, b ServerBranch) (ServerOptions, error)
+}
+
+// ServerOptioners combines modules' options: all lines, in module order; the
+// first error wins.
+type ServerOptioners []ServerOptioner
+
+func (list ServerOptioners) ServerOptions(ctx context.Context, b ServerBranch) (ServerOptions, error) {
+	var out ServerOptions
+	for _, o := range list {
+		x, err := o.ServerOptions(ctx, b)
+		if err != nil {
+			return ServerOptions{}, err
+		}
+		out.Config = append(out.Config, x.Config...)
+	}
+	return out, nil
+}
+
+// RestoreFinisher works on a branch's data right after a restore (of a
+// checkpoint, or the reset to its creation state) that a module started
+// with a note (BranchHost.RestoreCheckpoint, BranchHost.Reset): the data is
+// in place, the server runs in maintenance mode (ServerBranch.Maintenance;
+// it takes no network connections) and nobody has connected yet. The module
+// reaches the server through BranchHost.DB. It runs again from the start
+// when the agent was interrupted, so it must be repeatable. An error does
+// not undo the restore (the branch holds the checkpoint's data): the agent
+// logs it, and the module is expected to report it to the person itself.
+// It never runs for restores that carry no note.
+type RestoreFinisher interface {
+	AfterRestore(ctx context.Context, b ServerBranch, note string) error
+}
+
+// RestoreFinishers runs every module's work; errors are joined.
+type RestoreFinishers []RestoreFinisher
+
+func (fs RestoreFinishers) AfterRestore(ctx context.Context, b ServerBranch, note string) error {
+	var errs []error
+	for _, f := range fs {
+		errs = append(errs, f.AfterRestore(ctx, b, note))
+	}
+	return errors.Join(errs...)
+}
+
+// BranchState is a branch on this node, as a module sees it.
+type BranchState struct {
+	Name   string `json:"name"`
+	Owner  string `json:"owner"`
+	Engine string `json:"engine"`
+	// Version is the runtime's, e.g. "8.4.13".
+	Version string `json:"version"`
+	// Status is "ready", "restoring" and so on.
+	Status    string    `json:"status"`
+	Record    bool      `json:"record"`
+	Anonymous bool      `json:"anonymous"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// CheckpointInfo is one checkpoint (see docs/checkpoints.md).
+type CheckpointInfo struct {
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	// Line is the line of history it was taken on.
+	Line    int  `json:"line"`
+	Auto    bool `json:"auto"`
+	Current bool `json:"current"`
+}
+
+// NoLine is LineInfo.Parent of a line that was not made by a restore.
+const NoLine = -1
+
+// LineInfo is a line of a branch's history. A restore starts a new line:
+// Parent is the line of the checkpoint it was restored from (NoLine for the
+// first line), From that checkpoint's name ("reset" for the creation state).
+type LineInfo struct {
+	Line   int    `json:"line"`
+	Live   bool   `json:"live"`
+	Parent int    `json:"parent"`
+	From   string `json:"from"`
+}
+
+// CheckpointGraph is a branch's checkpoints and the structure of its lines.
+type CheckpointGraph struct {
+	Checkpoints []CheckpointInfo `json:"checkpoints"`
+	Lines       []LineInfo       `json:"lines"`
+	// Live is the line the branch runs on; Head the checkpoint its data
+	// descends from.
+	Live int    `json:"live"`
+	Head string `json:"head"`
+}
+
+// BranchHost is what a module may do with the branches of the node it runs
+// on: look at them, take and restore checkpoints, reach the database server
+// and read the data of any line. Branches of other nodes answer an error;
+// the module runs on every node and the agent sends a request for a branch
+// to its node (see Handler). Host.Branches is nil when the agent is older
+// than the module.
+type BranchHost interface {
+	// Branch returns one branch of this node.
+	Branch(ctx context.Context, name string) (BranchState, error)
+	// Branches lists the branches of this node.
+	Branches(ctx context.Context) ([]BranchState, error)
+	// Graph returns the checkpoints and lines of a branch.
+	Graph(ctx context.Context, name string) (CheckpointGraph, error)
+	// CreateCheckpoint takes a checkpoint ("" names it from the time).
+	CreateCheckpoint(ctx context.Context, name, checkpoint string) (CheckpointInfo, error)
+	// RestoreCheckpoint restores the branch to a checkpoint and waits until
+	// it is done (the branch is ready again). A non-empty note is handed to
+	// the RestoreFinishers while the server is in maintenance mode.
+	RestoreCheckpoint(ctx context.Context, name, checkpoint, note string) error
+	// Reset restores the branch's creation state, keeping its checkpoints,
+	// and waits. The note is as for RestoreCheckpoint.
+	Reset(ctx context.Context, name, note string) error
+	// DB is how to reach the branch's server as its local admin (a socket
+	// on this node; BinDir holds the client tools, which need LibDir).
+	DB(ctx context.Context, name string) (DBAccess, error)
+	// OpenLine mounts, read-only, the data of a line of the branch (the live
+	// one, or one a restore set aside) at a directory on this node; when
+	// checkpoint is not empty, the data as that checkpoint saved it. Close it
+	// with CloseLine. The live line's directory is the server's own data
+	// directory: read, never write.
+	OpenLine(ctx context.Context, name string, line int, checkpoint string) (dir string, err error)
+	// CloseLine releases what OpenLine returned.
+	CloseLine(ctx context.Context, dir string) error
+	// StartOperation records an operation of this module on a branch, shown
+	// like the agent's own (console, GET /v1/operations/{id}). The module
+	// reports progress and ends it; one the module never ends fails after
+	// an hour. Returns the operation's id.
+	StartOperation(ctx context.Context, kind, branch string) (id string, err error)
+	// ReportOperation sets the phase shown for the operation.
+	ReportOperation(ctx context.Context, id, phase string) error
+	// EndOperation finishes the operation; a non-empty failure marks it failed.
+	EndOperation(ctx context.Context, id, failure string) error
+}
+
 // Host is what the agent gives a module at start.
 type Host struct {
+	// Branches lets the module work with this node's branches. Nil when the
+	// agent is older than the module.
+	Branches BranchHost
 	// Node is this node's name.
 	Node string
 	// DataDir is the module's own directory on this node
@@ -344,6 +515,10 @@ type Module struct {
 	// RefreshFollower says which masked bases to rebuild after a base is
 	// refreshed on its schedule. Optional.
 	RefreshFollower RefreshFollower
+	// ServerOptioner adds options to branch servers; RestoreFinisher works
+	// on a branch right after a restore a module started. Optional.
+	ServerOptioner  ServerOptioner
+	RestoreFinisher RestoreFinisher
 }
 
 // DBAccess is how a tool on the node reaches a database server as its
@@ -541,7 +716,15 @@ func Combine(mods []Module) Module {
 	var sinks Sinks
 	var policies Policies
 	var followers Followers
+	var optioners ServerOptioners
+	var finishers RestoreFinishers
 	for _, m := range mods {
+		if m.ServerOptioner != nil {
+			optioners = append(optioners, m.ServerOptioner)
+		}
+		if m.RestoreFinisher != nil {
+			finishers = append(finishers, m.RestoreFinisher)
+		}
 		if m.RefreshFollower != nil {
 			followers = append(followers, m.RefreshFollower)
 		}
@@ -588,6 +771,12 @@ func Combine(mods []Module) Module {
 	}
 	if len(followers) > 0 {
 		out.RefreshFollower = followers
+	}
+	if len(optioners) > 0 {
+		out.ServerOptioner = optioners
+	}
+	if len(finishers) > 0 {
+		out.RestoreFinisher = finishers
 	}
 	return out
 }

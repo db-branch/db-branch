@@ -174,6 +174,13 @@ func TestMCP_トークンで接続しブランチを作って使える(t *testin
 	if isErr || !strings.Contains(out, `"dsn": "mysql://branch:pw@192.0.2.10:40001/"`) || !strings.Contains(out, `"access": "open"`) {
 		t.Errorf("create: %v %s", isErr, out)
 	}
+	f.srv.Ext = ext.Module{AuditSink: sink, ServerOptioner: &recorder{}}
+	if out, isErr := callText(t, s, "create_branch", map[string]any{"name": "rec-x", "base": "prod", "record": true}); isErr || !strings.Contains(out, "rec-x") {
+		t.Errorf("create with record: %v %s", isErr, out)
+	}
+	if !f.branches.lastCreate.Record {
+		t.Error("the MCP request should carry record")
+	}
 	if out, isErr := callText(t, s, "list_branches", map[string]any{}); isErr || !strings.Contains(out, "feature-x") {
 		t.Errorf("list: %s", out)
 	}

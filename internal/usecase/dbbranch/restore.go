@@ -43,6 +43,8 @@ type restoreIntent struct {
 	NewLine int
 	// Auto is the checkpoint taken before the swap ("" for reset).
 	Auto string
+	// Note is a module's: handed to AfterRestore once the data is in place.
+	Note string
 }
 
 // head is the checkpoint the restored data descends from.
@@ -67,7 +69,7 @@ func (s *Service) writeIntent(ctx context.Context, n domain.Name, in restoreInte
 	}
 	return s.Lineage.SetProps(ctx, root, map[string]string{
 		domain.PropOp: in.Op, domain.PropSource: in.Source, domain.PropNewLine: strconv.Itoa(in.NewLine),
-		domain.PropAutoName: orNone(in.Auto),
+		domain.PropAutoName: orNone(in.Auto), domain.PropNote: orNone(in.Note),
 	})
 }
 
@@ -100,6 +102,9 @@ func (s *Service) readIntent(ctx context.Context, n domain.Name) (restoreIntent,
 	if in.Auto == "-" {
 		in.Auto = ""
 	}
+	if in.Note = p[domain.PropNote]; in.Note == "-" {
+		in.Note = ""
+	}
 	return in, true, nil
 }
 
@@ -109,20 +114,27 @@ func (s *Service) clearIntent(ctx context.Context, n domain.Name) error {
 	if err != nil || !ok {
 		return err
 	}
-	return s.Lineage.Unset(ctx, root, domain.PropOp, domain.PropSource, domain.PropNewLine, domain.PropAutoName)
+	return s.Lineage.Unset(ctx, root, domain.PropOp, domain.PropSource, domain.PropNewLine, domain.PropAutoName, domain.PropNote)
 }
 
 // RestoreCheckpoint sets the branch back to checkpoint name. Nothing is lost:
 // the data as it is now is kept as an automatic checkpoint and every other
 // checkpoint stays restorable.
 func (s *Service) RestoreCheckpoint(ctx context.Context, n domain.Name, name string, report Reporter) (domain.Branch, error) {
+	return s.RestoreCheckpointWith(ctx, n, name, "", report)
+}
+
+// RestoreCheckpointWith is RestoreCheckpoint for a module: note is handed
+// to its RestoreFinisher once the checkpoint's data is in place and before
+// anyone can connect, so it can bring the branch forward from there.
+func (s *Service) RestoreCheckpointWith(ctx context.Context, n domain.Name, name, note string, report Reporter) (domain.Branch, error) {
 	if err := s.requireLineage(); err != nil {
 		return domain.Branch{}, err
 	}
 	if _, err := domain.ParseCheckpointName(name); err != nil {
 		return domain.Branch{}, err
 	}
-	br, in, err := s.beginRestore(ctx, n, name)
+	br, in, err := s.beginRestore(ctx, n, name, note)
 	if err != nil {
 		return br, err
 	}
@@ -134,7 +146,7 @@ func (s *Service) RestoreCheckpoint(ctx context.Context, n domain.Name, name str
 }
 
 // beginRestore checks the request and marks the branch restoring.
-func (s *Service) beginRestore(ctx context.Context, n domain.Name, name string) (domain.Branch, restoreIntent, error) {
+func (s *Service) beginRestore(ctx context.Context, n domain.Name, name, note string) (domain.Branch, restoreIntent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	br, err := s.ownBranch(ctx, n)
@@ -156,7 +168,7 @@ func (s *Service) beginRestore(ctx context.Context, n domain.Name, name string) 
 	}
 	in := restoreIntent{
 		Op: opRestore, Source: domain.CheckpointSnapshot(name), NewLine: domain.NextLine(lines),
-		Auto: domain.UniqueCheckpointName(lines, domain.AutoCheckpointName("restore", s.Clock())),
+		Auto: domain.UniqueCheckpointName(lines, domain.AutoCheckpointName("restore", s.Clock())), Note: note,
 	}
 	br.Status = domain.BranchRestoring
 	return br, in, s.Store.PutBranch(ctx, br)
@@ -230,13 +242,18 @@ func (s *Service) continueRestore(ctx context.Context, br domain.Branch, in rest
 	if err := s.promoteOwn(ctx, br.Name); err != nil {
 		return err
 	}
-	spec, err := s.spec(ctx, branchServerID(br.Name), liveDS, br.Runtime, br.Port)
+	spec, err := s.branchSpec(ctx, br, liveDS, false, false)
 	if err != nil {
 		return err
 	}
 	report.report("starting")
 	if err := srv.PrepareClone(ctx, spec); err != nil {
 		return err
+	}
+	if in.Note != "" && s.AfterRestore != nil {
+		if err := s.finishRestore(ctx, br, in, srv, liveDS, report); err != nil {
+			return err
+		}
 	}
 	if running, _ := srv.Running(ctx, spec); !running {
 		if err := srv.Start(ctx, spec); err != nil {
@@ -247,6 +264,44 @@ func (s *Service) continueRestore(ctx context.Context, br domain.Branch, in rest
 		return err
 	}
 	s.collectLogged(ctx, br.Name)
+	return nil
+}
+
+// finishRestore runs a module's AfterRestore on the restored data with the
+// server in maintenance mode (no network connections), then stops it so the
+// normal start follows. It runs again after a crash: the module's work must
+// be repeatable. The module's failure does not fail the restore (the branch
+// holds the checkpoint's data); it is logged, and the module reports it.
+func (s *Service) finishRestore(ctx context.Context, br domain.Branch, in restoreIntent, srv domain.DBServer, liveDS string, report Reporter) error {
+	normal, err := s.branchSpec(ctx, br, liveDS, false, false)
+	if err != nil {
+		return err
+	}
+	if running, _ := srv.Running(ctx, normal); running {
+		if err := s.stopServer(ctx, srv, normal); err != nil {
+			return err
+		}
+	}
+	maint, err := s.branchSpec(ctx, br, liveDS, true, false)
+	if err != nil {
+		return err
+	}
+	report.report("replaying")
+	if err := srv.Start(ctx, maint); err != nil {
+		return err
+	}
+	hookErr := s.AfterRestore(ctx, br, in.Note)
+	if hookErr != nil && s.Logf != nil {
+		s.Logf("branch %s: a module's work after the restore failed: %v", br.Name, hookErr)
+	}
+	return s.stopServer(ctx, srv, maint)
+}
+
+// stopServer stops cleanly, or at once when that is not possible.
+func (s *Service) stopServer(ctx context.Context, srv domain.DBServer, spec domain.Server) error {
+	if err := srv.Stop(ctx, spec, domain.StopClean); err != nil {
+		return srv.Stop(ctx, spec, domain.StopImmediate)
+	}
 	return nil
 }
 
@@ -267,7 +322,8 @@ func (s *Service) setAside(ctx context.Context, br domain.Branch, in restoreInte
 		if !ok {
 			return fmt.Errorf("snapshot %s of branch %s: %w", in.Source, br.Name, domain.ErrNotFound)
 		}
-		props := map[string]string{"canmount": "off", domain.PropLine: strconv.Itoa(in.NewLine)}
+		props := map[string]string{"canmount": "off", domain.PropLine: strconv.Itoa(in.NewLine),
+			domain.PropFrom: in.Source, domain.PropParent: strconv.Itoa(domain.SnapshotLine(lines, in.Source))}
 		if err := s.Lineage.CloneWith(ctx, domain.Snapshot{Dataset: ds, Name: in.Source}, pending, props); err != nil {
 			return err
 		}
@@ -394,7 +450,7 @@ func (s *Service) resumeFailedRestore(ctx context.Context, br domain.Branch) err
 // only its reset point, else (it holds checkpoints, or the reset point lives
 // on a line set aside) by swapping a clone of the reset point in, which keeps
 // the checkpoints. An interrupted swap is resumed.
-func (s *Service) resetBySwap(ctx context.Context, br domain.Branch) (restoreIntent, bool, error) {
+func (s *Service) resetBySwap(ctx context.Context, br domain.Branch, note string) (restoreIntent, bool, error) {
 	if s.Lineage == nil {
 		return restoreIntent{}, false, nil
 	}
@@ -405,10 +461,10 @@ func (s *Service) resetBySwap(ctx context.Context, br domain.Branch) (restoreInt
 	if err != nil {
 		return restoreIntent{}, false, err
 	}
-	if l, ok := liveOf(lines); ok && len(l.Snapshots) == 1 && l.Snapshots[0].Name == ResetSnapshot {
+	if l, ok := liveOf(lines); ok && note == "" && len(l.Snapshots) == 1 && l.Snapshots[0].Name == ResetSnapshot {
 		return restoreIntent{}, false, nil
 	}
-	in := restoreIntent{Op: opReset, Source: ResetSnapshot, NewLine: domain.NextLine(lines)}
+	in := restoreIntent{Op: opReset, Source: ResetSnapshot, NewLine: domain.NextLine(lines), Note: note}
 	return in, true, s.writeIntent(ctx, br.Name, in)
 }
 

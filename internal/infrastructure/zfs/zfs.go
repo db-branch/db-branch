@@ -27,7 +27,11 @@ type Runner interface {
 }
 
 // Driver talks to ZFS through the zfs command.
-type Driver struct{ run Runner }
+type Driver struct {
+	run Runner
+	// RunDir is where read-only mounts get their directories (default /run).
+	RunDir string
+}
 
 var (
 	_ domain.Storage         = (*Driver)(nil)

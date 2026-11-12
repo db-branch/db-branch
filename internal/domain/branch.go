@@ -231,7 +231,10 @@ type Branch struct {
 	Access    string     `json:"access,omitempty"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	// InitSQL is kept so the branch can be recreated on another node.
-	InitSQL   string     `json:"init_sql,omitempty"`
+	InitSQL string `json:"init_sql,omitempty"`
+	// Record asks for the branch's changes to be recorded (the history
+	// module honours it; without the module it has no effect).
+	Record    bool       `json:"record,omitempty"`
 	Error     string     `json:"error,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
 	ResetAt   *time.Time `json:"reset_at,omitempty"`
@@ -346,6 +349,13 @@ type Server struct {
 	Port    int
 	// MemoryMB sizes the engine's own cache (InnoDB buffer pool / shared_buffers).
 	MemoryMB int
+	// Extra are further lines for the server's configuration file, from a
+	// module (ext.ServerOptioner). MySQL: the [mysqld] section of my.cnf.
+	// PostgreSQL ignores them for now.
+	Extra []string
+	// Maintenance starts the server for work on its data only (a module
+	// replaying changes after a restore): it takes no network connections.
+	Maintenance bool
 }
 
 // DBServer runs database server instances for one engine.

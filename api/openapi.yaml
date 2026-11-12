@@ -172,6 +172,26 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/Checkpoint' } }
                   next_cursor: { type: [string, 'null'] }
+                  lines:
+                    type: array
+                    description: |
+                      The lines of history, by number. A restore starts a new line (the
+                      branch's data carries on there); the one it replaces is kept for its
+                      checkpoints. Draws the history as lanes.
+                    items:
+                      type: object
+                      required: [line, live, parent, from]
+                      properties:
+                        line: { type: integer }
+                        live: { type: boolean, description: The line the branch runs on. }
+                        parent:
+                          type: [integer, 'null']
+                          description: The line of the checkpoint this line was restored from (null for the first line).
+                        from:
+                          type: string
+                          description: The checkpoint it was restored from, "reset" for the creation state, "" for the first line.
+                  live: { type: integer, description: The line the branch runs on. }
+                  head: { type: [string, 'null'], description: The checkpoint the current data descends from. }
         default: { $ref: '#/components/responses/Error' }
     post:
       tags: [branches]
@@ -916,6 +936,9 @@ components:
           properties:
             id: { type: string }
             kind: { $ref: '#/components/schemas/OperationKind' }
+        record:
+          type: boolean
+          description: Recording was asked for when the branch was created (the history module records it).
     CreateBranch:
       type: object
       additionalProperties: false
@@ -931,6 +954,12 @@ components:
           type: string
           description: Go duration such as 72h. Omit for no expiry.
           examples: ['72h']
+        record:
+          type: boolean
+          description: |
+            Record the branch's changes so it can be restored to any point. Needs the
+            history module (licensed), a login and a MySQL base; 400 or 403 otherwise.
+            See getCapabilities `record`.
 
     Base:
       type: object
@@ -1084,6 +1113,9 @@ components:
               name: { type: string, examples: [audit] }
               version: { type: string }
               licensed_until: { $ref: '#/components/schemas/Timestamp' }
+        record:
+          type: boolean
+          description: A branch can be created with `record` (the history module is loaded and licensed).
         features:
           type: object
           properties:

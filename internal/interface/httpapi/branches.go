@@ -53,6 +53,8 @@ type branchJSON struct {
 	Owner  *string `json:"owner"`
 	ID     string  `json:"id"`
 	Access string  `json:"access"`
+	// Record: recording was asked for at creation (the history module records).
+	Record bool `json:"record"`
 }
 
 func ts(t time.Time) string { return t.UTC().Format(time.RFC3339) }
@@ -78,7 +80,7 @@ func (s *Server) branchView(ctx context.Context, svc Branches, b domain.Branch) 
 		Base: b.Base.String(), Snapshot: b.Snapshot, Runtime: b.Runtime.String(), Node: s.nodeOf(b.Node),
 		CreatedAt: ts(b.CreatedAt), ExpiresAt: optTS(b.ExpiresAt), ResetAt: optTS(b.ResetAt),
 		Connection: connectionJSON{Host: s.hostOf(b.Node), Port: b.Port, User: b.User},
-		Owner:      optString(b.Owner), ID: b.Name.String(), Access: domain.AccessPrivate,
+		Owner:      optString(b.Owner), ID: b.Name.String(), Access: domain.AccessPrivate, Record: b.Record,
 	}
 	if b.Owner != "" {
 		// An email owner shows as its local part; owner keeps the address.
@@ -155,6 +157,9 @@ type createBranchJSON struct {
 	InitSQL  string  `json:"init_sql"`
 	TTL      string  `json:"ttl"`
 	Node     string  `json:"node,omitempty"`
+	// Record asks for the branch's changes to be recorded (needs the history
+	// module, a login, and a MySQL base).
+	Record bool `json:"record,omitempty"`
 }
 
 func parseTTL(s string) (time.Duration, error) {
@@ -209,7 +214,12 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 		if err := s.checkBranchPolicy(r.Context(), svc, principalOf(r), in, ttl); err != nil {
 			return dbbranch.CreateBranchRequest{}, err
 		}
-		req := dbbranch.CreateBranchRequest{Name: n, Base: base, InitSQL: in.InitSQL, TTL: ttl, Node: in.Node, Owner: in.Owner, Access: in.Access}
+		if in.Record {
+			if err := s.checkRecord(r.Context(), svc, principalOf(r), in); err != nil {
+				return dbbranch.CreateBranchRequest{}, err
+			}
+		}
+		req := dbbranch.CreateBranchRequest{Name: n, Base: base, InitSQL: in.InitSQL, TTL: ttl, Node: in.Node, Owner: in.Owner, Access: in.Access, Record: in.Record}
 		if in.Snapshot != nil {
 			req.Snapshot = *in.Snapshot
 		}

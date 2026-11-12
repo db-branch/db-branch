@@ -317,9 +317,25 @@ func (p *moduleProblems) all() map[string]string {
 	return out
 }
 
+// wireModuleHooks lets modules configure branch servers (recording) and
+// work on a branch right after a restore they started.
+func wireModuleHooks(svc *dbbranch.Service, m ext.Module) {
+	if o := m.ServerOptioner; o != nil {
+		svc.ServerOptions = func(ctx context.Context, br domain.Branch, maintenance bool) ([]string, error) {
+			opts, err := o.ServerOptions(ctx, httpapi.ServerBranchOf(br, maintenance))
+			return opts.Config, err
+		}
+	}
+	if f := m.RestoreFinisher; f != nil {
+		svc.AfterRestore = func(ctx context.Context, br domain.Branch, note string) error {
+			return f.AfterRestore(ctx, httpapi.ServerBranchOf(br, true), note)
+		}
+	}
+}
+
 // startModules gives each module its host: node-local directory and its
 // cluster-wide store (unavailable before `db-branch init`).
-func startModules(ctx context.Context, a *App, cfg config.Config, node string, mods []*plugin.Loaded, log *slog.Logger) {
+func startModules(ctx context.Context, a *App, cfg config.Config, node string, mods []*plugin.Loaded, branches ext.BranchHost, log *slog.Logger) {
 	var data domain.ModuleDataStore
 	if svc, err := a.Branches(); err == nil {
 		data, _ = svc.Store.(domain.ModuleDataStore)
@@ -333,7 +349,7 @@ func startModules(ctx context.Context, a *App, cfg config.Config, node string, m
 			log.Error("module directory", "module", m.Info.Name, "err", err)
 			continue
 		}
-		h := ext.Host{Node: node, DataDir: dir, Store: moduledata.For(data, m.Info.Name)}
+		h := ext.Host{Node: node, DataDir: dir, Store: moduledata.For(data, m.Info.Name), Branches: branches}
 		if err := m.Module.Starter.Start(ctx, h); err != nil {
 			log.Error("starting module", "module", m.Info.Name, "err", err)
 		}

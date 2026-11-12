@@ -211,7 +211,10 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 			srv.PublishBase(ctx, n)
 		}
 	}})
-	startModules(ctx, a, cfg, node, mods, log)
+	if svc, err := a.Branches(); err == nil {
+		wireModuleHooks(svc, srv.Ext)
+	}
+	startModules(ctx, a, cfg, node, mods, srv.BranchHost(), log)
 	if cl != nil {
 		cl.modules = srv.Modules
 		cl.beatNow()

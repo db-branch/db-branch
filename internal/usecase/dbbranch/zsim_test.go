@@ -69,6 +69,8 @@ type zsim struct {
 	readFail string
 	// failRead makes the Nth read (counted in reads) fail, once.
 	failRead, reads int
+	// mounts are the read-only mounts open now.
+	mounts []string
 }
 
 func (z *zsim) rf(op string) error {
@@ -499,4 +501,31 @@ func (z *zsim) names() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// MountReadOnly records a read-only mount; mounts lists the directories open now.
+func (z *zsim) MountReadOnly(_ context.Context, target string) (string, error) {
+	if err := z.mutate("mount ro %s", target); err != nil {
+		return "", err
+	}
+	ds, _ := splitSnap(target)
+	if _, err := z.get(ds); err != nil {
+		return "", err
+	}
+	dir := filepath.Join(z.root, fmt.Sprintf("ro-%d", len(z.mounts)+1))
+	z.mounts = append(z.mounts, dir)
+	return dir, nil
+}
+
+func (z *zsim) Unmount(_ context.Context, dir string) error {
+	if err := z.mutate("unmount %s", filepath.Base(dir)); err != nil {
+		return err
+	}
+	for i, m := range z.mounts {
+		if m == dir {
+			z.mounts = append(z.mounts[:i], z.mounts[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("%s is not mounted", dir)
 }

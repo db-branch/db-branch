@@ -42,6 +42,13 @@ const (
 	PropHead = "db-branch:head"
 	// PropOp, PropSource, PropNewLine and PropAutoName (on the history
 	// container) record a restore in progress so that it can be finished.
+	// PropNote carries a module's note for the restore (see ext.RestoreFinisher).
+	PropNote = "db-branch:note"
+	// PropFrom and PropParent (on a line's dataset) say which snapshot the
+	// line was cloned from by a restore ("ckpt-x" or "reset") and the line
+	// that snapshot was taken on.
+	PropFrom     = "db-branch:from"
+	PropParent   = "db-branch:parent"
 	PropOp       = "db-branch:op"
 	PropSource   = "db-branch:source"
 	PropNewLine  = "db-branch:newline"
@@ -322,6 +329,11 @@ type CheckpointStorage interface {
 	Origin(ctx context.Context, dataset string) (string, error)
 	// Mount mounts a dataset that is not mounted (a no-op when it is).
 	Mount(ctx context.Context, dataset string) error
+	// MountReadOnly mounts a dataset, or dataset@snapshot, read-only in a
+	// new directory (even one a restore set aside, which is never mounted
+	// otherwise) and returns the directory. Unmount undoes it.
+	MountReadOnly(ctx context.Context, target string) (string, error)
+	Unmount(ctx context.Context, dir string) error
 }
 
 // CanCheckpoint reports whether checkpoints may be taken, listed changed or
@@ -331,4 +343,69 @@ func (b Branch) CanCheckpoint() error {
 		return fmt.Errorf("%w: branch %s is %s", ErrConflict, b.Name, b.Status)
 	}
 	return nil
+}
+
+// LineView is a line of history as the API shows it: the structure the
+// console draws as lanes.
+type LineView struct {
+	Line int  `json:"line"`
+	Live bool `json:"live"`
+	// Parent is the line the checkpoint this line started from belongs to
+	// (nil for the first line, and for lines made before this was recorded).
+	Parent *int `json:"parent"`
+	// From is the checkpoint the line was restored from, "reset" for the
+	// branch's creation state, and "" for the first line.
+	From string `json:"from"`
+}
+
+// LineViews lists the lines of the family by number (the restore in
+// progress is not a line yet).
+func LineViews(lines []Line) []LineView {
+	out := []LineView{}
+	for _, l := range lines {
+		if l.Pending {
+			continue
+		}
+		v := LineView{Line: lineNumber(l.Props), Live: l.Live}
+		if from := l.Props[PropFrom]; from != "" {
+			v.From = from
+			if n, ok := CheckpointOf(from); ok {
+				v.From = n
+			}
+			if p, err := strconv.Atoi(l.Props[PropParent]); err == nil {
+				v.Parent = &p
+			}
+		}
+		out = append(out, v)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Line < out[j].Line })
+	return out
+}
+
+func lineNumber(props map[string]string) int {
+	n, _ := strconv.Atoi(props[PropLine])
+	return n
+}
+
+// SnapshotLine is the line a snapshot belongs to: the one a checkpoint was
+// taken on; the reset point belongs to the first line.
+func SnapshotLine(lines []Line, name string) int {
+	for _, l := range lines {
+		for _, s := range l.Snapshots {
+			if s.Name == name {
+				return lineNumber(s.Props)
+			}
+		}
+	}
+	return 0
+}
+
+// Graph is a branch's history as the console draws it.
+type Graph struct {
+	Checkpoints []Checkpoint
+	Lines       []LineView
+	// Live is the number of the line the branch runs on; Head the
+	// checkpoint its data descends from ("" when none).
+	Live int
+	Head string
 }

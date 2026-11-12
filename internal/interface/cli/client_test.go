@@ -986,3 +986,24 @@ func TestBaseShow_匿名の上限を表示する(t *testing.T) {
 		t.Errorf("show lacks the limits:\n%s", out)
 	}
 }
+
+func TestBranchCreate_recordで変更の記録を頼む(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["POST /v1/branches"] = accepted("op_1", "branch.create")
+	api.opStates = []map[string]any{{"id": "op_1", "state": "succeeded"}}
+	api.answers["GET /v1/branches/x"] = map[string]any{"name": "x", "status": "ready", "id": "x", "access": "private"}
+
+	if code, _, errOut := runAPI(t, api, "branch", "create", "x", "--base", "prod", "--record"); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	if body := api.bodies["POST /v1/branches"].(map[string]any); body["record"] != true {
+		t.Errorf("body = %v", body)
+	}
+	api.opStates = []map[string]any{{"id": "op_1", "state": "succeeded"}}
+	if code, _, _ := runAPI(t, api, "branch", "create", "x", "--base", "prod"); code != 0 {
+		t.Fatal("plain create failed")
+	}
+	if body := api.bodies["POST /v1/branches"].(map[string]any); body["record"] != nil {
+		t.Errorf("record must be left out by default: %v", body)
+	}
+}

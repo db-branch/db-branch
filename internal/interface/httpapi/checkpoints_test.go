@@ -17,6 +17,16 @@ func (f *fakeBranches) ListCheckpoints(_ context.Context, n domain.Name) ([]doma
 	return f.cps, f.cpErr
 }
 
+func (f *fakeBranches) CheckpointGraph(_ context.Context, n domain.Name) (domain.Graph, error) {
+	f.record("graph " + n.String())
+	if f.cpErr != nil {
+		return domain.Graph{}, f.cpErr
+	}
+	g := f.graph
+	g.Checkpoints = f.cps
+	return g, nil
+}
+
 func (f *fakeBranches) CreateCheckpoint(_ context.Context, n domain.Name, cp string) (domain.Checkpoint, error) {
 	f.record(fmt.Sprintf("checkpoint %s %q", n, cp))
 	if f.cpErr != nil {
@@ -248,5 +258,28 @@ func TestCheckpoint_ログインなしの主体は開いたブランチでも断
 		if resp.StatusCode != 403 {
 			t.Errorf("%v: %d %v", c, resp.StatusCode, body)
 		}
+	}
+}
+
+func TestListCheckpoints_線の構造と現在地も返す(t *testing.T) {
+	f := checkpointFixture(t)
+	zero := 0
+	f.branches.graph = domain.Graph{Live: 1, Head: "c1", Lines: []domain.LineView{{Line: 0}, {Line: 1, Live: true, Parent: &zero, From: "c1"}}}
+	resp, body := f.do(t, "GET", "/v1/branches/x/checkpoints", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("%d %v", resp.StatusCode, body)
+	}
+	lines := body["lines"].([]any)
+	l0, l1 := lines[0].(map[string]any), lines[1].(map[string]any)
+	if len(lines) != 2 || l0["parent"] != nil || l0["live"] != false || l0["from"] != "" ||
+		l1["line"] != float64(1) || l1["live"] != true || l1["parent"] != float64(0) || l1["from"] != "c1" {
+		t.Errorf("lines = %v", lines)
+	}
+	if body["live"] != float64(1) || body["head"] != "c1" {
+		t.Errorf("live/head = %v %v", body["live"], body["head"])
+	}
+	f.branches.graph = domain.Graph{}
+	if _, body := f.do(t, "GET", "/v1/branches/x/checkpoints", nil); body["head"] != nil || len(body["lines"].([]any)) != 0 {
+		t.Errorf("no history: %v", body)
 	}
 }

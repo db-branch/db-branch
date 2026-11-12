@@ -34,6 +34,7 @@ type Branches interface {
 	ListBranches(ctx context.Context) ([]domain.Branch, error)
 	BranchStorage(ctx context.Context, name domain.Name) (domain.DatasetInfo, error)
 	ListCheckpoints(ctx context.Context, name domain.Name) ([]domain.Checkpoint, error)
+	CheckpointGraph(ctx context.Context, name domain.Name) (domain.Graph, error)
 	CreateCheckpoint(ctx context.Context, name domain.Name, checkpoint string) (domain.Checkpoint, error)
 	RestoreCheckpoint(ctx context.Context, name domain.Name, checkpoint string, report dbbranch.Reporter) (domain.Branch, error)
 	DeleteCheckpoint(ctx context.Context, name domain.Name, checkpoint string) error
@@ -494,7 +495,8 @@ func items[T any](list []T) map[string]any {
 	return map[string]any{"items": list, "next_cursor": nil}
 }
 
-func (s *Server) capabilities(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	modules := append([]string{}, s.Modules...)
-	writeJSON(w, http.StatusOK, map[string]any{"version": s.Version, "node": s.Node, "modules": modules, "pages": s.modulePages()})
+	writeJSON(w, http.StatusOK, map[string]any{"version": s.Version, "node": s.Node, "modules": modules, "pages": s.modulePages(),
+		"record": s.recordAvailable(r.Context())})
 }

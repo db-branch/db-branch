@@ -508,3 +508,25 @@ func TestAdmin_ソケットのrootで入る道を返す(t *testing.T) {
 		t.Errorf("bound to one address: %+v", a)
 	}
 }
+
+func TestPrepareClone_モジュールの追加設定と保守モードを設定ファイルに書く(t *testing.T) {
+	f := newFixture(t)
+	spec := f.spec
+	spec.Extra = []string{"log_bin=binlog", "gtid_mode=ON"}
+
+	if err := f.srv.PrepareClone(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	cnf := read(t, filepath.Join(f.state, spec.ID, "my.cnf"))
+	if !strings.Contains(cnf, "log_bin=binlog\ngtid_mode=ON\n") || strings.Contains(cnf, "skip-networking") {
+		t.Errorf("my.cnf = %s", cnf)
+	}
+
+	spec.Maintenance = true
+	if err := f.srv.PrepareClone(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	if cnf := read(t, filepath.Join(f.state, spec.ID, "my.cnf")); !strings.Contains(cnf, "skip-networking\n") {
+		t.Errorf("maintenance my.cnf = %s", cnf)
+	}
+}

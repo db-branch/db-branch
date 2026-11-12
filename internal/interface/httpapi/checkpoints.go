@@ -40,20 +40,40 @@ func (s *Server) checkpointBranch(w http.ResponseWriter, r *http.Request, svc Br
 	return b, !s.forward(w, r, b.Node)
 }
 
+// lineJSON is a line of history: the lanes the console draws.
+type lineJSON struct {
+	Line int  `json:"line"`
+	Live bool `json:"live"`
+	// Parent is the line the checkpoint this line was restored from belongs
+	// to (null for the first line).
+	Parent *int `json:"parent"`
+	// From is that checkpoint ("reset": the branch's creation state; "": none).
+	From string `json:"from"`
+}
+
+// listCheckpoints answers the checkpoints and, beside them, the structure of
+// the lines (live: the line the branch runs on, head: the checkpoint its
+// data descends from) so a client can draw the history.
 func (s *Server) listCheckpoints(w http.ResponseWriter, r *http.Request, svc Branches, n domain.Name) {
 	if _, ok := s.checkpointBranch(w, r, svc, n); !ok {
 		return
 	}
-	list, err := svc.ListCheckpoints(r.Context(), n)
+	g, err := svc.CheckpointGraph(r.Context(), n)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	out := make([]checkpointJSON, 0, len(list))
-	for _, c := range list {
+	out := make([]checkpointJSON, 0, len(g.Checkpoints))
+	for _, c := range g.Checkpoints {
 		out = append(out, checkpointView(c))
 	}
-	writeJSON(w, http.StatusOK, items(out))
+	lines := make([]lineJSON, 0, len(g.Lines))
+	for _, l := range g.Lines {
+		lines = append(lines, lineJSON{Line: l.Line, Live: l.Live, Parent: l.Parent, From: l.From})
+	}
+	resp := items(out)
+	resp["lines"], resp["live"], resp["head"] = lines, g.Live, optString(g.Head)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // createCheckpoint takes a checkpoint at once (a snapshot costs nothing) and

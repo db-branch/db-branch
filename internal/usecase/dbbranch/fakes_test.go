@@ -152,6 +152,8 @@ type fakeServer struct {
 	running map[string]bool
 	failOn  string
 	sql     map[string][]string
+	// started are the specs the server was started with, in order.
+	started []domain.Server
 }
 
 func (f *fakeServer) fail(op string) error {
@@ -179,6 +181,7 @@ func (f *fakeServer) Start(_ context.Context, s domain.Server) error {
 		f.memory = map[string]int{}
 	}
 	f.memory[s.ID] = s.MemoryMB
+	f.started = append(f.started, s)
 	f.j.add("start %s", s.ID)
 	if err := f.fail("start"); err != nil {
 		return err

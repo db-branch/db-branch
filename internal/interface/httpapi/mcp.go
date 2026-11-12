@@ -123,6 +123,7 @@ type createIn struct {
 	TTL      string `json:"ttl,omitempty" jsonschema:"delete automatically after this long, e.g. 4h"`
 	InitSQL  string `json:"init_sql,omitempty" jsonschema:"SQL run once after copying, e.g. to mask data; reset returns here"`
 	Access   string `json:"access,omitempty" jsonschema:"private (default: a password of its own, only you may connect) or open (anyone may connect, shared password)"`
+	Record   bool   `json:"record,omitempty" jsonschema:"record the branch's changes so it can be restored to any point (needs the history module)"`
 }
 
 type extendIn struct {
@@ -185,6 +186,9 @@ func (s *Server) mcpServer(r *http.Request) *mcp.Server {
 			body := map[string]any{"name": in.Name, "base": in.Base, "ttl": in.TTL, "init_sql": in.InitSQL}
 			if in.Access != "" {
 				body["access"] = in.Access
+			}
+			if in.Record {
+				body["record"] = true
 			}
 			if in.Snapshot != "" {
 				body["snapshot"] = in.Snapshot

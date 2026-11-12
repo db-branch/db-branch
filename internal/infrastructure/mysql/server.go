@@ -64,7 +64,7 @@ func (m *Server) writeConfig(s domain.Server) error {
 	if err := os.MkdirAll(m.dir(s), 0o750); err != nil {
 		return err
 	}
-	cnf := strings.Join([]string{
+	lines := []string{
 		"# Written by db-branch. Changes are overwritten.",
 		"[mysqld]",
 		"basedir=" + m.RuntimeDir(s.Runtime),
@@ -80,8 +80,12 @@ func (m *Server) writeConfig(s domain.Server) error {
 		// ZFS is copy-on-write: torn pages cannot happen, so doublewrite only costs writes.
 		"innodb_doublewrite=OFF",
 		"innodb_flush_neighbors=0",
-		"",
-	}, "\n")
+	}
+	if s.Maintenance {
+		// Work on the data only (a module replaying changes): no network.
+		lines = append(lines, "skip-networking")
+	}
+	cnf := strings.Join(append(lines, append(s.Extra, "")...), "\n")
 	if err := os.WriteFile(m.cnf(s), []byte(cnf), 0o640); err != nil {
 		return err
 	}

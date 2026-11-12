@@ -204,3 +204,33 @@ func mustName(s string) domain.Name {
 	}
 	return n
 }
+
+func TestLineViews_線を番号順に並べ復元元を読み取る(t *testing.T) {
+	lines := []domain.Line{
+		{Dataset: "h/2", Live: true, Props: map[string]string{domain.PropLine: "2", domain.PropFrom: "ckpt-c1", domain.PropParent: "0"}},
+		{Dataset: "h/new", Pending: true, Props: map[string]string{domain.PropLine: "3"}},
+		{Dataset: "h/1", Props: map[string]string{domain.PropLine: "1", domain.PropFrom: "reset", domain.PropParent: "0"}},
+		{Dataset: "h/0", Props: map[string]string{}},
+		{Dataset: "h/old", Props: map[string]string{domain.PropLine: "4", domain.PropFrom: "ckpt-x"}}, // made before parents were recorded
+	}
+	got := domain.LineViews(lines)
+	if len(got) != 4 {
+		t.Fatalf("got %+v", got)
+	}
+	zero := 0
+	want := []domain.LineView{{Line: 0}, {Line: 1, From: "reset", Parent: &zero}, {Line: 2, Live: true, From: "c1", Parent: &zero}, {Line: 4, From: "x"}}
+	for i, w := range want {
+		g := got[i]
+		if g.Line != w.Line || g.Live != w.Live || g.From != w.From || (g.Parent == nil) != (w.Parent == nil) || (w.Parent != nil && *g.Parent != *w.Parent) {
+			t.Errorf("line %d = %+v, want %+v", i, g, w)
+		}
+	}
+}
+
+func TestSnapshotLine_チェックポイントは取った線をリセットは最初の線を指す(t *testing.T) {
+	lines := []domain.Line{{Dataset: "l", Snapshots: []domain.SnapshotInfo{
+		{Name: "reset"}, {Name: "ckpt-a", Props: map[string]string{domain.PropLine: "3"}}}}}
+	if domain.SnapshotLine(lines, "ckpt-a") != 3 || domain.SnapshotLine(lines, "reset") != 0 || domain.SnapshotLine(lines, "missing") != 0 {
+		t.Error("lines of snapshots")
+	}
+}

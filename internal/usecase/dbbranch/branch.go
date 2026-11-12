@@ -24,6 +24,8 @@ type CreateBranchRequest struct {
 	Node string
 	// Owner manages the branch; Access is domain.AccessPrivate ("") or AccessOpen.
 	Owner, Access string
+	// Record asks for the branch's changes to be recorded by the history module.
+	Record bool
 }
 
 // PlaceBranch checks the request against the base and chooses the node that
@@ -137,7 +139,7 @@ func (s *Service) reserveBranch(ctx context.Context, req CreateBranchRequest) (d
 	br := domain.Branch{
 		Name: req.Name, Base: base.Name, Snapshot: snap.Name, Runtime: base.Runtime,
 		Status: domain.BranchProvisioning, Port: port, Node: s.Node, User: req.Name.String(), Password: s.Password(),
-		CreatedAt: s.Clock(), InitSQL: req.InitSQL, Owner: req.Owner, Access: domain.AccessPrivate,
+		CreatedAt: s.Clock(), InitSQL: req.InitSQL, Owner: req.Owner, Access: domain.AccessPrivate, Record: req.Record,
 	}
 	if req.Access == domain.AccessOpen {
 		br.Access = domain.AccessOpen
@@ -163,7 +165,7 @@ func (s *Service) buildBranch(ctx context.Context, br *domain.Branch, initSQL st
 	if err := s.Storage.Clone(ctx, domain.Snapshot{Dataset: s.sourceDataset(base), Name: br.Snapshot}, ds); err != nil {
 		return err
 	}
-	spec, err := s.spec(ctx, branchServerID(br.Name), ds, br.Runtime, br.Port)
+	spec, err := s.branchSpec(ctx, *br, ds, false, true)
 	if err != nil {
 		return err
 	}
@@ -224,15 +226,22 @@ func (s *Service) transitionBranch(ctx context.Context, name domain.Name, check 
 
 // ResetBranch discards every change since the reset point.
 func (s *Service) ResetBranch(ctx context.Context, name domain.Name, report Reporter) (domain.Branch, error) {
+	return s.ResetBranchWith(ctx, name, "", report)
+}
+
+// ResetBranchWith is ResetBranch for a module: note is handed to its
+// RestoreFinisher once the reset data is in place (before anyone can
+// connect), so it can bring the branch forward from the reset point.
+func (s *Service) ResetBranchWith(ctx context.Context, name domain.Name, note string, report Reporter) (domain.Branch, error) {
 	br, err := s.transitionBranch(ctx, name, domain.Branch.CanReset, domain.BranchResetting)
 	if err != nil {
 		return br, err
 	}
-	return s.doReset(ctx, br, report)
+	return s.doReset(ctx, br, note, report)
 }
 
-func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter) (domain.Branch, error) {
-	if in, swap, err := s.resetBySwap(ctx, br); err != nil {
+func (s *Service) doReset(ctx context.Context, br domain.Branch, note string, report Reporter) (domain.Branch, error) {
+	if in, swap, err := s.resetBySwap(ctx, br, note); err != nil {
 		// Nothing was touched: the branch is still what it was.
 		br.Status = domain.BranchReady
 		return br, errors.Join(err, s.Store.PutBranch(ctx, br))
@@ -244,7 +253,7 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 		return br, s.fail(ctx, br, err)
 	}
 	ds := s.branchDataset(br.Name)
-	spec, err := s.spec(ctx, branchServerID(br.Name), ds, br.Runtime, br.Port)
+	spec, err := s.branchSpec(ctx, br, ds, false, false)
 	if err != nil {
 		return br, s.fail(ctx, br, err)
 	}
@@ -357,7 +366,7 @@ func (s *Service) Recover(ctx context.Context) error {
 			}
 			errs = append(errs, err)
 		case domain.BranchResetting:
-			_, err := s.doReset(ctx, br, nil)
+			_, err := s.doReset(ctx, br, "", nil)
 			errs = append(errs, err)
 		case domain.BranchRestoring:
 			errs = append(errs, s.resumeRestore(ctx, br))
@@ -377,7 +386,7 @@ func (s *Service) ensureRunning(ctx context.Context, br domain.Branch) error {
 	if err != nil {
 		return err
 	}
-	spec, err := s.spec(ctx, branchServerID(br.Name), s.branchDataset(br.Name), br.Runtime, br.Port)
+	spec, err := s.branchSpec(ctx, br, s.branchDataset(br.Name), false, false)
 	if err != nil {
 		return err
 	}
