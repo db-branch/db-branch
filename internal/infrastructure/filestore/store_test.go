@@ -456,3 +456,25 @@ func TestAnonymous_匿名の上限はベースの更新でも残り継承に戻�
 		t.Error("missing base: want ErrNotFound")
 	}
 }
+
+func TestPutBranch_記録の有無は作成時に決まり後から書き換えても変わらない(t *testing.T) {
+	s, _ := newStore(t)
+	for _, tc := range []struct {
+		name         string
+		first, later bool
+	}{{"rec", true, false}, {"plain", false, true}} {
+		_ = s.InsertBranch(ctx, domain.Branch{Name: name(tc.name), Record: tc.first})
+		if err := s.PutBranch(ctx, domain.Branch{Name: name(tc.name), Status: domain.BranchReady, Record: tc.later}); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := s.GetBranch(ctx, name(tc.name))
+		if got.Record != tc.first || got.Status != domain.BranchReady {
+			t.Errorf("%s: %+v, want record=%v and the other fields replaced", tc.name, got, tc.first)
+		}
+	}
+	// A branch the store does not know yet takes the record as given.
+	_ = s.PutBranch(ctx, domain.Branch{Name: name("new"), Record: true})
+	if got, _ := s.GetBranch(ctx, name("new")); !got.Record {
+		t.Error("a new branch should keep record")
+	}
+}

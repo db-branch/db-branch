@@ -81,7 +81,10 @@ func main() {
 | `ext.Host.Branches`（`ext.BranchHost`） | この**ノードの**ブランチを扱う口: `Branch` / `Branches` / `Graph`（チェックポイントと線の構造）/ `CreateCheckpoint` / `RestoreCheckpoint(name, checkpoint, note)`（完了まで待つ。`@reset` は作成時の状態。どちらも今の状態を `before-restore-…` として残す）/ `DB`（管理者としてサーバーに入る口: ソケットとクライアントツール）/ `OpenLine`・`CloseLine`（ある線、またはあるチェックポイント（`@reset` は作成時の状態）の時点のデータを**読み取り専用**でマウント）/ `StartOperation`・`ReportOperation`・`EndOperation`（モジュールの操作をコンソールや `GET /v1/operations/{id}` に出す。1 時間で閉じなければ失敗） |
 | `/v1/ext/<モジュール>/branches/<名前>/...` | この形のパスは、そのブランチを持つノードのモジュールに自動で転送される（`?node=` を付けなくてよい） |
 
-- `ServerBranch` はブランチ名・所有者・エンジンと版・`Record`（作成時に記録を頼まれたか）・`Anonymous`（ログインなしで作られたブランチ。記録しない）・`Maintenance`。作成時にエラーを返すと作成が失敗する（`ErrForbidden` を包めば拒否として 403）。それ以降の起動ではオプションなしで起動して agent のログに残す（ライセンスの期限切れでブランチが止まらない）
-- `POST /v1/branches` の `record: true` は `ServerOptioner` が受け付けたときだけ通る。`GET /v1/capabilities` の `record` が true のとき、コンソールは作成画面にチェックボックスを出す
+- `ServerBranch` はブランチ名・所有者・エンジンと版・`Record`（このブランチは記録する）・`Creating`・`Anonymous`（ログインなしで作られたブランチ。記録しない）・`Maintenance`。作成時にエラーを返すと作成が失敗する（`ErrForbidden` を包めば拒否として 403）
+- **記録するかどうかは、ブランチを作るときに一度だけ決まり、あとから変わらない**。決まり方は 2 つ。作成の要求が `record: true` を持つか、持たないブランチについて agent が作成の直前に一度だけ `ServerOptions` を `Creating: true`（`Record` は false）で呼び、モジュールが返す `ServerOptions.Record` が true か（history モジュールの `record_all` がオンのときの答え）。決まった値はブランチの `Record` として保存し、それ以降の呼び出しでは `Record` だけを見る。モジュールは `Record` のブランチにだけ記録の設定を返し、自分の設定（`record_all`）を後から見直してはならない。`Creating` はそれ以外の呼び出しでは false
+- 記録するブランチ（`Record`）は、起動のたびに（作成・作り直し・リセット・チェックポイントの復元・履歴の復元・agent やノードの再起動）モジュールのオプションが付かなければ**起動しない**。モジュールが無い、止めてある、ライセンスが無い、いずれでも同じ。作成と作り直しとリセットは失敗にして理由を `status_reason` に出す。再起動で起動できなかったブランチも `failed` と理由にし、モジュールが戻ったあとの次の起動で `ready` に戻る。記録しないブランチには、`record_all` がオンになっていても記録のオプションは付かない
+- ストアは、既存のブランチを書き換えるとき `Record` を保存済みの値のまま変えない（`PutBranch`）。API・CLI・コンソールに記録を切り替える手段は無い。Raft のコマンドの意味は変わらない（プロトコルは 15 のまま）
+- `POST /v1/branches` の `record: true` は `ServerOptioner` が受け付けたときだけ通る。`GET /v1/capabilities` の `record` が true のとき、コンソールは作成画面にだけチェックボックスを出す（作ったあとは「Recording: on / off」と表示するだけ）
 - `GET /v1/branches/{name}/checkpoints` は `lines`（線の構造: 番号・現在の線か・親の線・元のチェックポイント）、`live`、`head` を足して返す。コンソールのグラフはこれで描く
 - ライセンス: `license.FeatureHistory`（`history`）。どのプランに入れるかは `pkg/ext/license` の `planFeatures` の 1 か所

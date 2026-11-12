@@ -9,6 +9,7 @@ import { relative } from "../lib/format";
 import { useLive, useNow } from "../lib/live";
 import { splitOwned } from "../lib/branchname";
 import { t } from "../lib/i18n";
+import { RecordingBadge } from "../components/recording";
 
 export function Branches() {
   const { data: branches, error } = useLive(api.branches, ["branch", "operation"]);
@@ -69,11 +70,7 @@ export function Branches() {
                       open
                     </span>
                   )}
-                  {b.record && (
-                    <span className="badge on" title={t("Its changes are recorded; it can be restored to any point.")}>
-                      recording
-                    </span>
-                  )}
+                  <RecordingBadge record={b.record} />
                   {b.status_reason && <span className="reason">{b.status_reason}</span>}
                 </td>
                 <td>

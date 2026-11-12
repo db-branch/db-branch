@@ -330,3 +330,167 @@ func TestRestoreCheckpointWith_メモは何でも書けるが大きすぎるも�
 }
 
 var got string
+
+func extras(z *zenv, id string) []string {
+	var out []string
+	for _, s := range z.server.started {
+		if s.ID == id {
+			out = s.Extra
+		}
+	}
+	return out
+}
+
+func TestCreateBranch_全ブランチ記録の設定は作成の瞬間に一度だけ効き後から変えても既存のブランチは変わらない(t *testing.T) {
+	z := newZEnv(t)
+	z.options()
+	z.withBase(t)
+	asked := 0
+	all := true
+	z.svc.RecordNew = func(_ context.Context, br domain.Branch) bool { asked++; return all }
+
+	if _, err := z.svc.CreateBranch(ctx, createReq("a", false), nil); err != nil {
+		t.Fatal(err)
+	}
+	all = false
+	if _, err := z.svc.CreateBranch(ctx, createReq("b", false), nil); err != nil {
+		t.Fatal(err)
+	}
+	all = true
+	if _, err := z.svc.CreateBranch(ctx, createReq("c", true), nil); err != nil {
+		t.Fatal(err)
+	}
+	if asked != 2 {
+		t.Errorf("asked %d times: a branch that asked to record needs no answer", asked)
+	}
+	rec := func(n string) bool { b, _ := z.store.GetBranch(ctx, name(n)); return b.Record }
+	if !rec("a") || rec("b") || !rec("c") {
+		t.Fatalf("a=%v b=%v c=%v", rec("a"), rec("b"), rec("c"))
+	}
+
+	// The setting is now the opposite of what each branch got; a restart
+	// starts every branch the way it was created.
+	all = false
+	z.restart()
+	if err := z.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(extras(z, "branch-a")) == 0 || len(extras(z, "branch-b")) != 0 {
+		t.Errorf("a=%v b=%v", extras(z, "branch-a"), extras(z, "branch-b"))
+	}
+	all = true
+	z.restart()
+	if err := z.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(extras(z, "branch-b")) != 0 || rec("b") {
+		t.Errorf("b became recorded: %v", extras(z, "branch-b"))
+	}
+	if asked != 2 {
+		t.Errorf("the setting was asked again after creation: %d", asked)
+	}
+}
+
+func TestRecover_記録するブランチはモジュールが無ければ失敗として理由を示しモジュールが戻れば再開する(t *testing.T) {
+	z := newZEnv(t)
+	z.options()
+	z.withBase(t)
+	for _, n := range []string{"rec", "plain"} {
+		if _, err := z.svc.CreateBranch(ctx, createReq(n, n == "rec"), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	z.svc.ServerOptions = nil // the module is not installed or not loaded
+	z.restart()
+	err := z.svc.Recover(ctx)
+	if !errors.Is(err, dbbranch.ErrRecordRequired) {
+		t.Fatalf("err = %v", err)
+	}
+	b, _ := z.store.GetBranch(ctx, name("rec"))
+	if b.Status != domain.BranchFailed || !strings.Contains(b.Error, "history module") || z.server.running["branch-rec"] || !z.server.running["branch-plain"] {
+		t.Errorf("status=%s reason=%q running=%v", b.Status, b.Error, z.server.running)
+	}
+
+	// Still missing at the next start: stays failed, with the reason.
+	z.restart()
+	if err := z.svc.Recover(ctx); !errors.Is(err, dbbranch.ErrRecordRequired) {
+		t.Fatalf("second start: %v", err)
+	}
+	if b, _ := z.store.GetBranch(ctx, name("rec")); b.Status != domain.BranchFailed {
+		t.Errorf("status = %s", b.Status)
+	}
+
+	// The module is back: the branch starts, recorded, and is ready again.
+	z.options()
+	z.restart()
+	if err := z.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = z.store.GetBranch(ctx, name("rec"))
+	if b.Status != domain.BranchReady || b.Error != "" || !z.server.running["branch-rec"] || len(extras(z, "branch-rec")) == 0 {
+		t.Errorf("status=%s reason=%q running=%v", b.Status, b.Error, z.server.running)
+	}
+}
+
+func TestRecover_記録するブランチはライセンスが無ければ起動せずそれ以外の失敗は再試行しない(t *testing.T) {
+	z := newZEnv(t)
+	z.options()
+	z.withBase(t)
+	if _, err := z.svc.CreateBranch(ctx, createReq("rec", true), nil); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := z.store.GetBranch(ctx, name("rec"))
+	b.Status, b.Error = domain.BranchFailed, "disk error"
+	_ = z.store.PutBranch(ctx, b)
+	z.restart()
+	if err := z.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := z.store.GetBranch(ctx, name("rec")); b.Status != domain.BranchFailed || z.server.running["branch-rec"] {
+		t.Errorf("an unrelated failure was retried: %s running=%v", b.Status, z.server.running)
+	}
+}
+
+func TestResetBranch_記録するブランチはモジュールが拒むとリセットも起動しない(t *testing.T) {
+	z := newZEnv(t)
+	z.options()
+	z.withBase(t)
+	if _, err := z.svc.CreateBranch(ctx, createReq("rec", true), nil); err != nil {
+		t.Fatal(err)
+	}
+	z.svc.ServerOptions = func(context.Context, domain.Branch, bool) ([]string, error) {
+		return nil, errors.New("licence lapsed")
+	}
+	_, err := z.svc.ResetBranch(ctx, name("rec"), nil)
+	if !errors.Is(err, dbbranch.ErrRecordRequired) || !strings.Contains(err.Error(), "licence lapsed") {
+		t.Fatalf("err = %v", err)
+	}
+	if b, _ := z.store.GetBranch(ctx, name("rec")); b.Status != domain.BranchFailed || !b.Record {
+		t.Errorf("status=%s record=%v", b.Status, b.Record)
+	}
+}
+
+func TestRestoreCheckpoint_記録するブランチはモジュールが拒むと復元後も起動しない(t *testing.T) {
+	z := newZEnv(t)
+	z.options()
+	z.withBase(t)
+	if _, err := z.svc.CreateBranch(ctx, createReq("x", true), nil); err != nil {
+		t.Fatal(err)
+	}
+	z.sim.write(live, "v0")
+	z.tick()
+	if _, err := z.svc.CreateCheckpoint(ctx, name("x"), "c1"); err != nil {
+		t.Fatal(err)
+	}
+	z.svc.ServerOptions = func(context.Context, domain.Branch, bool) ([]string, error) {
+		return nil, errors.New("licence lapsed")
+	}
+	z.tick()
+	_, err := z.svc.RestoreCheckpoint(ctx, name("x"), "c1", nil)
+	if !errors.Is(err, dbbranch.ErrRecordRequired) {
+		t.Fatalf("err = %v", err)
+	}
+	if z.server.running["branch-x"] {
+		t.Error("the server must not run unrecorded")
+	}
+}

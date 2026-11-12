@@ -8,6 +8,7 @@ import { showCheckpoints } from "../lib/checkpoints";
 import { CheckpointPanel } from "./checkpoints";
 import { ConnectPanel } from "./connect";
 import { CopyButton, Engine, Icon, Status, StorageBar, TtlBar } from "./marks";
+import { RecordingBadge, RecordingValue } from "./recording";
 import { ErrorLine } from "./ui";
 
 export type SnapInfo = { created_at: string; masked: boolean };
@@ -141,11 +142,7 @@ export function BranchRow({
               {rest}
             </span>
             {b.access === "open" && <span className="badge">{t("open")}</span>}
-            {b.record && (
-              <span className="badge on" title={t("Its changes are recorded; it can be restored to any point.")}>
-                recording
-              </span>
-            )}
+            <RecordingBadge record={b.record} />
             {chip}
           </span>
           <span className="brow-meta">
@@ -206,6 +203,10 @@ export function BranchRow({
             </dd>
             <dt>Node</dt>
             <dd className="mono">{b.node}</dd>
+            <dt>Recording</dt>
+            <dd>
+              <RecordingValue record={b.record} />
+            </dd>
             <dt>Owner</dt>
             <dd>{b.owner ?? <span className="muted">—</span>}</dd>
             <dt>Created</dt>

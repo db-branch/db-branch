@@ -27,6 +27,7 @@ type branchView struct {
 	Owner      *string `json:"owner"`
 	ID         string  `json:"id"`
 	Access     string  `json:"access"`
+	Record     bool    `json:"record"`
 	Connection struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
@@ -138,7 +139,7 @@ func (a *App) branchCommand() *cobra.Command {
 	create.Flags().StringVar(&ttl, "ttl", "", "delete automatically after this long, e.g. 72h")
 	create.Flags().StringVar(&node, "node", "", "cluster node to create it on (default: chosen by load)")
 	create.Flags().StringVar(&owner, "owner", "", "who manages the branch (admins only; default: you)")
-	create.Flags().BoolVar(&record, "record", false, "record the branch's changes so it can be restored to any point (needs the history module)")
+	create.Flags().BoolVar(&record, "record", false, "record the branch's changes so it can be restored to any point (needs the history module); decided now, it cannot be turned on or off later")
 	create.Flags().StringVar(&access, "access", "", "private (own password, owner and admins only) or open (anyone, shared password)")
 
 	list := &cobra.Command{
@@ -267,6 +268,7 @@ func (a *App) showBranch(cmd *cobra.Command, c Client, n domain.Name) error {
 	if b.Reason != nil {
 		fmt.Fprintf(tw, "Reason:\t%s\n", *b.Reason)
 	}
+	fmt.Fprintf(tw, "Recording:\t%s\n", map[bool]string{true: "on (since creation)", false: "off"}[b.Record])
 	fmt.Fprintf(tw, "Base:\t%s @ %s\n", b.Base, b.Snapshot)
 	fmt.Fprintf(tw, "Runtime:\t%s\n", b.Runtime)
 	fmt.Fprintf(tw, "Connect:\t%s:%d  user %s  (password: db-branch branch dsn %s)\n", b.Connection.Host, b.Connection.Port, b.Connection.User, b.Name)

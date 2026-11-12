@@ -297,8 +297,17 @@ type ServerBranch struct {
 	// Engine is "mysql" or "postgres"; Version the runtime's.
 	Engine  string `json:"engine"`
 	Version string `json:"version"`
-	// Record: recording was asked for when the branch was created.
+	// Record: the branch records its changes. Decided once, when the branch
+	// is created (it asked to, or a module said so in answer to Creating),
+	// and fixed for as long as the branch exists: a module records exactly
+	// the branches with Record, whatever its settings say later.
 	Record bool `json:"record"`
+	// Creating: the branch is being created and has not asked to record
+	// (Record is false). The agent asks once: a module that wants every
+	// new branch recorded (a record_all setting) answers with
+	// ServerOptions.Record, and the agent keeps the answer as the branch's
+	// Record. It is false for every later question.
+	Creating bool `json:"creating,omitempty"`
 	// Anonymous: made without a login (open to anyone). Never record these.
 	Anonymous bool `json:"anonymous"`
 	// Maintenance: the server is started only to work on its data (see
@@ -313,6 +322,10 @@ type ServerOptions struct {
 	// PostgreSQL: not applied yet. Lines that clash with the agent's own
 	// settings are the module's responsibility.
 	Config []string `json:"config,omitempty"`
+	// Record: only as the answer to ServerBranch.Creating: record this new
+	// branch although it did not ask to. The agent stores it as the branch's
+	// Record, which never changes afterwards. Ignored for any other question.
+	Record bool `json:"record,omitempty"`
 }
 
 // ServerOptioner adds options to branch servers. The agent asks each time
@@ -338,6 +351,7 @@ func (list ServerOptioners) ServerOptions(ctx context.Context, b ServerBranch) (
 			return ServerOptions{}, err
 		}
 		out.Config = append(out.Config, x.Config...)
+		out.Record = out.Record || x.Record
 	}
 	return out, nil
 }

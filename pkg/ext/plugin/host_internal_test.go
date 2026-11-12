@@ -17,7 +17,7 @@ func (optionsModule) ServerOptions(_ context.Context, b ext.ServerBranch) (ext.S
 	if b.Name == "nolicence" {
 		return ext.ServerOptions{}, ext.ErrForbidden
 	}
-	return ext.ServerOptions{Config: []string{"log_bin=binlog", "maint=" + map[bool]string{true: "y", false: "n"}[b.Maintenance]}}, nil
+	return ext.ServerOptions{Config: []string{"log_bin=binlog", "maint=" + map[bool]string{true: "y", false: "n"}[b.Maintenance]}, Record: b.Creating}, nil
 }
 
 func (optionsModule) AfterRestore(_ context.Context, b ext.ServerBranch, note string) error {
@@ -36,6 +36,12 @@ func Test_サーバーの追加設定と復元後の処理を運ぶ(t *testing.T
 	o, err := r.ServerOptions(ctx, ext.ServerBranch{Name: "x", Maintenance: true})
 	if err != nil || len(o.Config) != 2 || o.Config[1] != "maint=y" {
 		t.Errorf("options %v %v", o, err)
+	}
+	if o, err := r.ServerOptions(ctx, ext.ServerBranch{Name: "new", Creating: true}); err != nil || !o.Record {
+		t.Errorf("creating = %+v %v: the module's wish to record must reach the agent", o, err)
+	}
+	if o, _ := r.ServerOptions(ctx, ext.ServerBranch{Name: "old"}); o.Record {
+		t.Error("only a creation can be asked")
 	}
 	if _, err := r.ServerOptions(ctx, ext.ServerBranch{Name: "nolicence"}); !errors.Is(err, ext.ErrForbidden) {
 		t.Errorf("a refusal keeps its sentinel: %v", err)

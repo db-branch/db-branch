@@ -114,3 +114,21 @@ func TestExt_ブランチ配下のパスはそのブランチのノードで答�
 }
 
 var _ = domain.Branch{}
+
+func TestPatchBranch_作成後に記録の有無を変える手段は無い(t *testing.T) {
+	f := newFixture(t)
+	f.branches.branches["x"] = domain.Branch{Name: name("x"), Runtime: mysql84, Status: domain.BranchReady, Record: true, CreatedAt: t0}
+	for _, body := range []map[string]any{{"record": false}, {"ttl": "1h", "record": false}} {
+		if resp, _ := f.do(t, "PATCH", "/v1/branches/x", body); resp.StatusCode != 400 {
+			t.Errorf("%v: status %d, want 400", body, resp.StatusCode)
+		}
+	}
+	for _, m := range []string{"PUT", "POST"} {
+		if resp, _ := f.do(t, m, "/v1/branches/x", map[string]any{"record": false}); resp.StatusCode < 400 {
+			t.Errorf("%s changed a branch: %d", m, resp.StatusCode)
+		}
+	}
+	if _, got := f.do(t, "GET", "/v1/branches/x", nil); got["record"] != true {
+		t.Errorf("branch = %v", got)
+	}
+}

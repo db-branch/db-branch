@@ -680,6 +680,39 @@ describe("history graph and module", () => {
     settle(6000);
     expect(branch("rec-pg")!.record).toBeUndefined();
   });
+  it("decides once, at creation, whether a branch records: record_all only reaches branches made after it is set", () => {
+    const made = (name: string, body: object = {}) => {
+      call("POST", "/v1/branches", { name, base: "orders", ...body });
+      settle(6000);
+      return branch(name)!;
+    };
+    const recordAll = (v: string) => call("PUT", "/v1/settings/history", { values: { record_all: v } });
+    expect(recordAll("true").status).toBe(200);
+    const a = made("rec-all-a");
+    expect(a.record).toBe(true);
+    expect(recordAll("false").status).toBe(200);
+    const b = made("rec-all-b");
+    expect(b.record).toBeUndefined();
+    expect(recordAll("true").status).toBe(200);
+    // Neither setting nor any call changes a branch that exists.
+    expect(branch("rec-all-a")!.record).toBe(true);
+    expect(branch("rec-all-b")!.record).toBeUndefined();
+    expect(call("PATCH", "/v1/branches/rec-all-b", { record: true }).status).toBe(400);
+    expect(call("PATCH", "/v1/branches/rec-all-a", { record: false }).status).toBe(400);
+    expect(branch("rec-all-a")!.record).toBe(true);
+    expect(branch("rec-all-b")!.record).toBeUndefined();
+    // Not for branches that cannot be recorded, with the setting on.
+    call("POST", "/v1/branches", { name: "rec-all-pg", base: "storefront" });
+    settle(6000);
+    expect(branch("rec-all-pg")!.record).toBeUndefined();
+    // Without the module nothing is recorded, and nothing is recorded later by installing it.
+    call("DELETE", "/v1/modules/history");
+    settle(2000);
+    expect(made("rec-all-off").record).toBeUndefined();
+    call("POST", "/v1/modules", { name: "history" });
+    settle(6000);
+    expect(branch("rec-all-off")!.record).toBeUndefined();
+  });
   it("numbers the line after a reset of a branch whose lines are all remembered", () => {
     call("POST", "/v1/branches/alex-orders-report/reset");
     settle();

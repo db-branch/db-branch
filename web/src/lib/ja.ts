@@ -246,7 +246,8 @@ export const ja: Record<string, string> = {
   "Restore {name} to just after this transaction? Nothing is lost: the branch continues on a new line, the current state is saved first as a before-restore checkpoint, and every checkpoint stays.":
     "{name} をこのトランザクションの直後の状態に戻しますか？ 何も失われません。新しい線で続き、いまの状態は先に before-restore のチェックポイントとして保存され、チェックポイントもすべて残ります。",
   "Go back to just after this transaction; nothing is lost": "このトランザクションの直後に戻します。何も失われません",
-  "Its changes are recorded; it can be restored to any point.": "変更を記録しています。任意の時点に戻せます。",
-  "Keep every change so you can go back to any point, not only to checkpoints.": "すべての変更を残し、チェックポイントだけでなく任意の時点に戻せるようにします。",
+  "Recording: on, since the Branch was created. Its changes are recorded; it can be restored to any point.": "記録: オン（Branch の作成時から）。変更を記録しています。任意の時点に戻せます。",
+  "Keep every change so you can go back to any point, not only to checkpoints. Decided now: it cannot be turned on or off after the Branch is created.":
+    "すべての変更を残し、チェックポイントだけでなく任意の時点に戻せるようにします。作成時にだけ決められ、Branch を作ったあとにオンにもオフにもできません。",
   "Reset {name} to the data of its Snapshot? Changes you made are lost. Checkpoints are kept.": "{name} を Snapshot のデータに戻しますか？ 加えた変更は失われます。チェックポイントは残ります。",
 };

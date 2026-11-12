@@ -195,7 +195,7 @@ export function NewBranch({
           <label className="record-option" htmlFor={ids.record}>
             <input id={ids.record} type="checkbox" checked={record} onChange={(e) => setRecord(e.target.checked)} />
             <span>Record</span>
-            <span className="muted small">{t("Keep every change so you can go back to any point, not only to checkpoints.")}</span>
+            <span className="muted small">{t("Keep every change so you can go back to any point, not only to checkpoints. Decided now: it cannot be turned on or off after the Branch is created.")}</span>
           </label>
         )}
         {signedIn ? (

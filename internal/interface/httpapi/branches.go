@@ -53,7 +53,10 @@ type branchJSON struct {
 	Owner  *string `json:"owner"`
 	ID     string  `json:"id"`
 	Access string  `json:"access"`
-	// Record: recording was asked for at creation (the history module records).
+	// Record: the branch records its changes, from its creation to its
+	// deletion (the history module records). Fixed when the branch is
+	// created, by `record` or the module's record_all setting at that moment;
+	// nothing changes it afterwards.
 	Record bool `json:"record"`
 	// Checkpoints is whether the node holding the branch can take checkpoints.
 	Checkpoints bool `json:"checkpoints"`

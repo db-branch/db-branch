@@ -299,7 +299,12 @@ func (s *Store) ListBranches(context.Context) ([]domain.Branch, error) {
 	return out, nil
 }
 
+// PutBranch replaces a branch. Whether it records its changes is decided
+// when it is created and never changes: the stored value wins.
 func (s *Store) PutBranch(ctx context.Context, b domain.Branch) error {
+	if old, ok := s.fsm.State().Branches[b.Name.String()]; ok {
+		b.Record = old.Record
+	}
 	return s.Apply(ctx, PutBranch(b))
 }
 

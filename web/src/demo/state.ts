@@ -199,7 +199,7 @@ export function seed(now: number): State {
         scope: "history",
         title: "history",
         settings: [
-          iv("record_all", "Record every branch", "bool", "false", "Record the changes of every branch, not only those created with Record. Branches that exist already are recorded from their next restart."),
+          iv("record_all", "Record every branch", "bool", "false", "Record the changes of every branch created from now on, not only those created with Record. Whether a branch records is decided when it is created and never changes: branches that exist are not affected."),
           iv("retention", "History retention", "duration", "168h0m0s", "How long recorded changes are kept. Older changes cannot be restored to."),
         ],
       },

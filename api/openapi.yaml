@@ -952,7 +952,12 @@ components:
             kind: { $ref: '#/components/schemas/OperationKind' }
         record:
           type: boolean
-          description: Recording was asked for when the branch was created (the history module records it).
+          description: |
+            The branch records its changes (the history module records it), from its creation
+            to its deletion. Decided once, when the branch is created (`record`, or the history
+            module's `record_all` setting at that moment); nothing can change it afterwards.
+            A recorded branch does not start while the module is missing, disabled or
+            unlicensed (status `failed`, with the reason).
     CreateBranch:
       type: object
       additionalProperties: false
@@ -973,7 +978,9 @@ components:
           description: |
             Record the branch's changes so it can be restored to any point. Needs the
             history module (licensed), a login and a MySQL base; 400 or 403 otherwise.
-            See getCapabilities `record`.
+            See getCapabilities `record`. This is decided only here: no call turns recording
+            on or off for a branch that exists. With the module's `record_all` setting on, a
+            branch is recorded whether or not this is set.
 
     Base:
       type: object

@@ -471,11 +471,27 @@ func (s *Service) resumeRestore(ctx context.Context, br domain.Branch) error {
 // the branch is failed, but the intent is still recorded.
 func (s *Service) resumeFailedRestore(ctx context.Context, br domain.Branch) error {
 	in, ok, err := s.readIntent(ctx, br.Name)
-	if err != nil || !ok {
+	if err != nil {
 		return err
+	}
+	if !ok {
+		return s.retryRecorded(ctx, br)
 	}
 	_, err = s.runRestore(ctx, br, in, nil)
 	return err
+}
+
+// retryRecorded starts a recorded branch that was left failed because the
+// module that records was not there; once it is, the branch is ready again.
+func (s *Service) retryRecorded(ctx context.Context, br domain.Branch) error {
+	if !br.Record || !strings.HasPrefix(br.Error, ErrRecordRequired.Error()) {
+		return nil
+	}
+	if err := s.ensureRunning(ctx, br); err != nil {
+		return err
+	}
+	br.Status, br.Error = domain.BranchReady, ""
+	return s.Store.PutBranch(ctx, br)
 }
 
 // resetBySwap decides how to reset: by rolling back when the live dataset has

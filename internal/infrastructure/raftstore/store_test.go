@@ -743,3 +743,23 @@ func TestStore_クラスタのユーザーidは最初の記録が残り全メン
 		t.Errorf("an older member: %v", err)
 	}
 }
+
+func TestStore_ブランチの記録の有無は作成時に決まり後から書き換えても変わらない(t *testing.T) {
+	c := newCluster(t, 1)
+	l := c.leader(t)
+	for _, tc := range []struct {
+		name         string
+		first, later bool
+	}{{"rec", true, false}, {"plain", false, true}} {
+		if err := l.InsertBranch(ctx, domain.Branch{Name: name(tc.name), Record: tc.first}); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.PutBranch(ctx, domain.Branch{Name: name(tc.name), Status: domain.BranchReady, Record: tc.later}); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := l.GetBranch(ctx, name(tc.name))
+		if got.Record != tc.first || got.Status != domain.BranchReady {
+			t.Errorf("%s: %+v, want record=%v and the other fields replaced", tc.name, got, tc.first)
+		}
+	}
+}

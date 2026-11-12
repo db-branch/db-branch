@@ -82,6 +82,12 @@ type Service struct {
 	// branch is created or was created to record (Branch.Record): then the
 	// server does not start.
 	ServerOptions func(ctx context.Context, br domain.Branch, maintenance bool) ([]string, error)
+	// RecordNew says, when a branch that did not ask to record is created,
+	// whether a module records it all the same (the history module's
+	// record_all setting). It is asked once, at creation, and the answer is
+	// the branch's Record for good: changing the setting later never changes
+	// a branch that exists. Nil: no.
+	RecordNew func(ctx context.Context, br domain.Branch) bool
 	// AfterRestore lets a module work on a restored branch's data while its
 	// server runs in maintenance mode (no network), before anyone can connect.
 	// note is what the module gave the restore. Nil: none.
@@ -177,21 +183,33 @@ func (s *Service) branchSpec(ctx context.Context, br domain.Branch, dataset stri
 	}
 	spec.Maintenance = maintenance
 	if s.ServerOptions == nil {
+		if br.Record {
+			return spec, fmt.Errorf("%w: the history module is not installed or not loaded", ErrRecordRequired)
+		}
 		return spec, nil
 	}
 	extra, err := s.ServerOptions(ctx, br, maintenance)
 	switch {
 	case err == nil:
 		spec.Extra = extra
-	case strict || br.Record:
-		// A branch that was asked to record must not run unrecorded: its log
-		// would have a gap that a later restore cannot see.
+	case br.Record:
+		// A branch records from its creation for good: it must never run
+		// unrecorded, or its log would have a gap that a later restore
+		// cannot see. This holds for every start: create, recreate, reset,
+		// restore and the start after a restart.
+		return spec, fmt.Errorf("%w: %v", ErrRecordRequired, err)
+	case strict:
 		return spec, fmt.Errorf("server options: %w", err)
 	case s.Logf != nil:
 		s.Logf("branch %s: starting without the options a module asked for: %v", br.Name, err)
 	}
 	return spec, nil
 }
+
+// ErrRecordRequired: the branch was created to record its changes, which it
+// does from creation to deletion, so it does not start without the module
+// that records (missing, disabled or without a licence).
+var ErrRecordRequired = errors.New("this branch records its changes (decided when it was created) and does not start without recording")
 
 func baseServerID(n domain.Name) string   { return "base-" + n.String() }
 func branchServerID(n domain.Name) string { return "branch-" + n.String() }

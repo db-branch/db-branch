@@ -229,9 +229,17 @@ func (s *Store) ListBranches(context.Context) ([]domain.Branch, error) {
 	return out, nil
 }
 
-// PutBranch creates or replaces a branch.
+// PutBranch creates or replaces a branch. Whether the branch records its
+// changes is decided when it is created and never changes: a replacement
+// keeps the stored value.
 func (s *Store) PutBranch(_ context.Context, b domain.Branch) error {
-	return s.update(func(st *state) error { st.Branches[b.Name.String()] = b; return nil })
+	return s.update(func(st *state) error {
+		if old, ok := st.Branches[b.Name.String()]; ok {
+			b.Record = old.Record
+		}
+		st.Branches[b.Name.String()] = b
+		return nil
+	})
 }
 
 // DeleteBranch removes a branch.

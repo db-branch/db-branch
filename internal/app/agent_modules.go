@@ -325,6 +325,12 @@ func wireModuleHooks(svc *dbbranch.Service, m ext.Module) {
 			opts, err := o.ServerOptions(ctx, httpapi.ServerBranchOf(br, maintenance))
 			return opts.Config, err
 		}
+		svc.RecordNew = func(ctx context.Context, br domain.Branch) bool {
+			b := httpapi.ServerBranchOf(br, false)
+			b.Creating = true
+			opts, err := o.ServerOptions(ctx, b)
+			return err == nil && opts.Record
+		}
 	}
 	if f := m.RestoreFinisher; f != nil {
 		svc.AfterRestore = func(ctx context.Context, br domain.Branch, note string) error {

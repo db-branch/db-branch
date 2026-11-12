@@ -142,6 +142,10 @@ func (s *Service) reserveBranch(ctx context.Context, req CreateBranchRequest) (d
 		Status: domain.BranchProvisioning, Port: port, Node: s.Node, User: req.Name.String(), Password: s.Password(),
 		CreatedAt: s.Clock(), InitSQL: req.InitSQL, Owner: req.Owner, Access: domain.AccessPrivate, Record: req.Record,
 	}
+	if !br.Record && s.RecordNew != nil {
+		// The one moment it can be decided: never again after this.
+		br.Record = s.RecordNew(ctx, br)
+	}
 	if req.Access == domain.AccessOpen {
 		br.Access = domain.AccessOpen
 		if s.OpenPassword != nil && s.OpenPassword() != "" {
@@ -355,6 +359,10 @@ func (s *Service) Recover(ctx context.Context) error {
 		switch br.Status {
 		case domain.BranchReady:
 			err := s.ensureRunning(ctx, br)
+			if errors.Is(err, ErrRecordRequired) {
+				// Say why it is down; the next start retries (resumeFailedRestore).
+				err = errors.Join(err, s.markFailed(ctx, br, err))
+			}
 			if err == nil {
 				err = s.ownUser(ctx, br)
 			}

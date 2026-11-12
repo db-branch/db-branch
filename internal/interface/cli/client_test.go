@@ -1062,3 +1062,23 @@ func TestClusterAlignIDs_クラスタのidを取得して差し込まれた処�
 		t.Errorf("no ids: %d %q", code, errOut)
 	}
 }
+
+func TestBranchShow_記録は作成時に決まったことを読み取り専用で示す(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["GET /v1/branches/rec"] = map[string]any{"name": "rec", "status": "ready", "base": "prod", "record": true}
+	api.answers["GET /v1/branches/plain"] = map[string]any{"name": "plain", "status": "ready", "base": "prod"}
+	if _, out, _ := runAPI(t, api, "branch", "show", "rec"); !regexp.MustCompile(`Recording:\s+on \(since creation\)\n`).MatchString(out) {
+		t.Errorf("recorded = %q", out)
+	}
+	if _, out, _ := runAPI(t, api, "branch", "show", "plain"); !regexp.MustCompile(`Recording:\s+off\n`).MatchString(out) {
+		t.Errorf("plain = %q", out)
+	}
+	if _, out, _ := runAPI(t, api, "--output", "json", "branch", "show", "rec"); !strings.Contains(out, `"record": true`) {
+		t.Errorf("json = %q", out)
+	}
+	for _, cmd := range [][]string{{"branch", "show", "rec", "--record"}, {"branch", "extend", "rec", "1h", "--record"}} {
+		if code, _, _ := runAPI(t, api, cmd...); code == 0 {
+			t.Errorf("%v: nothing in the CLI changes recording after creation", cmd)
+		}
+	}
+}

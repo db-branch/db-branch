@@ -225,12 +225,13 @@ func TestCombine_更新後のマスク実行を持つモジュールがなけれ
 }
 
 type optioner struct {
-	lines []string
-	err   error
+	lines  []string
+	err    error
+	record bool
 }
 
 func (o optioner) ServerOptions(context.Context, ext.ServerBranch) (ext.ServerOptions, error) {
-	return ext.ServerOptions{Config: o.lines}, o.err
+	return ext.ServerOptions{Config: o.lines, Record: o.record}, o.err
 }
 
 func TestCombine_サーバーの追加設定は全モジュール分をつなぎ一つの失敗で全体が失敗する(t *testing.T) {
@@ -246,6 +247,18 @@ func TestCombine_サーバーの追加設定は全モジュール分をつなぎ
 	}
 	if ext.Combine([]ext.Module{{Name: "a"}}).ServerOptioner != nil {
 		t.Error("no optioner")
+	}
+}
+
+func TestCombine_新しいブランチを記録するかはどれか一つのモジュールが望めば記録になる(t *testing.T) {
+	out := ext.Combine([]ext.Module{{ServerOptioner: optioner{}}, {ServerOptioner: optioner{record: true}}})
+	got, err := out.ServerOptioner.ServerOptions(ctx, ext.ServerBranch{Name: "x", Creating: true})
+	if err != nil || !got.Record {
+		t.Errorf("got %+v %v", got, err)
+	}
+	none := ext.Combine([]ext.Module{{ServerOptioner: optioner{}}, {ServerOptioner: optioner{}}})
+	if got, _ := none.ServerOptioner.ServerOptions(ctx, ext.ServerBranch{}); got.Record {
+		t.Error("nobody asked to record")
 	}
 }
 

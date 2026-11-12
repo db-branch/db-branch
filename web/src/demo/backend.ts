@@ -666,13 +666,20 @@ export class DemoBackend {
       owner: who ? (who.admin && body.owner ? String(body.owner) : who.id) : null,
       id: newId(this.state),
       access: !who || body.access === "open" ? "open" : "private",
-      record: body.record === true && !!who && !pg && this.state.modules.history === "on" ? true : undefined,
+      // Decided here, once: the branch asked to, or record_all is on right now.
+      record: (body.record === true || this.recordAll()) && !!who && !pg && this.state.modules.history === "on" ? true : undefined,
       checkpoints: true,
     };
     this.state.branches.push(b);
     this.schedule(op, TIMING.branchCreate, { k: "branch.ready", name });
     this.emit("branch.updated", { name });
     return ok(op, 202);
+  }
+
+  // recordAll is the history module's record_all setting as it is now.
+  private recordAll(): boolean {
+    const set = this.scopes().find((x) => x.scope === "history")?.settings.find((x) => x.key === "record_all");
+    return set?.value === "true";
   }
 
   private baseRoutes() {
