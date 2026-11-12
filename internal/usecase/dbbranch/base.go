@@ -75,7 +75,7 @@ func (s *Service) reserveBase(ctx context.Context, req CreateBaseRequest) (domai
 	if err != nil {
 		return domain.Base{}, err
 	}
-	replicas, err := s.normalizeReplicaNodes(ctx, s.Node, req.ReplicaNodes)
+	replicas, err := s.normalizeReplicaNodes(ctx, s.Node, s.ownDistro(req.Runtime.Engine), req.ReplicaNodes)
 	if err != nil {
 		return domain.Base{}, err
 	}
@@ -113,7 +113,12 @@ func (s *Service) SetReplicaNodes(ctx context.Context, name domain.Name, nodes *
 	if err != nil {
 		return base, err
 	}
-	norm, err := s.normalizeReplicaNodes(ctx, base.Node, nodes)
+	all, err := s.nodes(ctx)
+	if err != nil {
+		return base, err
+	}
+	snap, _ := base.LatestSnapshot()
+	norm, err := s.normalizeReplicaNodes(ctx, base.Node, s.originDistro(base, snap, all), nodes)
 	if err != nil {
 		return base, err
 	}
@@ -125,7 +130,9 @@ func (s *Service) SetReplicaNodes(ctx context.Context, name domain.Name, nodes *
 
 // normalizeReplicaNodes checks that every listed node exists and returns the
 // list sorted, without duplicates and without the base's own node (implied).
-func (s *Service) normalizeReplicaNodes(ctx context.Context, origin string, nodes *[]string) (*[]string, error) {
+// distro, when set, is the distribution a collation-bound base was made on:
+// a listed node known to run another is refused.
+func (s *Service) normalizeReplicaNodes(ctx context.Context, origin, distro string, nodes *[]string) (*[]string, error) {
 	if nodes == nil {
 		return nil, nil
 	}
@@ -133,9 +140,9 @@ func (s *Service) normalizeReplicaNodes(ctx context.Context, origin string, node
 	if err != nil {
 		return nil, err
 	}
-	exist := map[string]bool{}
+	exist, have := map[string]bool{}, map[string]string{}
 	for _, n := range all {
-		exist[n.Name] = true
+		exist[n.Name], have[n.Name] = true, n.System.Distro
 	}
 	seen := map[string]bool{}
 	out := []string{}
@@ -145,6 +152,8 @@ func (s *Service) normalizeReplicaNodes(ctx context.Context, origin string, node
 		case !exist[n]:
 			return nil, fmt.Errorf("%w: node %q does not exist", domain.ErrInvalidReplicas, n)
 		case n == origin || seen[n]:
+		case !domain.SameDistro(distro, have[n]):
+			return nil, domain.ErrDistroMismatch(n, have[n], distro)
 		default:
 			seen[n] = true
 			out = append(out, n)
@@ -193,7 +202,7 @@ func (s *Service) cleanSnapshot(ctx context.Context, srv domain.DBServer, spec d
 		return domain.BaseSnapshot{}, err
 	}
 	report.report("snapshotting")
-	snap := domain.BaseSnapshot{Name: s.snapshotName(), CreatedAt: s.Clock()}
+	snap := domain.BaseSnapshot{Name: s.snapshotName(), CreatedAt: s.Clock(), Distro: s.Distro}
 	if err := s.Storage.Snapshot(ctx, domain.Snapshot{Dataset: ds, Name: snap.Name}); err != nil {
 		return domain.BaseSnapshot{}, err
 	}

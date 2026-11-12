@@ -60,12 +60,19 @@ func (s *Service) Replicate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	nodes, _ := s.nodes(ctx) // unknown nodes only loosen the distribution check below
 	var errs []error
 	for _, b := range bases {
 		if s.owns(b.Node) || b.Node == "" {
 			continue
 		}
-		if _, ok := b.LatestSnapshot(); !ok || !b.Wants(s.Node) {
+		latest, ok := b.LatestSnapshot()
+		if !ok || !b.Wants(s.Node) {
+			continue
+		}
+		// A PostgreSQL copy is useless where branches may not run (and the
+		// stream would only cost bandwidth): see originDistro.
+		if !domain.SameDistro(s.originDistro(b, latest, nodes), s.Distro) {
 			continue
 		}
 		if err := s.replicateBase(ctx, b); err != nil {

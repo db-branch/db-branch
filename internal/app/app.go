@@ -169,6 +169,7 @@ func New(cfg config.Config) (*App, error) {
 		MaxCheckpoints: func() int { return int(maxCheckpoints.Load()) },
 		Pool:           pool,
 		Node:           hostname(),
+		Distro:         distro,
 		Ports:          dbbranch.PortRange{Min: cfg.Ports.Min, Max: cfg.Ports.Max},
 		MemoryMB:       cfg.Branch.MemoryMB,
 		Clock:          time.Now,

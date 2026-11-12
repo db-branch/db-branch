@@ -420,3 +420,16 @@ func TestFSM_匿名の上限はコマンドで保存されput_baseで消えず�
 		t.Error("limits of a missing base: want error")
 	}
 }
+
+func TestFSM_ノードのシステム情報とスナップショットの作成元ディストリビューションを保持する(t *testing.T) {
+	// Both travel inside put_node and put_base: no new command, no Protocol bump.
+	f := raftstore.NewFSM()
+	n := domain.Node{Name: "node4", System: domain.NodeSystem{Distro: "ubuntu-26.04", OS: "Ubuntu 26.04.1 LTS", Kernel: "7.0.0-14-generic", ZFS: "2.4.0"}}
+	b := domain.Base{Name: name("prod"), Snapshots: []domain.BaseSnapshot{{Name: "s1", Distro: "ubuntu-24.04"}}}
+	apply(t, f, raftstore.PutNode(n))
+	apply(t, f, raftstore.PutBase(b))
+	st := f.State()
+	if st.Nodes["node4"].System != n.System || st.Bases["prod"].Snapshots[0].Distro != "ubuntu-24.04" {
+		t.Errorf("state = %+v", st)
+	}
+}
