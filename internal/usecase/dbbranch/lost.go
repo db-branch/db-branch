@@ -206,7 +206,7 @@ func (s *Service) removeMoved(ctx context.Context, byName map[string]domain.Bran
 		if srv, err := s.server(rec.Runtime); err == nil {
 			errs = append(errs, srv.Remove(ctx, domain.Server{ID: branchServerID(rec.Name), Runtime: rec.Runtime}))
 		}
-		errs = append(errs, s.Storage.Destroy(ctx, s.branchesRoot()+"/"+n))
+		errs = append(errs, s.destroyBranchData(ctx, rec.Name))
 	}
 	return errors.Join(errs...)
 }

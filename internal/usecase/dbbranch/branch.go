@@ -232,6 +232,13 @@ func (s *Service) ResetBranch(ctx context.Context, name domain.Name, report Repo
 }
 
 func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter) (domain.Branch, error) {
+	if in, swap, err := s.resetBySwap(ctx, br); err != nil {
+		// Nothing was touched: the branch is still what it was.
+		br.Status = domain.BranchReady
+		return br, errors.Join(err, s.Store.PutBranch(ctx, br))
+	} else if swap {
+		return s.runRestore(ctx, br, in, report)
+	}
 	srv, err := s.server(br.Runtime)
 	if err != nil {
 		return br, s.fail(ctx, br, err)
@@ -249,6 +256,11 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 	report.report("rolling_back")
 	if err := s.Storage.Rollback(ctx, domain.Snapshot{Dataset: ds, Name: ResetSnapshot}); err != nil {
 		return br, s.fail(ctx, br, err)
+	}
+	if s.Lineage != nil {
+		if err := s.Lineage.Unset(ctx, ds, domain.PropHead); err != nil {
+			return br, s.fail(ctx, br, err)
+		}
 	}
 	report.report("starting")
 	if err := srv.Start(ctx, spec); err != nil {
@@ -283,7 +295,7 @@ func (s *Service) doDelete(ctx context.Context, br domain.Branch, report Reporte
 		return s.fail(ctx, br, err)
 	}
 	report.report("destroying")
-	if err := s.destroyIfExists(ctx, s.branchDataset(br.Name)); err != nil {
+	if err := s.destroyBranchData(ctx, br.Name); err != nil {
 		return s.fail(ctx, br, err)
 	}
 	return s.Store.DeleteBranch(ctx, br.Name)
@@ -347,6 +359,10 @@ func (s *Service) Recover(ctx context.Context) error {
 		case domain.BranchResetting:
 			_, err := s.doReset(ctx, br, nil)
 			errs = append(errs, err)
+		case domain.BranchRestoring:
+			errs = append(errs, s.resumeRestore(ctx, br))
+		case domain.BranchFailed:
+			errs = append(errs, s.resumeFailedRestore(ctx, br))
 		case domain.BranchDeleting:
 			errs = append(errs, s.doDelete(ctx, br, nil))
 		case domain.BranchProvisioning:
@@ -383,7 +399,11 @@ func (s *Service) ListBranches(ctx context.Context) ([]domain.Branch, error) {
 
 // BranchStorage reports how much space a branch uses on its own and shares with its base.
 func (s *Service) BranchStorage(ctx context.Context, name domain.Name) (domain.DatasetInfo, error) {
-	return s.Storage.Info(ctx, s.branchDataset(name))
+	info, err := s.Storage.Info(ctx, s.branchDataset(name))
+	if err != nil {
+		return info, err
+	}
+	return s.historyUsage(ctx, name, info), nil
 }
 
 // RuntimeInUse reports whether a base or branch this node runs uses ref.

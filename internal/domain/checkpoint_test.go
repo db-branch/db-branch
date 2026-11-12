@@ -183,3 +183,24 @@ func TestDestroyOrder_外のクローンが依存していたら消さない(t *
 		t.Errorf("error = %v, want ErrInUse", err)
 	}
 }
+
+func TestBranch_チェックポイント操作は準備完了のときだけ受け付ける(t *testing.T) {
+	for _, s := range []domain.BranchStatus{domain.BranchReady} {
+		if err := (domain.Branch{Name: mustName("x"), Status: s}).CanCheckpoint(); err != nil {
+			t.Errorf("%s: %v", s, err)
+		}
+	}
+	for _, s := range []domain.BranchStatus{domain.BranchProvisioning, domain.BranchResetting, domain.BranchRestoring, domain.BranchDeleting, domain.BranchFailed, domain.BranchLost} {
+		if err := (domain.Branch{Name: mustName("x"), Status: s}).CanCheckpoint(); !errors.Is(err, domain.ErrConflict) {
+			t.Errorf("%s: %v, want ErrConflict", s, err)
+		}
+	}
+}
+
+func mustName(s string) domain.Name {
+	n, err := domain.ParseName(s)
+	if err != nil {
+		panic(err)
+	}
+	return n
+}

@@ -204,8 +204,10 @@ const (
 	BranchProvisioning BranchStatus = "provisioning"
 	BranchReady        BranchStatus = "ready"
 	BranchResetting    BranchStatus = "resetting"
-	BranchDeleting     BranchStatus = "deleting"
-	BranchFailed       BranchStatus = "failed"
+	// BranchRestoring: a checkpoint is being restored (see checkpoint.go).
+	BranchRestoring BranchStatus = "restoring"
+	BranchDeleting  BranchStatus = "deleting"
+	BranchFailed    BranchStatus = "failed"
 	// BranchLost: the node holding the branch is gone.
 	BranchLost BranchStatus = "lost"
 )

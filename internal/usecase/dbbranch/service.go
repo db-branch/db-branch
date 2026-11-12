@@ -64,6 +64,14 @@ type Service struct {
 	// OpenPassword is the shared password of open branches (AccessOpen).
 	OpenPassword func() string
 
+	// Lineage adds the storage operations checkpoints need (rename, promote,
+	// properties). Nil where the storage is not this node's own ZFS: checkpoints
+	// are then unavailable.
+	Lineage domain.CheckpointStorage
+	// MaxCheckpoints is the most checkpoints a branch may hold (the
+	// branch.max_checkpoints setting). Nil: domain.DefaultMaxCheckpoints.
+	MaxCheckpoints func() int
+
 	// Streams and Source copy base snapshots between nodes. Nil on a single node.
 	Streams domain.SnapshotStreams
 	Source  domain.SnapshotSource
@@ -115,7 +123,7 @@ func (s *Service) portRange() PortRange {
 }
 
 // ResetSnapshot is the per-branch snapshot taken right after init SQL.
-const ResetSnapshot = "reset"
+const ResetSnapshot = domain.ResetSnapshot
 
 // BranchUser is the account branches made before branch-named users had;
 // Recover gives such branches a user named after them.

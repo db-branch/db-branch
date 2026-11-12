@@ -323,3 +323,12 @@ type CheckpointStorage interface {
 	// Mount mounts a dataset that is not mounted (a no-op when it is).
 	Mount(ctx context.Context, dataset string) error
 }
+
+// CanCheckpoint reports whether checkpoints may be taken, listed changed or
+// restored now: only while the branch is ready.
+func (b Branch) CanCheckpoint() error {
+	if b.Status != BranchReady {
+		return fmt.Errorf("%w: branch %s is %s", ErrConflict, b.Name, b.Status)
+	}
+	return nil
+}
