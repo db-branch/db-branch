@@ -46,7 +46,7 @@ func TestMetrics_Prometheus形式でクラスタの状態を出す(t *testing.T)
 		`dbbranch_branches{node="n2",status="ready"} 1`,
 		`dbbranch_bases{status="ready"} 2`,
 		`dbbranch_base_snapshots{base="far"} 2`,
-		// far's latest snapshot is on n2 (origin) and 0101m; n3 is down, so none missing among up nodes.
+		// far's latest snapshot is on n2 (origin) and node1; n3 is down, so none missing among up nodes.
 		`dbbranch_base_replicas_missing{base="far"} 0`,
 		`dbbranch_module_problem{module="auth",node="n2"} 1`,
 		`dbbranch_build_info{node="node1",version="test"} 1`,
