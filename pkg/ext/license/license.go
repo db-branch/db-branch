@@ -27,6 +27,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -68,9 +69,11 @@ const (
 	Yearly  = "yearly"
 )
 
-// Plans. Team: accounts with roles and teams, on up to 5 nodes. Business
-// adds single sign-on, the audit log and masking governance, on up to 10.
+// Plans. Lite: history and diff, on up to 3 nodes. Team adds accounts with
+// roles and teams, on up to 5. Business adds single sign-on, the audit log
+// and masking governance, on up to 10.
 const (
+	Lite     = "lite"
 	Team     = "team"
 	Business = "business"
 )
@@ -80,18 +83,26 @@ const (
 	FeatureUsers   = "users"   // accounts that sign in, their roles and teams (auth)
 	FeatureAudit   = "audit"   // the audit log (audit)
 	FeatureSSO     = "sso"     // single sign-on (auth)
-	FeatureMasking = "masking" // masking governance (masking)
+	FeatureMasking = "masking" // masking governance (masking): in no plan, opt-in (see optIn)
 	FeatureHistory = "history" // recording a branch's changes and restoring to any point (history)
+	FeatureDiff    = "diff"    // comparing the data and schema of two branches (diff)
 )
 
 // planFeatures is the one place that says which plan includes which feature.
-// History is in both plans for now: to move it, change only these lists.
+// History and diff are in every plan for now: to move one, change only these lists.
 var planFeatures = map[string][]string{
-	Team:     {FeatureUsers, FeatureHistory},
-	Business: {FeatureUsers, FeatureAudit, FeatureSSO, FeatureMasking, FeatureHistory},
+	Lite:     {FeatureHistory, FeatureDiff},
+	Team:     {FeatureUsers, FeatureHistory, FeatureDiff},
+	Business: {FeatureUsers, FeatureAudit, FeatureSSO, FeatureHistory, FeatureDiff},
 }
 
-var planNodes = map[string]int{Team: 5, Business: 10}
+// optIn are features no plan includes (yet). A licence has one only when its
+// Modules field names the module explicitly: "*" does not count, so neither
+// a plain key of any plan nor the trial enables them. Masking governance is
+// one: it comes back later as an opt-in beta.
+var optIn = map[string]string{FeatureMasking: "masking"}
+
+var planNodes = map[string]int{Lite: 3, Team: 5, Business: 10}
 
 // Plans keys were issued with before Team and Business ("" before plans
 // existed), read as the plan that replaced them.
@@ -110,8 +121,12 @@ func ValidPlan(p string) bool { _, ok := planFeatures[p]; return ok }
 // PlanNodes is how many nodes one unit of a plan allows (0 when unknown).
 func PlanNodes(plan string) int { return planNodes[plan] }
 
-// Has reports whether the licence's plan includes feature.
+// Has reports whether the licence's plan includes feature, or, for an opt-in
+// feature (masking governance), whether Modules names its module explicitly.
 func (l License) Has(feature string) bool {
+	if module, ok := optIn[feature]; ok {
+		return slices.Contains(l.Modules, module)
+	}
 	for _, f := range planFeatures[currentPlan(l.Plan)] {
 		if f == feature {
 			return true

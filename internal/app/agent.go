@@ -218,7 +218,7 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	if svc, err := a.Branches(); err == nil {
 		wireModuleHooks(svc, srv.Ext)
 	}
-	startModules(ctx, a, cfg, node, mods, srv.BranchHost(), log)
+	startModules(ctx, a, cfg, node, mods, srv.BranchHost(), srv.ModuleAPI, log)
 	if cl != nil {
 		cl.modules = srv.Modules
 		cl.checkpoints = svcCheckpoints(a)

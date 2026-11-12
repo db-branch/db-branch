@@ -36,7 +36,7 @@ func (f *fakeBranches) CloseLine(_ context.Context, dir string) error {
 
 func hostFixture(t *testing.T) (*fixture, ext.BranchHost) {
 	f := checkpointFixture(t)
-	f.branches.branches["x"] = domain.Branch{Name: name("x"), Runtime: mysql84, Status: domain.BranchReady, Owner: "alice", Record: true, CreatedAt: t0}
+	f.branches.branches["x"] = domain.Branch{Name: name("x"), Runtime: mysql84, Status: domain.BranchReady, Owner: "alice", Record: true, CreatedAt: t0, Base: name("prod"), Snapshot: "s1"}
 	f.branches.branches["anon"] = domain.Branch{Name: name("anon"), Runtime: mysql84, Status: domain.BranchReady, Owner: "anonymous", Access: domain.AccessOpen}
 	return f, f.srv.BranchHost()
 }
@@ -44,7 +44,7 @@ func hostFixture(t *testing.T) (*fixture, ext.BranchHost) {
 func TestBranchHost_自分のノードのブランチを見せる(t *testing.T) {
 	f, h := hostFixture(t)
 	b, err := h.Branch(ctx, "x")
-	if err != nil || b.Owner != "alice" || b.Engine != "mysql" || b.Version != "8.4.13" || !b.Record || b.Anonymous || b.Status != "ready" {
+	if err != nil || b.Owner != "alice" || b.Engine != "mysql" || b.Version != "8.4.13" || !b.Record || b.Anonymous || b.Status != "ready" || b.Base != "prod" || b.Snapshot != "s1" {
 		t.Errorf("branch = %+v %v", b, err)
 	}
 	if a, _ := h.Branch(ctx, "anon"); !a.Anonymous {

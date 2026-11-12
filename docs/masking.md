@@ -94,4 +94,4 @@ Greenmask と違い、作業ディレクトリ（実行中だけ）とマスク�
 
 ## 更新の後に自動でマスクする（Business プラン）
 
-[定期更新](base-refresh.md)や「今すぐ更新」が成功すると、masking モジュールに拡張ポイント `ext.RefreshFollower`（`AfterRefresh(ctx, base, snapshot) ([]MaskRun, error)`）で尋ねます。答えの `MaskRun{Target, Masker}` ごとに、更新で撮ったスナップショットを元にした `base.mask` オペレーションを起動します（実行者は `refresh`、ルールは `PrepareMask` が返す承認済みのもの）。この連鎖には masking モジュール（Business プラン）が必要で、OSS だけでは更新の後に何も起こりません。同じマスク先に同時には走らせず、マスク先が使用中なら飛ばします。
+[定期更新](base-refresh.md)や「今すぐ更新」が成功すると、masking モジュールに拡張ポイント `ext.RefreshFollower`（`AfterRefresh(ctx, base, snapshot) ([]MaskRun, error)`）で尋ねます。答えの `MaskRun{Target, Masker}` ごとに、更新で撮ったスナップショットを元にした `base.mask` オペレーションを起動します（実行者は `refresh`、ルールは `PrepareMask` が返す承認済みのもの）。この連鎖には masking モジュール（どのプランにも入っていないオプトインのベータ）が必要で、OSS だけでは更新の後に何も起こりません。同じマスク先に同時には走らせず、マスク先が使用中なら飛ばします。
