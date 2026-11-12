@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/db-branch/db-branch/security/advisories/new
+    about: Please do not file security problems as public issues.
+  - name: Documentation
+    url: https://db-branch.com/docs/
+    about: English user documentation. Design documents in the repository are in docs/ (Japanese).

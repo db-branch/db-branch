@@ -1,0 +1,50 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        db-branch is Beta and support is best effort; Issues are read when possible.
+        Security problems: do not file them here, use the Security tab (Report a vulnerability).
+  - type: input
+    id: version
+    attributes:
+      label: db-branch version
+      description: Output of `db-branch version`
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Ubuntu version and database engine
+      placeholder: Ubuntu 24.04, postgres@18.6
+    validations:
+      required: true
+  - type: dropdown
+    id: topology
+    attributes:
+      label: Topology
+      options: [Single node, Cluster, ProxySQL routing]
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Commands you ran, in order.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output of `journalctl -u db-branch`. Remove passwords and tokens first.
+      render: text
