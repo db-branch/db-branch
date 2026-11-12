@@ -161,6 +161,10 @@ create ──▶ provisioning ──▶ ready ⇄ (reset) ──▶ deleting ─
 
 DB サーバー停止 → `zfs rollback tank/branches/feature-x@reset` → DB サーバー起動。`@reset` も正常停止した状態で取っているので、起動時のクラッシュリカバリは不要。init SQL の再実行もないので数秒で終わる。停止はロールバックで捨てる状態なので、即時停止（MySQL: `innodb_fast_shutdown=2` 相当、PostgreSQL: `immediate`）でよい。
 
+### チェックポイント `db-branch branch checkpoint feature-x` / `branch restore feature-x <名前>`
+
+稼働中のブランチのデータセットのスナップショットを取り、あとでその状態に戻せる。復元してもほかのチェックポイントは消えない（履歴の線を別のデータセットとして残す）。設計・データセットの配置・復元の手順・クラッシュ時の再開は [checkpoints.md](checkpoints.md)。
+
 ### 削除 / TTL 失効
 
 ProxySQL からルーティング削除 → DB サーバー停止 → `zfs destroy -r`。TTL はリーダーが監視して失効を発行する。

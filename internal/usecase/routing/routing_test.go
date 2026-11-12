@@ -180,3 +180,11 @@ func TestPlan_PostgreSQLのブランチはPostgreSQL側に置く(t *testing.T) {
 		t.Errorf("rules: mysql %+v pg %+v", c.MySQL.Rules, c.Postgres.Rules)
 	}
 }
+
+func TestPlan_復元中のブランチもルートを保つ(t *testing.T) {
+	hosts := map[string]string{"n1": "192.0.2.10"}
+	c := routing.Plan([]domain.Branch{branch("pr-2", "n1", 40001, domain.BranchRestoring), branch("gone", "n1", 40002, domain.BranchDeleting)}, hosts, nil).MySQL
+	if len(c.Servers) != 1 || c.Servers[0].Port != 40001 {
+		t.Errorf("servers = %+v: a restore is brief, the route stays like it does for a reset", c.Servers)
+	}
+}

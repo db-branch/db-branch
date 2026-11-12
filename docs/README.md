@@ -6,6 +6,7 @@ The documents in this directory are written in **Japanese**. English user docume
 |---|---|
 | [design.md](design.md) | Overall design: goals, terminology, architecture, engines and runtimes, branch lifecycle, base snapshots, ZFS tuning, ProxySQL routing, clustering, packaging, the web console, extension modules |
 | [api.md](api.md) | REST API design: conventions, resources, operations and events, with examples (machine-readable definition: [../api/openapi.yaml](../api/openapi.yaml)) |
+| [checkpoints.md](checkpoints.md) | Branch checkpoints: saving a branch's state and restoring it without losing the others (dataset layout, restore steps, crash safety, limits) |
 | [cluster-plan.md](cluster-plan.md) | Implementation plan for clustering: ports, steps and the verification done at each step |
 | [base-refresh.md](base-refresh.md) | Reloading a base from a source database on a schedule |
 | [masking.md](masking.md) | Creating masked bases with masker modules and what is recorded about them |

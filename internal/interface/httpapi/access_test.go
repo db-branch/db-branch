@@ -291,9 +291,12 @@ func TestSession_できる操作を画面に伝える(t *testing.T) {
 	if can["base.read"] != true || can["base.create"] != false || can["setting.write"] != false || can["ext.auth.read"] != true || can["ext.auth.write"] != false {
 		t.Errorf("viewer can %v", body["can"])
 	}
+	if can["branch.restore"] != false || can["branch.checkpoint"] != false || can["branch.checkpoint_delete"] != false {
+		t.Errorf("a viewer cannot change a branch's checkpoints: %v", can)
+	}
 	_, body = send(t, h, "POST", "/v1/auth/login", map[string]any{"username": "admin", "password": "correct horse battery"}, nil)
 	can, _ = body["can"].(map[string]any)
-	for _, a := range []string{"base.create", "runtime.install", "setting.write", "module.install"} {
+	for _, a := range []string{"base.create", "runtime.install", "setting.write", "module.install", "branch.checkpoint", "branch.restore", "branch.checkpoint_delete"} {
 		if can[a] != true {
 			t.Errorf("admin cannot %s: %v", a, can)
 		}

@@ -44,7 +44,7 @@ const (
 const UnknownBranch = "db-branch: the db_branch comment names no branch"
 
 func routable(b domain.Branch) bool {
-	return b.Status == domain.BranchReady || b.Status == domain.BranchResetting
+	return b.Status == domain.BranchReady || b.Status == domain.BranchResetting || b.Status == domain.BranchRestoring
 }
 
 // Plan computes the proxy config. hosts maps node names to the address the

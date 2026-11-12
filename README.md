@@ -10,6 +10,7 @@ db-branch is an independent open-source project, built from scratch. Create a co
 
 - **Branches in seconds.** On our own 3-node test cluster a PostgreSQL branch is ready in about 0.5 s and a MySQL branch in about 3 s, with 0 bytes copied at creation (copy-on-write).
 - **Reset and expire.** `branch reset` returns a branch to its creation state; `--ttl` deletes it automatically.
+- **Checkpoints.** `branch checkpoint` saves a running branch's state instantly; `branch restore` puts it back. Restoring loses nothing: the state you leave is kept too, and every checkpoint stays restorable.
 - **MySQL and PostgreSQL, several versions at once.** Engine runtimes are installed by version and can live side by side.
 - **One interface everywhere.** CLI, REST API, web console and an MCP server (so LLM agents can create and query their own branches) all use the same API.
 - **Single node or cluster.** A Raft cluster of VMs, with optional ProxySQL routing so applications keep one address.
@@ -38,6 +39,8 @@ db-branch runtime install postgres@18.6                                     # a 
 db-branch base create prod --runtime postgres@18.6 --dump prod.sql.gz       # a base: your data, loaded once
 db-branch branch create feature-x --base prod --ttl 72h                     # a branch: instant, copy-on-write
 db-branch branch dsn feature-x                                              # connection URL (includes the password)
+db-branch branch checkpoint feature-x --name before-migration               # save the state (instant)
+db-branch branch restore feature-x before-migration                         # go back to it; nothing is lost
 db-branch branch reset feature-x                                            # discard every change
 db-branch branch delete feature-x                                           # remove it
 ```

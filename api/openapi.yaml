@@ -153,6 +153,90 @@ paths:
         '202': { $ref: '#/components/responses/Accepted' }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/branches/{name}/checkpoints:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+    get:
+      tags: [branches]
+      operationId: listCheckpoints
+      summary: The branch's checkpoints on every line of history, oldest first. Read from ZFS on the node holding the branch.
+      x-dbb-action: branch.checkpoint.read
+      responses:
+        '200':
+          description: Checkpoints.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Checkpoint' } }
+                  next_cursor: { type: [string, 'null'] }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [branches]
+      operationId: createCheckpoint
+      summary: Save the running branch's state as a checkpoint (a ZFS snapshot; instant, the server keeps running).
+      description: |
+        409 when the branch is not ready, the name is taken, or the branch holds
+        `branch.max_checkpoints` checkpoints already (default 20).
+      x-dbb-action: branch.checkpoint
+      parameters:
+        - $ref: '#/components/parameters/CSRF'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name:
+                  type: string
+                  description: Lowercase letters, digits and hyphens, up to 40. Default is the UTC time (20261112-153000).
+      responses:
+        '201':
+          description: Saved.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Checkpoint' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/branches/{name}/checkpoints/{checkpoint}/restore:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+      - $ref: '#/components/parameters/CheckpointPath'
+    post:
+      tags: [branches]
+      operationId: restoreCheckpoint
+      summary: Put the branch back to a checkpoint. Nothing is lost.
+      description: |
+        The current state is saved first as the checkpoint `before-restore-<time>` (it may exceed
+        `branch.max_checkpoints` by one), then the server restarts on the restored data. Every
+        checkpoint stays restorable, any number of times. Operation kind `branch.restore`; phases
+        `cloning`, `stopping`, `checkpointing`, `swapping`, `promoting`, `starting`.
+      x-dbb-action: branch.restore
+      parameters:
+        - $ref: '#/components/parameters/CSRF'
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/branches/{name}/checkpoints/{checkpoint}:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+      - $ref: '#/components/parameters/CheckpointPath'
+    delete:
+      tags: [branches]
+      operationId: deleteCheckpoint
+      summary: Delete one checkpoint. The others are untouched.
+      x-dbb-action: branch.checkpoint_delete
+      parameters:
+        - $ref: '#/components/parameters/CSRF'
+      responses:
+        '204': { description: Deleted. }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/branches/{name}/dsn:
     parameters:
       - $ref: '#/components/parameters/NamePath'
@@ -661,6 +745,11 @@ components:
       in: path
       required: true
       schema: { $ref: '#/components/schemas/Name' }
+    CheckpointPath:
+      name: checkpoint
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$', maxLength: 40 }
     Limit:
       name: limit
       in: query
@@ -781,7 +870,17 @@ components:
 
     BranchStatus:
       type: string
-      enum: [provisioning, ready, failed, lost, deleting]
+      enum: [provisioning, ready, resetting, restoring, failed, lost, deleting]
+    Checkpoint:
+      type: object
+      required: [name, created_at, size, line, auto, current]
+      properties:
+        name: { type: string }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        size: { type: integer, format: int64, description: Space only this checkpoint holds (freed when it is deleted). }
+        line: { type: integer, description: The line of history it was taken on; a restore starts a new one. 0 is the branch's first. }
+        auto: { type: boolean, description: Taken by the system before a restore. }
+        current: { type: boolean, description: The branch's data descends from this checkpoint. }
     Branch:
       type: object
       required: [name, status, base, snapshot, runtime, node, created_at, expires_at, storage]
@@ -926,7 +1025,7 @@ components:
 
     OperationKind:
       type: string
-      enum: [runtime.install, base.create, base.snapshot, branch.create, branch.reset, branch.delete]
+      enum: [runtime.install, base.create, base.snapshot, branch.create, branch.reset, branch.restore, branch.delete]
     OperationState:
       type: string
       enum: [pending, running, succeeded, failed]

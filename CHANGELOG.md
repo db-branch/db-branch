@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- Branch checkpoints. Save a running branch's state (a ZFS snapshot; instant, the server keeps running) and put the branch back to it later, from the console (a Checkpoints section in each branch card and in the admin Branches page), the CLI (`branch checkpoint`, `checkpoints`, `restore`, `checkpoint delete`), the API (`/v1/branches/{name}/checkpoints`) and MCP (`create_checkpoint`, `list_checkpoints`, `restore_checkpoint`). Restoring loses nothing: the current state is saved as a `before-restore-<time>` checkpoint, every other checkpoint stays restorable any number of times, and an interrupted restore is finished when the agent restarts. Reset keeps the checkpoints, deleting a branch removes them, and the new `branch.max_checkpoints` setting (default 20; the automatic checkpoint may exceed it by one) limits them. New actions `branch.checkpoint.read`, `branch.checkpoint`, `branch.restore` and `branch.checkpoint_delete` are for the owner and admins only. Needs the node's own ZFS (not module storage). See `docs/checkpoints.md`.
 - Public-release documentation: README, SECURITY, SUPPORT, CODE_OF_CONDUCT, issue and pull request templates, Dependabot configuration, and an English index of `docs/`.
 
 ## [0.2.0] - TBD - first public release (Beta)

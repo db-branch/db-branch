@@ -115,6 +115,7 @@ GET /v1/branches?limit=50&cursor=eyJu...
 | ベーススナップショットの作成と伝搬 | `base.snapshot` |
 | ブランチの作成 | `branch.create` |
 | ブランチのリセット | `branch.reset` |
+| ブランチのチェックポイントの復元 | `branch.restore` |
 | ブランチの削除 | `branch.delete` |
 
 レスポンス:
@@ -257,8 +258,29 @@ PUT  /v1/auth/password     {"current_password":"...","new_password":"..."} → 2
 | `DELETE` | `/v1/branches/{name}` | 202 オペレーション | `branch.delete` |
 | `POST` | `/v1/branches/{name}/reset` | 202 オペレーション | `branch.reset` |
 | `GET` | `/v1/branches/{name}/dsn` | 200 接続文字列（パスワード入り） | `branch.dsn` |
+| `GET` | `/v1/branches/{name}/checkpoints` | 200 一覧（全ての線のチェックポイント。古い順） | `branch.checkpoint.read` |
+| `POST` | `/v1/branches/{name}/checkpoints` | 201 チェックポイント（スナップショットは一瞬なので同期） | `branch.checkpoint` |
+| `POST` | `/v1/branches/{name}/checkpoints/{checkpoint}/restore` | 202 オペレーション | `branch.restore` |
+| `DELETE` | `/v1/branches/{name}/checkpoints/{checkpoint}` | 204 | `branch.checkpoint_delete` |
 
 一覧の絞り込み: `?base=prod-masked`、`?node=node1`、`?status=ready`。
+
+チェックポイント（[checkpoints.md](checkpoints.md)）:
+
+```json
+POST /v1/branches/feature-x/checkpoints
+{ "name": "before-migration" }          // 省略可。既定は UTC の時刻（20261112-153000）
+
+201 Created
+{ "name": "before-migration", "created_at": "2026-11-12T15:30:00Z", "size": 98304, "line": 0, "auto": false, "current": true }
+```
+
+- 一覧は ZFS から読む（Raft には置かない）。担当ノード以外に届いた要求は担当ノードへ転送する
+- `size` はそのチェックポイントだけが持つ容量、`line` は履歴の線の番号（復元のたびに新しい線ができる）、`auto` は復元の前にシステムが取ったもの、`current` は現在のデータの元になったもの
+- 上限は設定 `branch.max_checkpoints`（既定 20）。超える作成は `409 conflict`。復元の前に自動で取る 1 件だけは上限を 1 つ超えてよい
+- 復元（`branch.restore`）はブランチが `ready` のときだけ。何も失わない（今の状態は `before-restore-<時刻>` として残り、他のチェックポイントも全て残る）。進捗は `cloning` `stopping` `checkpointing` `swapping` `promoting` `starting`
+- 名前の重複は `409 already_exists`、存在しないチェックポイントは `404`、不正な名前は `400`
+- 所有者と管理者だけが使える。ログインなしの呼び出しや `open` のブランチは対象外
 
 作成:
 

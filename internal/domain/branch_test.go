@@ -66,6 +66,7 @@ func TestBranch_準備完了のときだけリセットと削除ができる(t *
 		domain.BranchProvisioning: {false, false},
 		domain.BranchReady:        {true, true},
 		domain.BranchResetting:    {false, false},
+		domain.BranchRestoring:    {false, false},
 		domain.BranchDeleting:     {false, false},
 		domain.BranchFailed:       {false, true},
 		domain.BranchLost:         {false, true},
