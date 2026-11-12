@@ -93,11 +93,11 @@ describe("seed", () => {
     b.signIn("developer");
     expect(branches().map((x) => x.name)).toEqual(["alex-checkout-fix", "alex-orders-report"]);
   });
-  it("has the licence in trial and four enabled modules", () => {
+  it("has the licence in trial and five enabled modules", () => {
     const lic = get("/v1/license");
     expect(lic.configured).toBe(false);
     expect(lic.report.trial).toBe(true);
-    expect(get("/v1/modules").items.filter((m: any) => m.wanted).map((m: any) => m.name)).toEqual(["audit", "auth", "masking", "proxysql"]);
+    expect(get("/v1/modules").items.filter((m: any) => m.wanted).map((m: any) => m.name)).toEqual(["audit", "auth", "history", "masking", "proxysql"]);
   });
   it("only ever shows the fake host and password", () => {
     const text = JSON.stringify([branches(), get("/v1/bases"), get("/v1/cluster")]);
@@ -562,6 +562,92 @@ describe("checkpoints", () => {
     delete old.checkpoints;
     const again = DemoBackend.load(JSON.stringify(old));
     again.signIn("admin");
-    expect(again.handle({ method: "GET", path: "/v1/branches/report-fix/checkpoints" }).body).toEqual({ items: [], next_cursor: null });
+    expect(again.handle({ method: "GET", path: "/v1/branches/report-fix/checkpoints" }).body).toEqual({ items: [], next_cursor: null, lines: [{ line: 0, live: true, parent: null, from: "" }], live: 0, head: null });
+  });
+});
+
+describe("history graph and module", () => {
+  type Graph = { items: Checkpoint[]; lines: { line: number; live: boolean; parent: number | null; from: string }[]; live: number; head: string | null };
+  const graph = (name: string) => get<Graph>(`/v1/branches/${name}/checkpoints`);
+  const events = (name: string, query = "") => call("GET", `/v1/ext/history/branches/${name}/events${query}`);
+  const settle = (ms = 4000) => vi.advanceTimersByTime(ms);
+
+  it("starts with a branch that has been restored twice, so the graph has something to show", () => {
+    const g = graph("alex-orders-report");
+    expect(g.lines.map((l) => [l.line, l.parent, l.from, l.live])).toEqual([[0, null, "", false], [1, 0, "baseline", false], [2, 0, "after-import", true]]);
+    expect(g.live).toBe(2);
+    expect(g.head).toBe("fixed-totals");
+    expect(g.items.map((c) => c.line)).toEqual([0, 0, 0, 1, 1, 2]);
+  });
+  it("says the module is there so the console offers recording", () => {
+    expect(get("/v1/capabilities").record).toBe(true);
+    expect(get("/v1/capabilities").modules).toContain("history " + get("/v1/capabilities").version);
+  });
+  it("makes up the same transactions every time, newest first, on every line", () => {
+    const a = events("alex-orders-report", "?line=2").body as any;
+    expect(a.recorded).toBe(true);
+    expect(a.items.length).toBeGreaterThan(5);
+    const times = a.items.map((t: any) => Date.parse(t.time));
+    expect(times).toEqual([...times].sort((x, y) => y - x));
+    expect(a.items[0]).toMatchObject({ file: "binlog.000002", ddl: false });
+    expect(events("alex-orders-report", "?line=2").body).toEqual(a);
+    expect((events("alex-orders-report", "?line=0").body as any).items.some((t: any) => t.ddl)).toBe(true);
+    const page = (events("alex-orders-report", "?line=1&limit=4").body as any);
+    expect(page.items).toHaveLength(4);
+    expect(page.next_before).toBe(page.items[3].gtid);
+    expect((events("alex-orders-report", "?line=1&limit=500").body as any).next_before).toBeNull();
+  });
+  it("shows nothing for a branch that is not recorded or not MySQL, and refuses unknown lines and branches", () => {
+    expect((events("report-fix").body as any)).toMatchObject({ recorded: false, items: [] });
+    expect((events("migration-test").body as any).items).toEqual([]);
+    expect(events("alex-orders-report", "?line=9").status).toBe(400);
+    expect(events("nope").status).toBe(404);
+    call("DELETE", "/v1/modules/history");
+    settle(2000);
+    expect(events("alex-orders-report").status).toBe(404);
+  });
+  it("restores to a transaction: the checkpoint before it, a new line from it, and the old state kept", () => {
+    const tx = (events("alex-orders-report", "?line=2&limit=1").body as any).items[0];
+    const r = call("POST", "/v1/ext/history/branches/alex-orders-report/restore", { line: 2, gtid: tx.gtid });
+    expect(r.status).toBe(202);
+    expect((r.body as Operation).kind).toBe("history.restore");
+    expect(branch("alex-orders-report")!.status).toBe("restoring");
+    settle();
+    const g = graph("alex-orders-report");
+    expect(branch("alex-orders-report")!.status).toBe("ready");
+    expect(g.live).toBe(3);
+    expect(g.lines.find((l) => l.line === 3)).toMatchObject({ parent: 2, from: "fixed-totals", live: true });
+    expect(g.items.some((c) => c.auto && c.line === 2)).toBe(true);
+  });
+  it("restores to a transaction before the line's first checkpoint from the creation state", () => {
+    const first = (events("alex-orders-report", "?line=0&limit=500").body as any).items.at(-1);
+    call("POST", "/v1/ext/history/branches/alex-orders-report/restore", { line: 0, gtid: first.gtid });
+    settle();
+    const g = graph("alex-orders-report");
+    expect(g.lines.find((l) => l.line === g.live)).toMatchObject({ parent: 0, from: "reset" });
+  });
+  it("refuses a restore to a transaction it does not know, or while the branch is busy", () => {
+    expect(call("POST", "/v1/ext/history/branches/alex-orders-report/restore", { line: 2, gtid: "x:1" }).status).toBe(409);
+    const tx = (events("alex-orders-report", "?line=2&limit=1").body as any).items[0];
+    call("POST", "/v1/ext/history/branches/alex-orders-report/restore", { line: 2, gtid: tx.gtid });
+    expect(call("POST", "/v1/ext/history/branches/alex-orders-report/restore", { line: 2, gtid: tx.gtid }).status).toBe(409);
+  });
+  it("records a new MySQL branch when asked, and only then", () => {
+    const made = (name: string, body: object) => {
+      call("POST", "/v1/branches", { name, base: "orders", ...body });
+      settle(6000);
+      return branch(name)!;
+    };
+    expect(made("rec-one", { record: true }).record).toBe(true);
+    expect(made("rec-two", {}).record).toBeUndefined();
+    call("POST", "/v1/branches", { name: "rec-pg", base: "storefront", record: true });
+    settle(6000);
+    expect(branch("rec-pg")!.record).toBeUndefined();
+  });
+  it("numbers the line after a reset of a branch whose lines are all remembered", () => {
+    call("POST", "/v1/branches/alex-orders-report/reset");
+    settle();
+    const g = graph("alex-orders-report");
+    expect(g.lines.find((l) => l.line === g.live)).toMatchObject({ parent: 0, from: "reset" });
   });
 });

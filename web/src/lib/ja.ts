@@ -237,5 +237,14 @@ export const ja: Record<string, string> = {
   "Saved automatically before a restore.": "復元の前に自動で保存されました。",
   "Space only this checkpoint holds": "このチェックポイントだけが持っている容量",
   "Go back to this state; nothing is lost": "この状態に戻します。何も失われません",
+  "Busy stretches show a sample of their transactions.": "取引が多い区間は、その一部だけを点で表示しています。",
+  "Dots are recorded transactions. Select a checkpoint or a dot.": "点は記録したトランザクションです。チェックポイントか点を選んでください。",
+  "Select a checkpoint.": "チェックポイントを選んでください。",
+  "The branch's creation state. Reset returns here.": "この Branch を作ったときの状態です。Reset するとここに戻ります。",
+  "Restore {name} to just after this transaction? Nothing is lost: the branch continues on a new line, the current state is saved first as a before-restore checkpoint, and every checkpoint stays.":
+    "{name} をこのトランザクションの直後の状態に戻しますか？ 何も失われません。新しい線で続き、いまの状態は先に before-restore のチェックポイントとして保存され、チェックポイントもすべて残ります。",
+  "Go back to just after this transaction; nothing is lost": "このトランザクションの直後に戻します。何も失われません",
+  "Its changes are recorded; it can be restored to any point.": "変更を記録しています。任意の時点に戻せます。",
+  "Keep every change so you can go back to any point, not only to checkpoints.": "すべての変更を残し、チェックポイントだけでなく任意の時点に戻せるようにします。",
   "Reset {name} to the data of its Snapshot? Changes you made are lost. Checkpoints are kept.": "{name} を Snapshot のデータに戻しますか？ 加えた変更は失われます。チェックポイントは残ります。",
 };

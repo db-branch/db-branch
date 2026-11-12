@@ -10,6 +10,7 @@ import { Empty, ErrorLine } from "../components/ui";
 import { Limits, NewBranch, NewBranchSkeleton } from "../components/newbranch";
 import { Choice } from "../lib/bases";
 import { chooseLanguage, remembered as rememberedLanguage, setLanguage, t } from "../lib/i18n";
+import { useCapabilities } from "../lib/caps";
 import { useNow } from "../lib/live";
 import { sortBranches } from "../lib/branches";
 import { seenTour, showsTour, tourSteps } from "../lib/tour";
@@ -85,6 +86,7 @@ export function Portal() {
   }, []);
   const me = session ? session.user.name || session.user.id : null;
 
+  const caps = useCapabilities(!!session);
   const bases = usePoll<Offer>(
     async () => {
       if (session) {
@@ -272,6 +274,7 @@ export function Portal() {
               prefix={session?.branch_prefix}
               limits={bases.data.limits}
               perBase={bases.data.perBase}
+              canRecord={!!caps?.record}
               onStarted={track}
             />
           )}

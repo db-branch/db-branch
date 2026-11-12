@@ -68,6 +68,11 @@ export function Branches() {
                       open
                     </span>
                   )}
+                  {b.record && (
+                    <span className="badge on" title={t("Its changes are recorded; it can be restored to any point.")}>
+                      recording
+                    </span>
+                  )}
                   {b.status_reason && <span className="reason">{b.status_reason}</span>}
                 </td>
                 <td>

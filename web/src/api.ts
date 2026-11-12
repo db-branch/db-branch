@@ -19,12 +19,38 @@ export type Branch = {
   owner: string | null;
   id: string;
   access: "private" | "open";
+  // record: the branch was created with its changes recorded (history module).
+  record?: boolean;
 };
 
 // Checkpoint is a saved state of a branch. line is the line of history it was
 // taken on (a restore starts a new one); auto marks those taken before a
 // restore; current marks the one the branch's data descends from.
 export type Checkpoint = { name: string; created_at: string; size: number; line: number; auto: boolean; current: boolean };
+
+// Line is a line of a branch's history: a restore starts a new one, branching
+// off the checkpoint it restored (from; "reset" is the branch's creation state)
+// on line parent. live is the line the branch runs on.
+export type Line = { line: number; live: boolean; parent: number | null; from: string };
+
+// CheckpointList is the checkpoints and the structure of their lines; head is
+// the checkpoint the branch's data descends from.
+export type CheckpointList = { items: Checkpoint[]; lines: Line[]; live: number; head: string | null };
+
+// HistoryTx is one recorded transaction (the paid history module).
+export type HistoryTx = {
+  gtid: string;
+  time: string;
+  sql: string;
+  truncated: boolean;
+  tables: { name: string; inserted: number; updated: number; deleted: number }[];
+  inserted: number;
+  updated: number;
+  deleted: number;
+  ddl: boolean;
+  file: string;
+};
+export type HistoryEvents = { line: number; recorded: boolean; items: HistoryTx[]; next_before: string | null; retention: string };
 
 export type Base = {
   name: string;
@@ -188,7 +214,7 @@ export type ModuleState = { requires_license?: boolean; name: string; version: s
 export type APIToken = { id: string; name: string; scope: string; created_at: string; expires_at: string | null; token?: string };
 
 export type ModulePage = { module: string; path: string; title: string };
-export type Capabilities = { version: string; node: string; modules: string[]; pages: ModulePage[] };
+export type Capabilities = { version: string; node: string; modules: string[]; pages: ModulePage[]; record?: boolean };
 
 export class ApiError extends Error {
   constructor(
@@ -315,11 +341,14 @@ export const api = {
   operation: (id: string) => call<Operation>("GET", `/v1/operations/${id}`),
   publicBases: () => call<{ items: PublicBase[]; anonymous: { max_ttl: string; max_branches: number; branches?: number; rate_per_hour?: number } }>("GET", "/v1/public/bases"),
   branches: () => call<{ items: Branch[] }>("GET", "/v1/branches").then((r) => r.items),
-  createBranch: (b: { name: string; base: string; ttl?: string; init_sql?: string; owner?: string; access?: string }) => call<Operation>("POST", "/v1/branches", b),
+  createBranch: (b: { name: string; base: string; ttl?: string; init_sql?: string; owner?: string; access?: string; record?: boolean }) => call<Operation>("POST", "/v1/branches", b),
   recreateBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/recreate`),
   resetBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/reset`),
   deleteBranch: (name: string) => call<Operation>("DELETE", `/v1/branches/${name}`),
   checkpoints: (name: string) => call<{ items: Checkpoint[] }>("GET", `/v1/branches/${name}/checkpoints`).then((r) => r.items),
+  checkpointGraph: (name: string) => call<CheckpointList>("GET", `/v1/branches/${name}/checkpoints`),
+  historyEvents: (name: string, line: number, limit = 200) => call<HistoryEvents>("GET", `/v1/ext/history/branches/${name}/events?line=${line}&limit=${limit}`),
+  historyRestore: (name: string, to: { line: number; gtid: string }) => call<Operation>("POST", `/v1/ext/history/branches/${name}/restore`, to),
   createCheckpoint: (name: string, checkpoint?: string) => call<Checkpoint>("POST", `/v1/branches/${name}/checkpoints`, { name: checkpoint ?? "" }),
   restoreCheckpoint: (name: string, checkpoint: string) => call<Operation>("POST", `/v1/branches/${name}/checkpoints/${checkpoint}/restore`),
   deleteCheckpoint: (name: string, checkpoint: string) => call<void>("DELETE", `/v1/branches/${name}/checkpoints/${checkpoint}`),

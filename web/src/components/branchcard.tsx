@@ -140,6 +140,11 @@ export function BranchRow({
               {rest}
             </span>
             {b.access === "open" && <span className="badge">{t("open")}</span>}
+            {b.record && (
+              <span className="badge on" title={t("Its changes are recorded; it can be restored to any point.")}>
+                recording
+              </span>
+            )}
             {chip}
           </span>
           <span className="brow-meta">

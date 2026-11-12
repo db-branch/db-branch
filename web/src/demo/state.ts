@@ -35,7 +35,11 @@ export type Pending = { op: string; due: number; fx: Effect };
 // Checkpoints of one branch, oldest first; line is the line of history the
 // branch's live data is on (a restore, or a reset that keeps checkpoints,
 // starts a new one).
-export type CheckpointState = { list: Checkpoint[]; line: number };
+export type CheckpointState = { list: Checkpoint[]; line: number; lines?: LineMeta[] };
+
+// Where a line of history came from: the checkpoint it was restored from
+// ("reset": the creation state) on line parent. The first line has none.
+export type LineMeta = { line: number; parent: number | null; from: string };
 
 export type State = {
   seq: number;
@@ -65,6 +69,7 @@ export type State = {
 export const MODULES: Record<string, { description: string; paid: boolean }> = {
   audit: { description: "Audit log of every change", paid: true },
   auth: { description: "Users, roles, teams and single sign-on", paid: true },
+  history: { description: "Record every change and restore a branch to any point", paid: true },
   masking: { description: "Mask personal data in snapshots", paid: true },
   proxysql: { description: "Connect to branches through ProxySQL", paid: false },
 };
@@ -189,10 +194,18 @@ export function seed(now: number): State {
       },
       { scope: "auth", title: "auth", settings: [iv("session_ttl", "Session lifetime", "duration", "12h0m0s"), iv("oidc_enabled", "Single sign-on (OIDC)", "bool", "false")] },
       { scope: "audit", title: "audit", settings: [iv("retention", "Retention", "duration", "2160h0m0s", "How long audit events are kept.")] },
+      {
+        scope: "history",
+        title: "history",
+        settings: [
+          iv("record_all", "Record every branch", "bool", "false", "Record the changes of every branch, not only those created with Record. Branches that exist already are recorded from their next restart."),
+          iv("retention", "History retention", "duration", "168h0m0s", "How long recorded changes are kept. Older changes cannot be restored to."),
+        ],
+      },
       { scope: "masking", title: "masking", settings: [] },
       { scope: "proxysql", title: "proxysql", settings: [iv("comment_routing", "Route by query comment", "bool", "true"), iv("server_version", "Reported MySQL version", "string", "8.4.0")] },
     ],
-    modules: { audit: "on", auth: "on", masking: "on", proxysql: "on" },
+    modules: { audit: "on", auth: "on", history: "on", masking: "on", proxysql: "on" },
     backups: Object.fromEntries(NODES.map((n, i) => [n, [0, 6, 12, 18].map((h) => ({ name: `backup-${n}-${snapshotName(now - (h + i) * 3600e3)}.tar.zst`, size: 380 * 1024 + h * 211 + i * 4096, taken_at: iso(now - (h + i) * 3600e3 - 600e3) }))])),
     checkedAt: iso(now - 3600e3),
   });
@@ -205,6 +218,19 @@ export function seed(now: number): State {
   mk("report-fix", orders, "demo-admin", 9, 7 * 24, 4);
   const cp = (name: string, minutesAgo: number, size: number, current = false): Checkpoint => ({ name, created_at: iso(now - minutesAgo * 60e3), size, line: 0, auto: false, current });
   s.checkpoints["migration-test"] = { line: 0, list: [cp("before-migration", 80, 2.4 * MIB), cp("after-schema-change", 35, 11.8 * MIB, true)] };
+  // A recorded MySQL branch with a restore history: line 0 restored to its first
+  // checkpoint (line 1), then to its second (line 2, live).
+  const hist = (name: string, minutesAgo: number, line: number, auto = false, current = false): Checkpoint => ({ ...cp(name, minutesAgo, 180 * 1024 + minutesAgo * 4096, current), line, auto });
+  s.checkpoints["alex-orders-report"] = {
+    line: 2,
+    lines: [
+      { line: 0, parent: null, from: "" },
+      { line: 1, parent: 0, from: "baseline" },
+      { line: 2, parent: 0, from: "after-import" },
+    ],
+    list: [hist("baseline", 150, 0), hist("after-import", 110, 0), hist("before-restore-20261112-014000", 70, 0, true), hist("retry-join", 50, 1), hist("before-restore-20261112-021000", 30, 1, true), hist("fixed-totals", 12, 2, false, true)],
+  };
+  s.branches.find((b) => b.name === "alex-orders-report")!.record = true;
   s.checkpoints["alex-checkout-fix"] = { line: 0, list: [cp("20261112-024500", 12, 640 * 1024, true)] };
   mk("ci-pr-482", storefront, "ci-runner", 14, 5, 2, "open");
   return s;

@@ -36,6 +36,7 @@ export function NewBranch({
   prefix,
   limits: clusterLimits,
   perBase,
+  canRecord,
   onStarted,
 }: {
   choices: Choice[];
@@ -43,6 +44,8 @@ export function NewBranch({
   prefix?: string;
   limits?: Limits;
   perBase?: Record<string, Limits>;
+  // canRecord: the history module is on and licensed, so a branch can record its changes.
+  canRecord?: boolean;
   onStarted: (job: Job, operation: string) => void;
 }) {
   const [recent, setRecent] = useState<string[]>(loadRecent);
@@ -53,15 +56,18 @@ export function NewBranch({
   const nameInput = useRef<HTMLInputElement>(null);
   const [ttl, setTtl] = useState("4h");
   const [access, setAccess] = useState<"private" | "open">("private");
+  const [record, setRecord] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
-  const ids = { name: useId(), hint: useId(), ttl: useId(), access: useId() };
+  const ids = { name: useId(), hint: useId(), ttl: useId(), access: useId(), record: useId() };
   const limits = perBase?.[base] ?? clusterLimits;
   const maxH = limits ? hours(limits.max_ttl) : Infinity;
   const ttls = ttlChoices.filter(([v]) => hours(v) <= maxH);
   const branchName = fullName(prefix, name);
   const problem = nameProblem(prefix, name);
   const chosen = choices.find((c) => c.name === base) ?? arrange(choices, recent)[0];
+  // Recording is MySQL's for now, needs a login and the licensed history module.
+  const showRecord = !!canRecord && signedIn && chosen.runtime.startsWith("mysql");
 
   const suggest = (b: string) => {
     const s = suggestName(b, prefix);
@@ -94,7 +100,7 @@ export function NewBranch({
     setStarting(true);
     const made = branchName;
     try {
-      const op = await api.createBranch({ name, base: chosen.name, ttl, access: signedIn ? access : undefined });
+      const op = await api.createBranch({ name, base: chosen.name, ttl, access: signedIn ? access : undefined, record: showRecord && record ? true : undefined });
       const next = pushRecent(recent, chosen.name);
       setRecent(next);
       saveRecent(next);
@@ -185,6 +191,13 @@ export function NewBranch({
             </div>
           ) : null}
         </div>
+        {showRecord && (
+          <label className="record-option" htmlFor={ids.record}>
+            <input id={ids.record} type="checkbox" checked={record} onChange={(e) => setRecord(e.target.checked)} />
+            <span>Record</span>
+            <span className="muted small">{t("Keep every change so you can go back to any point, not only to checkpoints.")}</span>
+          </label>
+        )}
         {signedIn ? (
           access === "open" && <p className="muted small access-note">{t("Anyone, with the shared password.")}</p>
         ) : (

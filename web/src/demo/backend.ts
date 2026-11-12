@@ -2,7 +2,7 @@
 // in-memory state, with the same shapes, status codes and error codes as the
 // Go handlers (internal/interface/httpapi). Operations take realistic time and
 // publish the same events as the real server. No network, no real data.
-import type { APIToken, Base, BaseRefresh, Branch, Checkpoint, Operation, SettingScope, Upload } from "../api";
+import type { APIToken, Base, BaseRefresh, Branch, Checkpoint, HistoryTx, Operation, SettingScope, Upload } from "../api";
 import { ownerPrefix } from "../lib/branchname";
 import {
   ADMIN,
@@ -19,6 +19,7 @@ import {
   Pending,
   PROTOCOL,
   CheckpointState,
+  LineMeta,
   runtimeEngine,
   seed,
   snapshotName,
@@ -347,6 +348,7 @@ export class DemoBackend {
         version: VERSION,
         node: NODES[0],
         modules: Object.keys(MODULES).filter((m) => s().modules[m] !== "off").map((m) => `${m} ${VERSION}`),
+        record: s().modules.history === "on",
         pages: [
           { module: "auth", path: "/users", title: "Users" },
           { module: "audit", path: "/log", title: "Audit log" },
@@ -402,8 +404,13 @@ export class DemoBackend {
     });
     a("GET", "/v1/branches/:name/checkpoints", "user", (c) => {
       const b = this.branchFor(c);
-      return b ? ok({ items: this.checkpointsOf(b.name).list, next_cursor: null }) : notFound("branch");
+      if (!b) return notFound("branch");
+      const st = this.checkpointsOf(b.name);
+      const lines = this.linesOf(st).map((l) => ({ ...l, live: l.line === st.line }));
+      return ok({ items: st.list, next_cursor: null, lines, live: st.line, head: st.list.find((x) => x.current)?.name ?? null });
     });
+    a("GET", "/v1/ext/history/branches/:name/events", "user", (c) => this.historyEvents(c));
+    a("POST", "/v1/ext/history/branches/:name/restore", "user", (c) => this.historyRestore(c));
     a("POST", "/v1/branches/:name/checkpoints", "user", (c) => this.createCheckpoint(c));
     a("POST", "/v1/branches/:name/checkpoints/:cp/restore", "user", (c) => this.restoreCheckpoint(c));
     a("DELETE", "/v1/branches/:name/checkpoints/:cp", "user", (c) => this.deleteCheckpoint(c));
@@ -481,12 +488,15 @@ export class DemoBackend {
   // checkpoint, starts a new line and marks the restored checkpoint current.
   private finishRestore(b: Branch, checkpoint: string, now: number) {
     const st = this.checkpointsOf(b.name);
+    const lines = this.linesOf(st);
     let auto = `before-restore-${this.checkpointStamp(now)}`;
     for (let i = 2; st.list.some((x) => x.name === auto); i++) auto = `before-restore-${this.checkpointStamp(now)}-${i}`;
     st.list.forEach((x) => (x.current = false));
     st.list.push({ name: auto, created_at: new Date(now).toISOString(), size: 128 * 1024 + (this.state.seq++ % 5) * 96 * 1024, line: st.line, auto: true, current: false });
-    st.line = Math.max(st.line, ...st.list.map((x) => x.line)) + 1;
-    st.list.find((x) => x.name === checkpoint)!.current = true;
+    st.line = Math.max(st.line, ...st.list.map((x) => x.line), ...lines.map((l) => l.line)) + 1;
+    const from = st.list.find((x) => x.name === checkpoint);
+    st.lines = [...lines, { line: st.line, parent: from ? from.line : 0, from: from ? checkpoint : "reset" }];
+    if (from) from.current = true;
     b.status = "ready";
     b.operation = null;
   }
@@ -496,7 +506,103 @@ export class DemoBackend {
     const st = this.state.checkpoints[name];
     if (!st || st.list.length === 0) return;
     st.list.forEach((x) => (x.current = false));
-    st.line = Math.max(st.line, ...st.list.map((x) => x.line)) + 1;
+    const lines = this.linesOf(st);
+    st.line = Math.max(st.line, ...st.list.map((x) => x.line), ...lines.map((l) => l.line)) + 1;
+    st.lines = [...lines, { line: st.line, parent: 0, from: "reset" }];
+  }
+
+  // linesOf: the lines of history. A state saved before they were recorded
+  // has none: they are read from the checkpoints, as roots.
+  private linesOf(st: CheckpointState): LineMeta[] {
+    const known = st.lines ?? [];
+    const numbers = new Set<number>([0, st.line, ...st.list.map((x) => x.line)]);
+    const out = [...known];
+    for (const n of [...numbers].sort((a, b) => a - b)) if (!out.some((l) => l.line === n)) out.push({ line: n, parent: null, from: "" });
+    return out.sort((a, b) => a.line - b.line);
+  }
+
+  // ---- the history module (a model of the paid module: made-up transactions) ----
+
+  private historyBranch(c: Ctx): Branch | Reply {
+    const b = this.branchFor(c);
+    if (!b) return notFound("branch");
+    if (this.state.modules.history !== "on") return notFound("module history");
+    return b;
+  }
+
+  // fakeTxs invents the transactions of one line: a steady trickle between its
+  // birth and its end (the next restore, or now), the same for the same branch.
+  private fakeTxs(b: Branch, line: number): HistoryTx[] {
+    const st = this.checkpointsOf(b.name);
+    if (!b.record || runtimeEngine(b.runtime) !== "mysql") return [];
+    const mine = st.list.filter((x) => x.line === line).map((x) => Date.parse(x.created_at));
+    const live = line === st.line;
+    const end = live ? Date.now() : Math.max(...mine, Date.parse(b.created_at));
+    const start = line === 0 ? Math.min(...mine, end) - 50 * 60e3 : Math.min(...mine, end) - 22 * 60e3;
+    const count = 15;
+    const out: HistoryTx[] = [];
+    let seed = (b.name.length * 31 + line * 977) >>> 0;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+    for (let i = 0; i < count; i++) {
+      const at = start + ((end - start) * (i + 0.2 + rnd() * 0.6)) / count;
+      const id = 1000 + Math.floor(rnd() * 8000);
+      const qty = 1 + Math.floor(rnd() * 5);
+      const kind = Math.floor(rnd() * 5);
+      const ddl = line === 0 && i === 1;
+      const sql = ddl
+        ? "ALTER TABLE orders ADD COLUMN gift_note VARCHAR(200) NULL"
+        : [
+            `UPDATE orders SET status = 'shipped' WHERE id = ${id}`,
+            `INSERT INTO order_items (order_id, sku, qty) VALUES (${id}, 'SKU-${qty}0${kind}', ${qty})`,
+            `UPDATE inventory SET stock = stock - ${qty} WHERE sku = 'SKU-${qty}0${kind}'`,
+            `INSERT INTO customers (email, name) VALUES ('user${id}@example.com', 'User ${id}')`,
+            "DELETE FROM carts WHERE updated_at < NOW() - INTERVAL 30 DAY",
+          ][kind];
+      const table = ddl ? "orders" : sql.includes("order_items") ? "order_items" : sql.includes("inventory") ? "inventory" : sql.includes("customers") ? "customers" : sql.includes("carts") ? "carts" : "orders";
+      const inserted = sql.startsWith("INSERT") ? 1 : 0;
+      const updated = sql.startsWith("UPDATE") ? 1 : 0;
+      const deleted = sql.startsWith("DELETE") ? 2 + Math.floor(rnd() * 5) : 0;
+      out.push({
+        gtid: `8d0f1c52-6a1e-11f1-9c3b-0242ac120002:${line * 100 + i + 1}`,
+        time: new Date(at).toISOString(),
+        sql,
+        truncated: false,
+        tables: [{ name: `shop.${table}`, inserted, updated, deleted }],
+        inserted,
+        updated,
+        deleted,
+        ddl,
+        file: "binlog.000002",
+      });
+    }
+    return out;
+  }
+
+  private historyEvents(c: Ctx): Reply {
+    const b = this.historyBranch(c);
+    if (!("name" in b)) return b;
+    const st = this.checkpointsOf(b.name);
+    const line = Number(c.q.get("line") ?? st.line);
+    if (!this.linesOf(st).some((l) => l.line === line)) return fail(400, "invalid_request", "line: a line of this branch");
+    const limit = Math.min(500, Math.max(1, Number(c.q.get("limit") ?? 100)));
+    const all = this.fakeTxs(b, line).reverse();
+    const items = all.slice(0, limit);
+    return ok({ line, recorded: !!b.record && runtimeEngine(b.runtime) === "mysql", items, next_before: all.length > limit ? items[items.length - 1].gtid : null, retention: "168h0m0s" });
+  }
+
+  // historyRestore restores the newest checkpoint of the line before the
+  // transaction (or the creation state), like the module does before it replays.
+  private historyRestore(c: Ctx): Reply {
+    const b = this.historyBranch(c);
+    if (!("name" in b)) return b;
+    const st = this.checkpointsOf(b.name);
+    const line = Number(c.body.line ?? st.line);
+    const tx = this.fakeTxs(b, line).find((x) => x.gtid === c.body.gtid);
+    if (!tx) return fail(409, "conflict", `line ${line} has no recorded transaction ${String(c.body.gtid)}`);
+    if (b.status !== "ready") return fail(409, "conflict", `branch ${b.name} is ${b.status}`);
+    const base = st.list.filter((x) => x.line === line && Date.parse(x.created_at) <= Date.parse(tx.time)).pop();
+    const ms = TIMING.restoreMysql + 1200;
+    return this.branchAction(c, "history.restore", "restoring", ms, { k: "branch.restore", name: b.name, checkpoint: base ? base.name : "@reset" });
   }
 
   private deleteCheckpoint(c: Ctx): Reply {
@@ -553,6 +659,7 @@ export class DemoBackend {
       owner: who ? (who.admin && body.owner ? String(body.owner) : who.id) : null,
       id: newId(this.state),
       access: !who || body.access === "open" ? "open" : "private",
+      record: body.record === true && !!who && !pg && this.state.modules.history === "on" ? true : undefined,
     };
     this.state.branches.push(b);
     this.schedule(op, TIMING.branchCreate, { k: "branch.ready", name });
