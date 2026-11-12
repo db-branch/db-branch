@@ -1,6 +1,6 @@
 // The fake cluster's state: plain data (JSON-safe), so a tab can keep it across
 // page loads. Nothing here talks to a network; see backend.ts for the API.
-import type { APIToken, Base, BaseRefresh, BackupFile, Branch, Operation, Runtime, SettingScope, Upload } from "../api";
+import type { APIToken, Base, BaseRefresh, BackupFile, Branch, Checkpoint, Operation, Runtime, SettingScope, Upload } from "../api";
 
 export const MIB = 1024 * 1024;
 export const GIB = 1024 * MIB;
@@ -23,6 +23,7 @@ export type BaseRec = Omit<Base, "replicas" | "holders" | "can"> & { size: numbe
 export type Effect =
   | { k: "branch.ready"; name: string; reset?: boolean }
   | { k: "branch.delete"; name: string }
+  | { k: "branch.restore"; name: string; checkpoint: string }
   | { k: "base.ready"; name: string; snapshot: boolean; grow?: number }
   | { k: "base.delete"; name: string }
   | { k: "refresh.run"; name: string }
@@ -30,6 +31,11 @@ export type Effect =
   | { k: "module.ready"; name: string };
 
 export type Pending = { op: string; due: number; fx: Effect };
+
+// Checkpoints of one branch, oldest first; line is the line of history the
+// branch's live data is on (a restore, or a reset that keeps checkpoints,
+// starts a new one).
+export type CheckpointState = { list: Checkpoint[]; line: number };
 
 export type State = {
   seq: number;
@@ -42,6 +48,8 @@ export type State = {
   available: Runtime[];
   bases: BaseRec[];
   branches: Branch[];
+  // checkpoints by branch name; absent in states saved before they existed.
+  checkpoints: Record<string, CheckpointState>;
   ops: Operation[];
   pending: Pending[];
   uploads: Upload[];
@@ -151,6 +159,7 @@ export function seed(now: number): State {
     ],
     bases: [storefront, orders],
     branches: [],
+    checkpoints: {},
     ops: [],
     pending: [],
     uploads: [],
@@ -166,6 +175,7 @@ export function seed(now: number): State {
         settings: [
           iv("branch.default_ttl", "Default TTL", "duration", "", "Lifetime of a branch made without one (empty: 7 days)."),
           iv("branch.memory_mb", "Branch memory (MB)", "int", "512"),
+          iv("branch.max_checkpoints", "Checkpoints per branch", "int", "20", "The most checkpoints one branch may hold. The checkpoint taken automatically before a restore may exceed it by one."),
           iv("branch.anonymous_ttl", "Anonymous branch TTL", "duration", "4h0m0s"),
           iv("branch.anonymous_max", "Anonymous branches", "int", "2"),
           iv("upload.max_mb", "Largest dump upload (MB)", "int", "20480"),
@@ -193,6 +203,9 @@ export function seed(now: number): State {
   mk("feature-checkout", storefront, "demo-admin", 41, 6 * 24, 18);
   mk("migration-test", storefront, "demo-admin", 212, 2 * 24, 90);
   mk("report-fix", orders, "demo-admin", 9, 7 * 24, 4);
+  const cp = (name: string, minutesAgo: number, size: number, current = false): Checkpoint => ({ name, created_at: iso(now - minutesAgo * 60e3), size, line: 0, auto: false, current });
+  s.checkpoints["migration-test"] = { line: 0, list: [cp("before-migration", 80, 2.4 * MIB), cp("after-schema-change", 35, 11.8 * MIB, true)] };
+  s.checkpoints["alex-checkout-fix"] = { line: 0, list: [cp("20261112-024500", 12, 640 * 1024, true)] };
   mk("ci-pr-482", storefront, "ci-runner", 14, 5, 2, "open");
   return s;
 }

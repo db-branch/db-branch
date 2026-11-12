@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Base, Branch, Operation } from "../api";
+import type { Base, Branch, Checkpoint, Operation } from "../api";
 import { DemoBackend } from "./backend";
 
 let b: DemoBackend;
@@ -45,6 +45,7 @@ describe("sessions", () => {
     expect(s.branch_prefix).toBe("alex-");
     expect(s.can["base.read"]).toBe(true);
     expect(s.can["setting.write"]).toBe(false);
+    expect(s.can["branch.restore"]).toBe(true); // on their own branches
     expect(call("GET", "/v1/settings").status).toBe(403);
     expect(call("GET", "/v1/cluster").status).toBe(403);
     expect(call("POST", "/v1/bases", { name: "x", runtime: "postgres@18.6" }).status).toBe(403);
@@ -451,5 +452,116 @@ describe("keeping state across page loads", () => {
   });
   it("starts fresh from a broken save", () => {
     expect(DemoBackend.load("{nope").state.bases.map((x) => x.name)).toEqual(["storefront", "orders"]);
+  });
+});
+
+describe("checkpoints", () => {
+  const list = (name: string) => get<{ items: Checkpoint[] }>(`/v1/branches/${name}/checkpoints`).items;
+  const names = (name: string) => list(name).map((c) => c.name);
+  const settle = (ms = 2300) => vi.advanceTimersByTime(ms);
+
+  it("starts with a few so the demo has something to show", () => {
+    expect(names("migration-test")).toEqual(["before-migration", "after-schema-change"]);
+    expect(list("migration-test").map((c) => c.current)).toEqual([false, true]);
+    expect(names("report-fix")).toEqual([]);
+    expect(call("GET", "/v1/branches/nope/checkpoints").status).toBe(404);
+  });
+  it("saves one at once: 201, now the current one, named by the time when no name is given", () => {
+    const r = call("POST", "/v1/branches/report-fix/checkpoints", { name: "before-load" });
+    expect(r.status).toBe(201);
+    expect(r.body).toMatchObject({ name: "before-load", line: 0, auto: false, current: true });
+    const second = call("POST", "/v1/branches/report-fix/checkpoints", { name: "" }).body as Checkpoint;
+    expect(second.name).toBe("20261112-030000");
+    expect(list("report-fix").map((c) => c.current)).toEqual([false, true]);
+    expect((call("POST", "/v1/branches/report-fix/checkpoints", {}).body as Checkpoint).name).toBe("20261112-030000-2");
+  });
+  it("refuses a bad name, a taken name, a busy branch and a branch it cannot see", () => {
+    expect(call("POST", "/v1/branches/report-fix/checkpoints", { name: "Bad Name" }).status).toBe(400);
+    expect(call("POST", "/v1/branches/report-fix/checkpoints", { name: "a".repeat(41) }).status).toBe(400);
+    expect(call("POST", "/v1/branches/migration-test/checkpoints", { name: "before-migration" })).toMatchObject({ status: 409, body: { error: { code: "already_exists" } } });
+    call("POST", "/v1/branches/report-fix/reset");
+    expect(call("POST", "/v1/branches/report-fix/checkpoints", { name: "x" }).status).toBe(409);
+    expect(call("POST", "/v1/branches/nope/checkpoints", { name: "x" }).status).toBe(404);
+    b.signIn("developer");
+    expect(call("POST", "/v1/branches/feature-checkout/checkpoints", { name: "x" }).status).toBe(404);
+    expect(call("GET", "/v1/branches/feature-checkout/checkpoints").status).toBe(404);
+    expect(call("POST", "/v1/branches/alex-checkout-fix/checkpoints", { name: "mine" }).status).toBe(201);
+  });
+  it("stops at the branch.max_checkpoints setting with a message that names it", () => {
+    call("PUT", "/v1/settings/core", { values: { "branch.max_checkpoints": "2" } });
+    expect(call("POST", "/v1/branches/migration-test/checkpoints", { name: "third" })).toMatchObject({ status: 409, body: { error: { code: "conflict" } } });
+    expect(JSON.stringify(call("POST", "/v1/branches/migration-test/checkpoints", { name: "third" }).body)).toContain("limit 2");
+    call("PUT", "/v1/settings/core", { values: { "branch.max_checkpoints": "" } });
+    expect(call("POST", "/v1/branches/migration-test/checkpoints", { name: "third" }).status).toBe(201);
+  });
+  it("restores in the background: restoring, then ready; nothing is lost and the state left is kept", () => {
+    const r = call("POST", "/v1/branches/migration-test/checkpoints/before-migration/restore");
+    expect(r.status).toBe(202);
+    expect((r.body as Operation).kind).toBe("branch.restore");
+    expect(branch("migration-test")!.status).toBe("restoring");
+    expect(call("POST", "/v1/branches/migration-test/checkpoints/before-migration/restore").status).toBe(409);
+    expect(call("POST", "/v1/branches/migration-test/checkpoints", { name: "x" }).status).toBe(409);
+    settle(800); // PostgreSQL: about 0.7 s
+    expect(branch("migration-test")!.status).toBe("ready");
+    expect(op((r.body as Operation).id).state).toBe("succeeded");
+    expect(names("migration-test")).toEqual(["before-migration", "after-schema-change", "before-restore-20261112-030000"]);
+    const cur = list("migration-test").filter((c) => c.current);
+    expect(cur.map((c) => c.name)).toEqual(["before-migration"]);
+    expect(list("migration-test")[2]).toMatchObject({ auto: true, line: 0 });
+    // New checkpoints are on a new line.
+    expect((call("POST", "/v1/branches/migration-test/checkpoints", { name: "later" }).body as Checkpoint).line).toBe(1);
+  });
+  it("restores any checkpoint, any number of times, and MySQL takes longer than PostgreSQL", () => {
+    call("POST", "/v1/branches/report-fix/checkpoints", { name: "c1" });
+    call("POST", "/v1/branches/report-fix/checkpoints", { name: "c2" });
+    call("POST", "/v1/branches/report-fix/checkpoints/c1/restore");
+    settle(1000);
+    expect(branch("report-fix")!.status).toBe("restoring");
+    settle(1300);
+    expect(branch("report-fix")!.status).toBe("ready");
+    vi.setSystemTime(Date.now() + 5000);
+    call("POST", "/v1/branches/report-fix/checkpoints/c2/restore");
+    settle();
+    expect(list("report-fix").find((c) => c.current)!.name).toBe("c2");
+    const auto = list("report-fix").filter((c) => c.auto);
+    expect(auto).toHaveLength(2);
+    vi.setSystemTime(Date.now() + 5000);
+    call("POST", `/v1/branches/report-fix/checkpoints/${auto[0].name}/restore`);
+    settle();
+    expect(names("report-fix")).toHaveLength(5);
+    expect(list("report-fix").find((c) => c.current)!.name).toBe(auto[0].name);
+  });
+  it("answers 404 for an unknown checkpoint, 400 for a bad name, and 409 when there is no room for the automatic one", () => {
+    expect(call("POST", "/v1/branches/migration-test/checkpoints/nope/restore").status).toBe(404);
+    expect(call("POST", "/v1/branches/migration-test/checkpoints/Bad%20Name/restore").status).toBe(400);
+    call("PUT", "/v1/settings/core", { values: { "branch.max_checkpoints": "1" } });
+    expect(call("POST", "/v1/branches/migration-test/checkpoints/before-migration/restore")).toMatchObject({ status: 409, body: { error: { code: "conflict" } } });
+    expect(branch("migration-test")!.status).toBe("ready");
+  });
+  it("deletes one without touching the others", () => {
+    expect(call("DELETE", "/v1/branches/migration-test/checkpoints/before-migration").status).toBe(204);
+    expect(names("migration-test")).toEqual(["after-schema-change"]);
+    expect(call("DELETE", "/v1/branches/migration-test/checkpoints/before-migration").status).toBe(404);
+    expect(call("DELETE", "/v1/branches/nope/checkpoints/x").status).toBe(404);
+  });
+  it("keeps the checkpoints through a reset, which leaves them without a current one", () => {
+    call("POST", "/v1/branches/migration-test/reset");
+    settle(1400);
+    expect(branch("migration-test")!.status).toBe("ready");
+    expect(names("migration-test")).toEqual(["before-migration", "after-schema-change"]);
+    expect(list("migration-test").some((c) => c.current)).toBe(false);
+    expect((call("POST", "/v1/branches/migration-test/checkpoints", { name: "fresh" }).body as Checkpoint).line).toBe(1);
+  });
+  it("deleting the branch deletes its checkpoints", () => {
+    call("DELETE", "/v1/branches/migration-test");
+    settle(900);
+    expect(b.state.checkpoints["migration-test"]).toBeUndefined();
+  });
+  it("loads a state saved before checkpoints existed", () => {
+    const old = JSON.parse(b.dump());
+    delete old.checkpoints;
+    const again = DemoBackend.load(JSON.stringify(old));
+    again.signIn("admin");
+    expect(again.handle({ method: "GET", path: "/v1/branches/report-fix/checkpoints" }).body).toEqual({ items: [], next_cursor: null });
   });
 });

@@ -4,6 +4,7 @@ import { confirmReducer, countdown, elapsed, expiryState, extendTtl, isBusy, lon
 import { bytes, relative } from "../lib/format";
 import { t } from "../lib/i18n";
 import { splitOwned } from "../lib/branchname";
+import { CheckpointPanel } from "./checkpoints";
 import { ConnectPanel } from "./connect";
 import { CopyButton, Engine, Icon, Status, StorageBar, TtlBar } from "./marks";
 import { ErrorLine } from "./ui";
@@ -230,6 +231,7 @@ export function BranchRow({
               </>
             )}
           </dl>
+          {manage && !failed && <CheckpointPanel branch={b} ready={ready} allow={(a) => allowed(can, a)} onChange={onChange} />}
           {manage ? (
             <div className="brow-manage">
               {more.length > 0 && ready && !extendWhy && (
@@ -256,7 +258,7 @@ export function BranchRow({
                   <span role="alert">
                     {confirm === "delete"
                       ? t("Delete {name}? Its data is lost. This cannot be undone.", { name: b.name })
-                      : t("Reset {name} to the data of its Snapshot? Changes you made are lost.", { name: b.name })}
+                      : t("Reset {name} to the data of its Snapshot? Changes you made are lost. Checkpoints are kept.", { name: b.name })}
                   </span>
                   <span className="confirm-buttons">
                     <button type="button" ref={cancelButton} onClick={cancel}>

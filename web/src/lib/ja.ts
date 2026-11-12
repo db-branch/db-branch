@@ -61,7 +61,6 @@ export const ja: Record<string, string> = {
   "Extended by 4 hours": "4 時間延長しました",
   "Reset {name}?": "{name} をリセットしますか？",
   "Delete {name}? Its data is lost. This cannot be undone.": "{name} を削除しますか？ データは失われ、元に戻せません。",
-  "Reset {name} to the data of its Snapshot? Changes you made are lost.": "{name} を Snapshot のデータに戻しますか？ 加えた変更は失われます。",
   "{name} is ready. Its connection is open.": "{name} の準備ができました。接続情報を開いています。",
   "Could not create {name}: {error}": "{name} を作成できませんでした：{error}",
 
@@ -226,4 +225,17 @@ export const ja: Record<string, string> = {
   "Demo: any user name and password will do.": "デモ：ユーザー名もパスワードも何でも構いません。",
   "This page is served by the {module} module on a real cluster. Here it shows sample data.": "実際のクラスタでは、このページは {module} モジュールが提供します。ここではサンプルのデータを表示しています。",
   "The demo has no sample for this page.": "このページのサンプルはデモにありません。",
+  // Checkpoints
+  "Save the state of this Branch before risky work. Restoring one loses nothing.": "危険な作業の前に、この Branch の状態を保存します。復元しても何も失われません。",
+  "No checkpoints yet.": "チェックポイントはまだありません。",
+  "At most {max} characters.": "最大 {max} 文字です。",
+  "Use lowercase letters, digits and hyphens, not at the ends.": "小文字の英字・数字・ハイフンが使えます（先頭と末尾にハイフンは置けません）。",
+  "Restore {name} to {checkpoint}? Nothing is lost: the current state is saved first as a before-restore checkpoint, and every other checkpoint stays.":
+    "{name} を {checkpoint} の状態に戻しますか？ 何も失われません。いまの状態は先に before-restore のチェックポイントとして保存され、ほかのチェックポイントもすべて残ります。",
+  "Delete checkpoint {checkpoint}? The other checkpoints are not affected.": "チェックポイント {checkpoint} を削除しますか？ ほかのチェックポイントには影響しません。",
+  "The branch's data descends from this checkpoint.": "この Branch のデータは、このチェックポイントから続いています。",
+  "Saved automatically before a restore.": "復元の前に自動で保存されました。",
+  "Space only this checkpoint holds": "このチェックポイントだけが持っている容量",
+  "Go back to this state; nothing is lost": "この状態に戻します。何も失われません",
+  "Reset {name} to the data of its Snapshot? Changes you made are lost. Checkpoints are kept.": "{name} を Snapshot のデータに戻しますか？ 加えた変更は失われます。チェックポイントは残ります。",
 };

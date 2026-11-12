@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
-import { api, Base, Branch, isAdmin } from "../api";
+import { api, Base, Branch, can, isAdmin } from "../api";
+import { CheckpointPanel } from "../components/checkpoints";
 import { ConnectPanel } from "../components/connect";
 import { CopyButton, Engine, Icon, Status, StorageBar, TtlBar } from "../components/marks";
 import { Dialog, Drawer, Empty, ErrorLine, Field, Menu } from "../components/ui";
@@ -16,6 +17,7 @@ export function Branches() {
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<Branch | null>(null);
   const [connecting, setConnecting] = useState<Branch | null>(null);
+  const [checkpointing, setCheckpointing] = useState<Branch | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   useNow();
 
@@ -94,6 +96,7 @@ export function Branches() {
                     label={`Actions for ${b.name}`}
                     items={[
                       ...(b.status === "ready" ? [{ label: t("Connect…"), onSelect: () => setConnecting(b) }] : []),
+                      ...(["ready", "restoring"].includes(b.status) ? [{ label: t("Checkpoints…"), onSelect: () => setCheckpointing(b) }] : []),
                       ...(b.status === "lost" ? [{ label: t("Recreate"), onSelect: () => run(api.recreateBranch(b.name)) }] : []),
                       ...(b.proxy
                         ? [{ label: t("Copy proxy URL"), onSelect: () => run(api.dsn(b.name, "proxy").then((d) => navigator.clipboard.writeText(d))) }]
@@ -114,6 +117,14 @@ export function Branches() {
       )}
       {creating && <CreateBranch bases={ready} onClose={() => setCreating(false)} />}
       {deleting && <DeleteBranch branch={deleting} onClose={() => setDeleting(null)} />}
+      {checkpointing && (
+        <Dialog title={`Checkpoints of ${checkpointing.id || checkpointing.name}`} onClose={() => setCheckpointing(null)}>
+          <CheckpointPanel branch={checkpointing} ready={branches?.find((x) => x.name === checkpointing.name)?.status === "ready"} allow={can} />
+          <div className="form-actions">
+            <button onClick={() => setCheckpointing(null)}>{t("Close")}</button>
+          </div>
+        </Dialog>
+      )}
       {connecting && (
         <Dialog title={`Connect to ${connecting.id || connecting.name}`} onClose={() => setConnecting(null)}>
           <ConnectPanel branch={connecting.name} />

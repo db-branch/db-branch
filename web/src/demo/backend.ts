@@ -2,7 +2,7 @@
 // in-memory state, with the same shapes, status codes and error codes as the
 // Go handlers (internal/interface/httpapi). Operations take realistic time and
 // publish the same events as the real server. No network, no real data.
-import type { APIToken, Base, BaseRefresh, Branch, Operation, SettingScope, Upload } from "../api";
+import type { APIToken, Base, BaseRefresh, Branch, Checkpoint, Operation, SettingScope, Upload } from "../api";
 import { ownerPrefix } from "../lib/branchname";
 import {
   ADMIN,
@@ -18,6 +18,7 @@ import {
   NODES,
   Pending,
   PROTOCOL,
+  CheckpointState,
   runtimeEngine,
   seed,
   snapshotName,
@@ -31,14 +32,17 @@ export type Reply = { status: number; body?: unknown };
 export type Listener = (type: string, data: unknown) => void;
 
 // How long each simulated operation takes (ms).
-export const TIMING = { branchCreate: 2000, branchReset: 1300, branchDelete: 800, baseCreate: 2500, baseSnapshot: 1500, baseDelete: 1200, refresh: 3500, runtime: 4000, module: 2000 };
+// A restore stops the server and starts it again: PostgreSQL stops faster than MySQL (measured on real ZFS: 0.7 s and 2.2 s).
+export const TIMING = { branchCreate: 2000, branchReset: 1300, branchDelete: 800, restorePostgres: 700, restoreMysql: 2200, baseCreate: 2500, baseSnapshot: 1500, baseDelete: 1200, refresh: 3500, runtime: 4000, module: 2000 };
 
 const MAX_NAME = 32;
 const NAME = /^[a-z]([a-z0-9]|-[a-z0-9])*$/;
 const ANON = { max_ttl: "4h0m0s", max_branches: 2 };
 const ANON_TTL = 4 * 3600e3;
 const DAY = 24 * 3600e3;
-const CONSOLE_ACTIONS = ["base.read", "base.create", "base.delete", "base.load", "base.snapshot", "base.publish", "base.refresh", "base.refresh.read", "runtime.install", "cluster.read", "setting.write", "module.install", "token.write", "backup.read", "route-user.write", "update.read", "update.check", "update.apply"];
+const CHECKPOINT_NAME = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const MAX_CHECKPOINT_NAME = 40;
+const CONSOLE_ACTIONS = ["base.read", "base.create", "base.delete", "base.load", "base.snapshot", "base.publish", "base.refresh", "base.refresh.read", "runtime.install", "cluster.read", "setting.write", "module.install", "token.write", "backup.read", "route-user.write", "update.read", "update.check", "update.apply", "branch.checkpoint", "branch.checkpoint_delete", "branch.restore"];
 const BASE_ACTIONS = ["base.snapshot", "base.load", "base.delete", "base.describe", "base.mask", "base.publish", "base.sql", "base.start", "base.stop", "base.refresh", "base.refresh.read", "base.snapshot_delete", "base.replicas"];
 
 /** Go-style durations: "4h", "90m", "1h30m0s". Null when it is not one. */
@@ -72,6 +76,7 @@ export class DemoBackend {
 
   constructor(state?: State) {
     this.state = state ?? seed(Date.now());
+    this.state.checkpoints ??= {}; // saved by a version without checkpoints
     this.build();
   }
 
@@ -165,12 +170,23 @@ export class DemoBackend {
         b.status = "ready";
         b.operation = null;
         b.storage = { used: 300 * 1024, referenced: 330 * 1024 };
-        if (fx.reset) b.reset_at = new Date(now).toISOString();
+        if (fx.reset) {
+          b.reset_at = new Date(now).toISOString();
+          this.resetCheckpoints(b.name);
+        }
+        this.emit("branch.updated", { name: b.name });
+        return;
+      }
+      case "branch.restore": {
+        const b = s.branches.find((x) => x.name === fx.name);
+        if (!b) return;
+        this.finishRestore(b, fx.checkpoint, now);
         this.emit("branch.updated", { name: b.name });
         return;
       }
       case "branch.delete":
         s.branches = s.branches.filter((x) => x.name !== fx.name);
+        delete s.checkpoints[fx.name];
         this.emit("branch.deleted", { name: fx.name });
         return;
       case "base.ready": {
@@ -240,7 +256,7 @@ export class DemoBackend {
 
   private session(who: Who) {
     const can: Record<string, boolean> = {};
-    for (const a of CONSOLE_ACTIONS) can[a] = who.admin || a === "base.read";
+    for (const a of CONSOLE_ACTIONS) can[a] = who.admin || a === "base.read" || a.startsWith("branch."); // people manage their own branches
     for (const m of Object.keys(MODULES)) can[`ext.${m}.read`] = can[`ext.${m}.write`] = who.admin;
     return {
       user: { id: who.id, name: who.name, roles: who.roles },
@@ -384,6 +400,13 @@ export class DemoBackend {
       const scheme = runtimeEngine(b.runtime) === "postgres" ? "postgres" : "mysql";
       return ok({ dsn: `${scheme}://${encodeURIComponent(via.user)}:${DEMO_PASSWORD}@${DEMO_HOST}:${via.port}/app` });
     });
+    a("GET", "/v1/branches/:name/checkpoints", "user", (c) => {
+      const b = this.branchFor(c);
+      return b ? ok({ items: this.checkpointsOf(b.name).list, next_cursor: null }) : notFound("branch");
+    });
+    a("POST", "/v1/branches/:name/checkpoints", "user", (c) => this.createCheckpoint(c));
+    a("POST", "/v1/branches/:name/checkpoints/:cp/restore", "user", (c) => this.restoreCheckpoint(c));
+    a("DELETE", "/v1/branches/:name/checkpoints/:cp", "user", (c) => this.deleteCheckpoint(c));
     a("GET", "/v1/operations", "user", () => ok({ items: s().ops.slice(-50) }));
     a("GET", "/v1/operations/:id", "anon", (c) => {
       const o = s().ops.find((x) => x.id === c.p.id);
@@ -401,6 +424,89 @@ export class DemoBackend {
     this.schedule(op, ms, fx);
     this.emit("branch.updated", { name: b.name });
     return ok(op, 202);
+  }
+
+  // ---- checkpoints (a model of internal/usecase/dbbranch/checkpoint.go and restore.go) ----
+
+  private checkpointsOf(name: string): CheckpointState {
+    return (this.state.checkpoints[name] ??= { list: [], line: 0 });
+  }
+
+  private maxCheckpoints(): number {
+    const v = this.state.settings.find((x) => x.scope === "core")?.settings.find((x) => x.key === "branch.max_checkpoints")?.value;
+    const n = Number(v);
+    return v !== undefined && v !== "" && Number.isInteger(n) && n >= 0 ? n : 20;
+  }
+
+  private checkpointStamp(at: number): string {
+    return new Date(at).toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+  }
+
+  private createCheckpoint(c: Ctx): Reply {
+    const b = this.branchFor(c);
+    if (!b) return notFound("branch");
+    if (b.status !== "ready") return fail(409, "conflict", `branch ${b.name} is ${b.status}`);
+    const st = this.checkpointsOf(b.name);
+    let name = String(c.body.name ?? "");
+    if (name === "") {
+      name = this.checkpointStamp(Date.now());
+      for (let i = 2; st.list.some((x) => x.name === name); i++) name = `${this.checkpointStamp(Date.now())}-${i}`;
+    } else if (name.length > MAX_CHECKPOINT_NAME || !CHECKPOINT_NAME.test(name)) {
+      return fail(400, "invalid_request", `invalid name "${name}": use 1-${MAX_CHECKPOINT_NAME} lowercase letters, digits or hyphens (not at the ends)`);
+    }
+    if (st.list.some((x) => x.name === name)) return fail(409, "already_exists", `checkpoint ${name} of branch ${b.name}: already exists`);
+    const max = this.maxCheckpoints();
+    if (st.list.length >= max) return fail(409, "conflict", `conflict: branch ${b.name} has ${st.list.length} checkpoints (limit ${max}); delete one first or raise the branch.max_checkpoints setting`);
+    const cp: Checkpoint = { name, created_at: new Date().toISOString(), size: 96 * 1024 + (this.state.seq++ % 9) * 64 * 1024, line: st.line, auto: false, current: true };
+    st.list.forEach((x) => (x.current = false));
+    st.list.push(cp);
+    return ok(cp, 201);
+  }
+
+  private restoreCheckpoint(c: Ctx): Reply {
+    const b = this.branchFor(c);
+    if (!b) return notFound("branch");
+    const name = c.p.cp;
+    if (name.length > MAX_CHECKPOINT_NAME || !CHECKPOINT_NAME.test(name)) return fail(400, "invalid_request", `invalid name "${name}"`);
+    if (b.status !== "ready") return fail(409, "conflict", `branch ${b.name} is ${b.status}`);
+    const st = this.checkpointsOf(b.name);
+    if (!st.list.some((x) => x.name === name)) return notFound("checkpoint");
+    const max = this.maxCheckpoints();
+    if (st.list.length > max) return fail(409, "conflict", `conflict: branch ${b.name} has ${st.list.length} checkpoints (limit ${max}); restoring needs room for one automatic checkpoint: delete one first or raise the branch.max_checkpoints setting`);
+    const ms = runtimeEngine(b.runtime) === "postgres" ? TIMING.restorePostgres : TIMING.restoreMysql;
+    return this.branchAction(c, "branch.restore", "restoring", ms, { k: "branch.restore", name: b.name, checkpoint: name });
+  }
+
+  // finishRestore saves the state the branch leaves as an automatic
+  // checkpoint, starts a new line and marks the restored checkpoint current.
+  private finishRestore(b: Branch, checkpoint: string, now: number) {
+    const st = this.checkpointsOf(b.name);
+    let auto = `before-restore-${this.checkpointStamp(now)}`;
+    for (let i = 2; st.list.some((x) => x.name === auto); i++) auto = `before-restore-${this.checkpointStamp(now)}-${i}`;
+    st.list.forEach((x) => (x.current = false));
+    st.list.push({ name: auto, created_at: new Date(now).toISOString(), size: 128 * 1024 + (this.state.seq++ % 5) * 96 * 1024, line: st.line, auto: true, current: false });
+    st.line = Math.max(st.line, ...st.list.map((x) => x.line)) + 1;
+    st.list.find((x) => x.name === checkpoint)!.current = true;
+    b.status = "ready";
+    b.operation = null;
+  }
+
+  // resetCheckpoints: a reset keeps the checkpoints and leaves the line the data was on.
+  private resetCheckpoints(name: string) {
+    const st = this.state.checkpoints[name];
+    if (!st || st.list.length === 0) return;
+    st.list.forEach((x) => (x.current = false));
+    st.line = Math.max(st.line, ...st.list.map((x) => x.line)) + 1;
+  }
+
+  private deleteCheckpoint(c: Ctx): Reply {
+    const b = this.branchFor(c);
+    if (!b) return notFound("branch");
+    if (b.status !== "ready") return fail(409, "conflict", `branch ${b.name} is ${b.status}`);
+    const st = this.checkpointsOf(b.name);
+    if (!st.list.some((x) => x.name === c.p.cp)) return notFound("checkpoint");
+    st.list = st.list.filter((x) => x.name !== c.p.cp);
+    return ok(undefined, 204);
   }
 
   private createBranch(c: Ctx): Reply {

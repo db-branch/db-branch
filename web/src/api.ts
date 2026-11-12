@@ -21,6 +21,11 @@ export type Branch = {
   access: "private" | "open";
 };
 
+// Checkpoint is a saved state of a branch. line is the line of history it was
+// taken on (a restore starts a new one); auto marks those taken before a
+// restore; current marks the one the branch's data descends from.
+export type Checkpoint = { name: string; created_at: string; size: number; line: number; auto: boolean; current: boolean };
+
 export type Base = {
   name: string;
   runtime: string;
@@ -314,6 +319,10 @@ export const api = {
   recreateBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/recreate`),
   resetBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/reset`),
   deleteBranch: (name: string) => call<Operation>("DELETE", `/v1/branches/${name}`),
+  checkpoints: (name: string) => call<{ items: Checkpoint[] }>("GET", `/v1/branches/${name}/checkpoints`).then((r) => r.items),
+  createCheckpoint: (name: string, checkpoint?: string) => call<Checkpoint>("POST", `/v1/branches/${name}/checkpoints`, { name: checkpoint ?? "" }),
+  restoreCheckpoint: (name: string, checkpoint: string) => call<Operation>("POST", `/v1/branches/${name}/checkpoints/${checkpoint}/restore`),
+  deleteCheckpoint: (name: string, checkpoint: string) => call<void>("DELETE", `/v1/branches/${name}/checkpoints/${checkpoint}`),
   extendBranch: (name: string, ttl: string) => call<Branch>("PATCH", `/v1/branches/${name}`, { ttl }),
   dsn: (name: string, via?: "proxy") => call<{ dsn: string }>("GET", `/v1/branches/${name}/dsn${via ? "?via=proxy" : ""}`).then((r) => r.dsn),
 
