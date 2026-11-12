@@ -1,0 +1,31 @@
+# db-branch configuration. Every key is optional; defaults are shown.
+
+# ZFS pool managed by db-branch. Set by `db-branch init --pool <name>`.
+# pool = ""
+
+# data_dir = "/var/lib/db-branch"
+
+# Host name or IP clients use to reach this node (in connection URLs).
+# Empty: the first non-loopback IPv4 address.
+# advertise = ""
+
+# Address database servers listen on.
+# bind = "0.0.0.0"
+# socket   = "/run/db-branch/agent.sock"
+
+[ports]
+# Ports handed to bases and branches.
+# min = 40000
+# max = 40999
+
+[branch]
+# Engine cache per branch (InnoDB buffer pool / shared_buffers), in MB.
+# memory_mb = 128
+
+[zfs]
+# Cap on the ZFS ARC, applied by `db-branch init`. 0: a quarter of memory.
+# arc_max_mb = 0
+
+[console]
+# listen = ":7080"
+

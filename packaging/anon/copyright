@@ -1,0 +1,6 @@
+db-branch-anon
+Copyright 2026 Keisuke Masuda
+License: Apache-2.0
+
+This package does not include PostgreSQL Anonymizer. Get it from Dalibo
+(https://labs.dalibo.com/postgresql_anonymizer) separately.

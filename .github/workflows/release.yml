@@ -1,0 +1,106 @@
+name: release
+
+# Tag vX.Y.Z: build the packages for both architectures, sign the APT
+# repository and publish it to https://apt.db-branch.com (a Cloudflare R2
+# bucket). See docs/distribution.md.
+#
+# The signing key and the Cloudflare token are secrets of the "release"
+# environment, which only jobs started by a v* tag can read. The workflow
+# has no schedule: a run happens only when a tag is pushed.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apt-publish
+  cancel-in-progress: false
+
+jobs:
+  deb:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
+      - run: make vet cover
+        if: matrix.goarch == 'amd64'
+      - run: make deb-oss GOARCH=${{ matrix.goarch }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deb-${{ matrix.goarch }}
+          path: dist/*.deb
+
+  publish:
+    needs: deb
+    runs-on: ubuntu-24.04
+    environment: release
+    env:
+      # Secrets of the "release" environment.
+      APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+      GPG_PASSPHRASE: ${{ secrets.APT_SIGNING_PASSPHRASE }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: The tag must be on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "tag $GITHUB_REF_NAME is not on main; not publishing"; exit 1; }
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: deb-*
+          path: dist
+          merge-multiple: true
+      - name: Import the signing key and check it is the expected one
+        run: |
+          test -n "$APT_SIGNING_KEY" || { echo "secret APT_SIGNING_KEY is not set in the release environment"; exit 1; }
+          test -s packaging/apt-signing-key.fpr || { echo "packaging/apt-signing-key.fpr is empty: put the fingerprint of the production signing key there"; exit 1; }
+          printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --import
+          fpr=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/ {print $10; exit}')
+          want=$(tr -d ' \n' < packaging/apt-signing-key.fpr)
+          [ "$fpr" = "$want" ] || { echo "imported key $fpr is not the pinned key $want"; exit 1; }
+          echo "APT_KEY=$fpr" >> "$GITHUB_ENV"
+      - name: Keep the versions that are already published
+        run: scripts/apt-restore-pool.sh https://apt.db-branch.com dist/apt
+      - name: Build and sign the repository
+        run: make apt-repo APT_KEY="$APT_KEY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: apt-repo
+          path: dist/apt
+      - name: Publish to R2
+        run: python3 scripts/publish-apt.py dist/apt
+      - name: Check the published repository like a user would
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          d=$(mktemp -d); mkdir -p "$d/lists/partial" "$d/cache/archives/partial"
+          curl -fsSL https://apt.db-branch.com/db-branch.gpg -o "$d/key.gpg"
+          echo "deb [signed-by=$d/key.gpg] https://apt.db-branch.com stable main" > "$d/s.list"
+          o="-o Dir::Etc::sourcelist=$d/s.list -o Dir::Etc::sourceparts=/dev/null -o Dir::State::lists=$d/lists -o Dir::Cache=$d/cache -o APT::Sandbox::User="
+          for i in 1 2 3 4 5 6; do
+            apt-get $o update >/dev/null && apt-cache $o policy db-branch | grep -q "Candidate: $version" && ok=1 && break
+            echo "not visible yet (indexes are cached for up to 60 s); retrying"; sleep 20
+          done
+          [ "${ok:-}" = 1 ] || { echo "db-branch $version is not in the published repository"; exit 1; }
+          (cd "$d" && apt-get $o download "db-branch=$version")
+          echo "published and verified: db-branch $version"

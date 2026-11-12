@@ -1,0 +1,9 @@
+#!/bin/sh
+# The upstream proxysql package enables its service but does not start it,
+# so routing would stay down until the next reboot. Start it, then restart
+# the agent, which loads modules when it starts.
+set -e
+if [ -d /run/systemd/system ]; then
+	systemctl enable --now proxysql.service || true
+	systemctl try-restart db-branch.service || true
+fi

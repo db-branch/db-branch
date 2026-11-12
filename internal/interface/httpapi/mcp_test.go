@@ -1,0 +1,252 @@
+package httpapi_test
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/infrastructure/sqlquery"
+	"github.com/db-branch/db-branch/internal/interface/httpapi"
+	"github.com/db-branch/db-branch/pkg/ext"
+)
+
+// fakeTokens accepts "t-full" and "t-branches".
+type fakeTokens struct {
+	created []string
+	err     error
+}
+
+func (f *fakeTokens) Authenticate(_ context.Context, c ext.Credentials) (ext.Principal, error) {
+	switch c.Token {
+	case "t-full":
+		return ext.Principal{ID: "token:full", Roles: []string{"scope:full"}}, nil
+	case "t-branches":
+		return ext.Principal{ID: "token:dev", Name: "dev", Roles: []string{"scope:branches"}}, nil
+	}
+	return ext.Principal{}, ext.ErrUnauthenticated
+}
+
+func (f *fakeTokens) Create(_ context.Context, name, scope string, ttl time.Duration) (string, domain.APIToken, error) {
+	f.created = append(f.created, name+"/"+scope+"/"+ttl.String())
+	return "dbb_x_secret", domain.APIToken{ID: "x", Name: name, Scope: scope, CreatedAt: t0}, f.err
+}
+func (f *fakeTokens) CreatePersonal(_ context.Context, p ext.Principal, name string, ttl time.Duration) (string, domain.APIToken, error) {
+	return f.Create(ctx, name, "branches", ttl)
+}
+func (f *fakeTokens) ListOwned(ctx context.Context, _ string) ([]domain.APIToken, error) {
+	return f.ListService(ctx)
+}
+func (f *fakeTokens) RevokeOwned(ctx context.Context, _, id string) error { return f.Revoke(ctx, id) }
+func (f *fakeTokens) ListService(context.Context) ([]domain.APIToken, error) {
+	return []domain.APIToken{{ID: "x", Name: "dev", Scope: "branches", Hash: "secret-hash", CreatedAt: t0}}, f.err
+}
+func (f *fakeTokens) Revoke(_ context.Context, id string) error {
+	if id != "x" {
+		return domain.ErrNotFound
+	}
+	return f.err
+}
+
+type fakeQuery struct {
+	got sqlquery.Target
+	sql string
+	err error
+}
+
+func (q *fakeQuery) Run(_ context.Context, t sqlquery.Target, sql string, _ int) (sqlquery.Result, error) {
+	q.got, q.sql = t, sql
+	v := "42"
+	return sqlquery.Result{Columns: []string{"answer"}, Rows: [][]*string{{&v}}}, q.err
+}
+
+func TestTokens_発行は一度だけ秘密を返し一覧には出さない(t *testing.T) {
+	f := newFixture(t)
+	if resp, _ := f.do(t, "GET", "/v1/tokens", nil); resp.StatusCode != 503 {
+		t.Errorf("without tokens: %d", resp.StatusCode)
+	}
+	for _, req := range [][2]string{{"POST", "/v1/tokens"}, {"DELETE", "/v1/tokens/x"}} {
+		if resp, _ := f.do(t, req[0], req[1], map[string]any{}); resp.StatusCode != 503 {
+			t.Errorf("%v without tokens: %d", req, resp.StatusCode)
+		}
+	}
+	tk := &fakeTokens{}
+	f.srv.Tokens = tk
+	resp, body := f.do(t, "POST", "/v1/tokens", map[string]any{"name": "claude", "ttl": "720h"})
+	if resp.StatusCode != 201 || body["token"] != "dbb_x_secret" || tk.created[0] != "claude/branches/720h0m0s" {
+		t.Errorf("create: %d %v %v", resp.StatusCode, body, tk.created)
+	}
+	_, body = f.do(t, "GET", "/v1/tokens", nil)
+	if item := body["items"].([]any)[0].(map[string]any); item["token"] != nil || item["hash"] != nil || item["name"] != "dev" {
+		t.Errorf("list = %v", body)
+	}
+	if resp, _ := f.do(t, "POST", "/v1/tokens", map[string]any{"name": "x", "ttl": "soon"}); resp.StatusCode != 400 {
+		t.Errorf("bad ttl: %d", resp.StatusCode)
+	}
+	if resp, _ := f.do(t, "DELETE", "/v1/tokens/x", nil); resp.StatusCode != 204 {
+		t.Errorf("revoke: %d", resp.StatusCode)
+	}
+	if resp, _ := f.do(t, "DELETE", "/v1/tokens/nope", nil); resp.StatusCode != 404 {
+		t.Errorf("revoke missing: %d", resp.StatusCode)
+	}
+	tk.err = errors.New("down")
+	if resp, _ := f.do(t, "GET", "/v1/tokens", nil); resp.StatusCode != 500 {
+		t.Errorf("list failure: %d", resp.StatusCode)
+	}
+	if resp, _ := f.do(t, "POST", "/v1/tokens", map[string]any{"name": "y"}); resp.StatusCode != 500 {
+		t.Errorf("create failure: %d", resp.StatusCode)
+	}
+}
+
+func TestQuery_ブランチ自身のユーザーで実行する(t *testing.T) {
+	f := newFixture(t)
+	f.branches.branches["x"] = domain.Branch{Name: name("x"), Runtime: mysql84, Status: domain.BranchReady, Port: 40001, User: "x", Password: "pw"}
+	f.branches.branches["busy"] = domain.Branch{Name: name("busy"), Runtime: mysql84, Status: domain.BranchResetting}
+	if resp, _ := f.do(t, "POST", "/v1/branches/x/query", map[string]any{"sql": "SELECT 42"}); resp.StatusCode != 503 {
+		t.Errorf("without querier: %d", resp.StatusCode)
+	}
+	q := &fakeQuery{}
+	f.srv.Query = q
+	resp, body := f.do(t, "POST", "/v1/branches/x/query", map[string]any{"sql": "SELECT 42"})
+	if resp.StatusCode != 200 || body["columns"].([]any)[0] != "answer" || q.got.Host != "192.0.2.10" || q.got.User != "x" || q.got.Engine != "mysql" {
+		t.Errorf("%d %v %+v", resp.StatusCode, body, q.got)
+	}
+	if resp, _ := f.do(t, "POST", "/v1/branches/busy/query", map[string]any{"sql": "SELECT 1"}); resp.StatusCode != 409 {
+		t.Errorf("not ready: %d", resp.StatusCode)
+	}
+	if resp, _ := f.do(t, "POST", "/v1/branches/x/query", map[string]any{"bad": 1}); resp.StatusCode != 400 {
+		t.Errorf("bad body: %d", resp.StatusCode)
+	}
+	q.err = errors.New("syntax error")
+	if resp, body := f.do(t, "POST", "/v1/branches/x/query", map[string]any{"sql": "SELEC"}); resp.StatusCode != 422 || errCode(body) != "query_failed" {
+		t.Errorf("failure: %d %v", resp.StatusCode, body)
+	}
+}
+
+type bearerRT struct{ token string }
+
+func (b bearerRT) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+b.token)
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+func mcpSession(t *testing.T, f *fixture, token string) (*mcp.ClientSession, error) {
+	t.Helper()
+	srv := httptest.NewServer(f.srv.Handler(false))
+	t.Cleanup(srv.Close)
+	c := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	return c.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint: srv.URL + "/v1/mcp", HTTPClient: &http.Client{Transport: bearerRT{token}}, DisableStandaloneSSE: true, MaxRetries: -1,
+	}, nil)
+}
+
+func callText(t *testing.T, s *mcp.ClientSession, name string, args any) (string, bool) {
+	t.Helper()
+	res, err := s.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	return res.Content[0].(*mcp.TextContent).Text, res.IsError
+}
+
+func TestMCP_トークンで接続しブランチを作って使える(t *testing.T) {
+	httpapi.MCPPoll = time.Millisecond
+	f := newFixture(t)
+	sink := &recordingSink{}
+	f.srv.TokenAuth, f.srv.Query, f.srv.Ext = &fakeTokens{}, &fakeQuery{}, ext.Module{AuditSink: sink}
+	s, err := mcpSession(t, f, "t-branches")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	tools, err := s.ListTools(context.Background(), nil)
+	if err != nil || len(tools.Tools) != 8 {
+		t.Fatalf("tools: %v %v", err, tools)
+	}
+	out, isErr := callText(t, s, "create_branch", map[string]any{"name": "feature-x", "base": "prod", "ttl": "4h", "access": "open"})
+	if isErr || !strings.Contains(out, `"dsn": "mysql://branch:pw@192.0.2.10:40001/"`) || !strings.Contains(out, `"access": "open"`) {
+		t.Errorf("create: %v %s", isErr, out)
+	}
+	if out, isErr := callText(t, s, "list_branches", map[string]any{}); isErr || !strings.Contains(out, "feature-x") {
+		t.Errorf("list: %s", out)
+	}
+	if out, isErr := callText(t, s, "list_bases", map[string]any{}); isErr || !strings.Contains(out, "prod") {
+		t.Errorf("bases: %s", out)
+	}
+	if out, isErr := callText(t, s, "get_branch", map[string]any{"name": "feature-x"}); isErr || !strings.Contains(out, "dsn") {
+		t.Errorf("get: %s", out)
+	}
+	if out, isErr := callText(t, s, "query", map[string]any{"branch": "feature-x", "sql": "SELECT 42"}); isErr || !strings.Contains(out, "42") {
+		t.Errorf("query: %s", out)
+	}
+	if out, isErr := callText(t, s, "extend_branch", map[string]any{"name": "feature-x", "ttl": "8h"}); isErr || !strings.Contains(out, "feature-x") {
+		t.Errorf("extend: %s", out)
+	}
+	if out, isErr := callText(t, s, "reset_branch", map[string]any{"name": "feature-x"}); isErr || !strings.Contains(out, "reset") {
+		t.Errorf("reset: %s", out)
+	}
+	if out, isErr := callText(t, s, "delete_branch", map[string]any{"name": "feature-x"}); isErr || !strings.Contains(out, "deleted") {
+		t.Errorf("delete: %s", out)
+	}
+	if out, isErr := callText(t, s, "get_branch", map[string]any{"name": "nope"}); !isErr || !strings.Contains(out, "not found") {
+		t.Errorf("missing: %v %s", isErr, out)
+	}
+	// Every tool call was authorized and audited as the token's principal.
+	got := strings.Join(sink.actions(), " ")
+	for _, want := range []string{"branch.create:token:dev:branch/feature-x:ok", "branch.query:token:dev:branch/feature-x:ok", "branch.delete:token:dev:branch/feature-x:ok"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("audit lacks %s: %s", want, got)
+		}
+	}
+}
+
+func TestMCP_範囲外の操作や認証のない接続は断る(t *testing.T) {
+	f := newFixture(t)
+	f.srv.TokenAuth = &fakeTokens{}
+	if _, err := mcpSession(t, f, "wrong"); err == nil {
+		t.Error("bad token: want error")
+	}
+	f.branches.fail = errors.New("clone failed")
+	s, err := mcpSession(t, f, "t-full")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if out, isErr := callText(t, s, "create_branch", map[string]any{"name": "x", "base": "prod"}); !isErr || !strings.Contains(out, "clone failed") {
+		t.Errorf("failed operation: %v %s", isErr, out)
+	}
+	if out, isErr := callText(t, s, "create_branch", map[string]any{"name": "Bad", "base": "prod"}); !isErr {
+		t.Errorf("bad name: %s", out)
+	}
+	if out, isErr := callText(t, s, "extend_branch", map[string]any{"name": "nope", "ttl": "1h"}); !isErr {
+		t.Errorf("extend missing: %s", out)
+	}
+	if out, isErr := callText(t, s, "query", map[string]any{"branch": "nope", "sql": "SELECT 1"}); !isErr {
+		t.Errorf("query missing: %s", out)
+	}
+	if out, isErr := callText(t, s, "list_bases", map[string]any{}); isErr {
+		t.Errorf("full token lists: %s", out)
+	}
+	f.srv.Ext = ext.Module{Authorizer: viewerReadsOnly{}}
+	f.srv.TokenAuth = moduleAuth{}
+	if _, err := mcpSession(t, f, "t-viewer"); err == nil {
+		t.Error("a principal not allowed mcp.use: want error")
+	}
+}
+
+func TestTLSCert_証明書を配る(t *testing.T) {
+	f := newFixture(t)
+	f.srv.TLSCertPEM = []byte("-----BEGIN CERTIFICATE-----\n")
+	rec := httptest.NewRecorder()
+	f.srv.Handler(false).ServeHTTP(rec, httptest.NewRequest("GET", "/tls.pem", nil))
+	if rec.Code != 200 || !strings.HasPrefix(rec.Body.String(), "-----BEGIN CERTIFICATE") {
+		t.Errorf("%d %q", rec.Code, rec.Body.String())
+	}
+}

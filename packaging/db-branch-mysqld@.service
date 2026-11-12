@@ -1,0 +1,23 @@
+[Unit]
+Description=db-branch MySQL server %i
+Documentation=https://github.com/db-branch/db-branch
+After=zfs-mount.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=db-branch
+Group=db-branch
+Slice=db-branch.slice
+# Written by the agent: MYSQLD=<runtime>/bin/mysqld
+EnvironmentFile=/var/lib/db-branch/instances/%i/env
+ExecStart=/bin/sh -c 'exec "$MYSQLD" --defaults-file=/var/lib/db-branch/instances/%i/my.cnf'
+RuntimeDirectory=db-branch-mysqld/%i
+RuntimeDirectoryMode=0750
+LimitNOFILE=65535
+# A clean shutdown with innodb_fast_shutdown=0 can take a while on big bases.
+TimeoutStopSec=900
+Restart=on-abnormal
+
+[Install]
+WantedBy=multi-user.target

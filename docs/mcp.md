@@ -1,0 +1,36 @@
+# MCP（LLM エージェントからブランチを使う）
+
+開発者の LLM エージェント（Claude Code など）が、自分でブランチを発行し、その中で SQL を実行して検証できるようにする。各ノードのコンソールと同じ HTTPS ポートで MCP サーバー（Streamable HTTP、ステートレス）を提供する。
+
+- エンドポイント: `https://<どのノードでも>:7080/v1/mcp`
+- 認証: API トークン（`Authorization: Bearer dbb_...`）。秘密は発行時に 1 度だけ表示し、Raft にはハッシュだけを置く。トークンは 2 種類:
+  - **個人用**（コンソールの Account → MCP access、`/v1/account/tokens`）: 作った本人として動く。作ったブランチは本人のもの、できることは本人の権限の範囲内のブランチ操作だけ（`branches` スコープ固定）。本人を無効化・削除すると即座に使えなくなる。トークンから別のトークンは作れない
+  - **サービス用**（Settings → Service tokens、`db-branch token create <名前> [--scope branches|full] [--ttl 720h]`、管理者のみ）: CI や外部連携向け。人に結び付かず、トークン自身として動く
+  - `branches` スコープのトークンは、設定・トークン・ルートユーザーなど秘密を含む情報を読めない
+- 範囲（scope）: `branches`（既定）はブランチの作成・利用・削除と読み取りだけ。ベースやランタイム、設定、トークンは変えられない。`full` は admin と同じ
+- ツールの呼び出しは API と同じ経路（認可・監査）を通る。監査ログの利用者は `token:<id>`
+
+## ツール
+
+| ツール | 内容 |
+|---|---|
+| `list_bases` | ベースとスナップショット |
+| `list_branches` | ブランチの一覧 |
+| `create_branch` | ベースからブランチを作り（完了まで待つ）、接続先（dsn）を返す。`ttl`・`init_sql`（マスキングなど）を指定できる |
+| `get_branch` | ブランチと接続先 |
+| `query` | ブランチで SQL を 1 文実行。行（文字列）か影響行数を返す。最大 1000 行、30 秒 |
+| `reset_branch` | 作成直後（init SQL の後）に戻す |
+| `extend_branch` | 期限を延ばす |
+| `delete_branch` | 削除する |
+
+## つなぎ方（Claude Code）
+
+```sh
+curl -sk https://<node>:7080/tls.pem -o db-branch.pem     # ノードの自己署名証明書
+export NODE_EXTRA_CA_CERTS=$PWD/db-branch.pem
+claude mcp add --transport http db-branch https://<node>:7080/v1/mcp --header "Authorization: Bearer <token>"
+```
+
+## 確認（2026-11-10）
+
+0101m でトークンを発行し、0103m の MCP に curl で JSON-RPC を送った。create_branch（init SQL でマスキング）→ ブランチは 0102m に配置 → query でマスク済みの行を取得 → DELETE で 2 行 → reset_branch で 2 行に戻る → delete_branch。branches のトークンでベースを消そうとすると 403、トークンなしは 401。

@@ -1,0 +1,1034 @@
+openapi: 3.1.0
+info:
+  title: db-branch API
+  version: 0.1.0-draft
+  description: |
+    REST API of the db-branch agent. Design notes: docs/api.md.
+    Every node serves this API; writes are forwarded to the Raft leader.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: https://{node}:7080
+    variables:
+      node:
+        default: localhost
+  - url: http://unix/
+    description: Local CLI over /run/db-branch/agent.sock (root or db-branch group, no session)
+
+security:
+  - session: []
+  - localSocket: []
+
+tags:
+  - name: branches
+  - name: bases
+  - name: runtimes
+  - name: cluster
+  - name: operations
+  - name: auth
+  - name: meta
+
+paths:
+  /v1/branches:
+    get:
+      tags: [branches]
+      operationId: listBranches
+      x-dbb-action: branch.list
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/MinIndex'
+        - $ref: '#/components/parameters/Consistent'
+        - { name: base, in: query, schema: { $ref: '#/components/schemas/Name' } }
+        - { name: node, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/BranchStatus' } }
+      responses:
+        '200':
+          description: Branches sorted by name.
+          headers:
+            X-DB-Branch-Index: { $ref: '#/components/headers/Index' }
+            X-DB-Branch-Node: { $ref: '#/components/headers/Node' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Branch' } }
+                  next_cursor: { type: [string, 'null'] }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [branches]
+      operationId: createBranch
+      x-dbb-action: branch.create
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CSRF'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateBranch' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/branches/{name}:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+    get:
+      tags: [branches]
+      operationId: getBranch
+      x-dbb-action: branch.get
+      parameters:
+        - $ref: '#/components/parameters/MinIndex'
+        - $ref: '#/components/parameters/Consistent'
+      responses:
+        '200':
+          description: The branch.
+          headers:
+            X-DB-Branch-Index: { $ref: '#/components/headers/Index' }
+            X-DB-Branch-Node: { $ref: '#/components/headers/Node' }
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Branch' }
+        default: { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [branches]
+      operationId: updateBranch
+      summary: Change the TTL. Requires If-Match.
+      x-dbb-action: branch.update
+      parameters:
+        - $ref: '#/components/parameters/IfMatchRequired'
+        - $ref: '#/components/parameters/CSRF'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ttl]
+              properties:
+                ttl:
+                  type: [string, 'null']
+                  description: Go duration from now (e.g. "72h"); null removes the expiry.
+                  examples: ['72h']
+      responses:
+        '200':
+          description: Updated branch.
+          headers:
+            X-DB-Branch-Index: { $ref: '#/components/headers/Index' }
+            X-DB-Branch-Node: { $ref: '#/components/headers/Node' }
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Branch' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [branches]
+      operationId: deleteBranch
+      x-dbb-action: branch.delete
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/CSRF'
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/branches/{name}/reset:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+    post:
+      tags: [branches]
+      operationId: resetBranch
+      summary: Roll the branch back to its reset point (taken after init SQL).
+      x-dbb-action: branch.reset
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/CSRF'
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/branches/{name}/dsn:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+    get:
+      tags: [branches]
+      operationId: getBranchDSN
+      summary: Connection string including the password. Emits an audit event.
+      x-dbb-action: branch.dsn
+      responses:
+        '200':
+          description: DSN.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [dsn]
+                properties:
+                  dsn:
+                    type: string
+                    examples: ['mysql://app.feature-x:secret@node2:33061/app']
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/bases:
+    get:
+      tags: [bases]
+      operationId: listBases
+      x-dbb-action: base.list
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/MinIndex'
+        - $ref: '#/components/parameters/Consistent'
+      responses:
+        '200':
+          description: Bases sorted by name.
+          headers:
+            X-DB-Branch-Index: { $ref: '#/components/headers/Index' }
+            X-DB-Branch-Node: { $ref: '#/components/headers/Node' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Base' } }
+                  next_cursor: { type: [string, 'null'] }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [bases]
+      operationId: createBase
+      x-dbb-action: base.create
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CSRF'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateBase' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/bases/{name}:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+    get:
+      tags: [bases]
+      operationId: getBase
+      x-dbb-action: base.get
+      responses:
+        '200':
+          description: The base.
+          headers:
+            X-DB-Branch-Index: { $ref: '#/components/headers/Index' }
+            X-DB-Branch-Node: { $ref: '#/components/headers/Node' }
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Base' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/bases/{name}/snapshots:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+    get:
+      tags: [bases]
+      operationId: listSnapshots
+      x-dbb-action: base.get
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Snapshots, newest first.
+          headers:
+            X-DB-Branch-Index: { $ref: '#/components/headers/Index' }
+            X-DB-Branch-Node: { $ref: '#/components/headers/Node' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }
+                  next_cursor: { type: [string, 'null'] }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [bases]
+      operationId: createSnapshot
+      summary: Snapshot the base and propagate it to every node.
+      x-dbb-action: base.snapshot
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CSRF'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name:
+                  $ref: '#/components/schemas/Name'
+                  description: Defaults to sYYYYMMDDhhmm.
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/bases/{name}/snapshots/{snapshot}:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+      - { name: snapshot, in: path, required: true, schema: { $ref: '#/components/schemas/Name' } }
+    get:
+      tags: [bases]
+      operationId: getSnapshot
+      x-dbb-action: base.get
+      responses:
+        '200':
+          description: The snapshot with its propagation state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Snapshot' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/runtimes:
+    get:
+      tags: [runtimes]
+      operationId: listRuntimes
+      summary: Runtimes installed in the cluster, with per-node distribution.
+      x-dbb-action: runtime.list
+      responses:
+        '200':
+          description: Installed runtimes.
+          headers:
+            X-DB-Branch-Index: { $ref: '#/components/headers/Index' }
+            X-DB-Branch-Node: { $ref: '#/components/headers/Node' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Runtime' } }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [runtimes]
+      operationId: installRuntime
+      summary: The leader downloads from the catalog; other nodes download from the leader.
+      x-dbb-action: runtime.install
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CSRF'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [runtime]
+              properties:
+                runtime: { $ref: '#/components/schemas/RuntimeRef' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/runtimes/available:
+    get:
+      tags: [runtimes]
+      operationId: listAvailableRuntimes
+      x-dbb-action: runtime.list
+      parameters:
+        - { name: engine, in: query, schema: { $ref: '#/components/schemas/Engine' } }
+      responses:
+        '200':
+          description: Catalog entries, newest version first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [runtime, engine, version, archs]
+                      properties:
+                        runtime: { $ref: '#/components/schemas/RuntimeRef' }
+                        engine: { $ref: '#/components/schemas/Engine' }
+                        version: { type: string }
+                        archs: { type: array, items: { $ref: '#/components/schemas/Arch' } }
+                        size: { type: integer, format: int64, description: Archive size in bytes. }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/runtimes/import:
+    post:
+      tags: [runtimes]
+      operationId: importRuntime
+      summary: Register a local build. UNIX socket only (403 socket_only over TCP).
+      x-dbb-action: runtime.install
+      security:
+        - localSocket: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [runtime, path]
+              properties:
+                runtime: { $ref: '#/components/schemas/RuntimeRef' }
+                path: { type: string, description: Directory on the node that received the request. }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/runtimes/{engine}/{version}:
+    parameters:
+      - { name: engine, in: path, required: true, schema: { $ref: '#/components/schemas/Engine' } }
+      - { name: version, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [runtimes]
+      operationId: getRuntime
+      x-dbb-action: runtime.get
+      responses:
+        '200':
+          description: The runtime.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Runtime' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [runtimes]
+      operationId: removeRuntime
+      summary: Remove from every node. 409 in_use if a base uses it.
+      x-dbb-action: runtime.remove
+      parameters:
+        - $ref: '#/components/parameters/CSRF'
+      responses:
+        '204': { description: Removed. }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/cluster:
+    get:
+      tags: [cluster]
+      operationId: getCluster
+      x-dbb-action: cluster.get
+      responses:
+        '200':
+          description: Cluster status. A single node reports voters=1.
+          headers:
+            X-DB-Branch-Index: { $ref: '#/components/headers/Index' }
+            X-DB-Branch-Node: { $ref: '#/components/headers/Node' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cluster' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/cluster/nodes:
+    get:
+      tags: [cluster]
+      operationId: listNodes
+      x-dbb-action: cluster.get
+      responses:
+        '200':
+          description: Nodes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Node' } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/cluster/nodes/{node}:
+    parameters:
+      - { name: node, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [cluster]
+      operationId: getNode
+      x-dbb-action: cluster.get
+      responses:
+        '200':
+          description: The node.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Node' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/operations:
+    get:
+      tags: [operations]
+      operationId: listOperations
+      x-dbb-action: operation.list
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - { name: state, in: query, schema: { $ref: '#/components/schemas/OperationState' } }
+        - { name: kind, in: query, schema: { $ref: '#/components/schemas/OperationKind' } }
+        - { name: target, in: query, schema: { type: string, examples: ['branch/feature-x'] } }
+      responses:
+        '200':
+          description: Operations, newest first. Finished ones are kept for 7 days.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Operation' } }
+                  next_cursor: { type: [string, 'null'] }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/operations/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, pattern: '^op_[0-9A-HJKMNP-TV-Z]{26}$' } }
+    get:
+      tags: [operations]
+      operationId: getOperation
+      x-dbb-action: operation.get
+      responses:
+        '200':
+          description: The operation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/events:
+    get:
+      tags: [meta]
+      operationId: streamEvents
+      summary: Server-Sent Events for the web console.
+      description: |
+        Event names are `<resource>.updated` / `<resource>.deleted` for branch, base,
+        runtime, node and operation, plus `resync` when Last-Event-ID is too old.
+        The event id is the Raft index. A `: ping` comment is sent every 15 seconds.
+      x-dbb-action: event.stream
+      parameters:
+        - { name: Last-Event-ID, in: header, schema: { type: string } }
+        - name: types
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { type: string, enum: [branch, base, runtime, node, operation] }
+      responses:
+        '200':
+          description: Event stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      security: []
+      x-dbb-action: auth.login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, password]
+              properties:
+                username: { type: string, examples: [admin] }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Logged in. Sets the dbb_session cookie.
+          headers:
+            Set-Cookie:
+              schema: { type: string, examples: ['dbb_session=...; HttpOnly; Secure; SameSite=Strict; Path=/'] }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/auth/session:
+    get:
+      tags: [auth]
+      operationId: getSession
+      x-dbb-action: auth.session
+      responses:
+        '200':
+          description: Current session and CSRF token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      x-dbb-action: auth.logout
+      parameters:
+        - $ref: '#/components/parameters/CSRF'
+      responses:
+        '204': { description: Logged out. }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/auth/password:
+    put:
+      tags: [auth]
+      operationId: changePassword
+      summary: Change the password. Invalidates every other session.
+      x-dbb-action: auth.password
+      parameters:
+        - $ref: '#/components/parameters/CSRF'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string, format: password }
+                new_password: { type: string, format: password, minLength: 12 }
+      responses:
+        '204': { description: Changed. }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/capabilities:
+    get:
+      tags: [meta]
+      operationId: getCapabilities
+      summary: Enabled engines, features and paid modules. Unauthenticated callers get version and module names only.
+      security: [{}, { session: [] }, { localSocket: [] }]
+      x-dbb-action: meta.capabilities
+      responses:
+        '200':
+          description: Capabilities.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Capabilities' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/healthz:
+    get:
+      tags: [meta]
+      operationId: healthz
+      security: []
+      responses:
+        '200':
+          description: Healthy.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Degraded (e.g. no leader).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: dbb_session
+      description: Console session. Non-GET requests also need the X-CSRF-Token header.
+    localSocket:
+      type: http
+      scheme: peercred
+      description: |
+        UNIX socket /run/db-branch/agent.sock. The caller is identified by SO_PEERCRED
+        and must be root or in the db-branch group. Recorded as principal `local:<user>`.
+
+  parameters:
+    NamePath:
+      name: name
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Name' }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    MinIndex:
+      name: min_index
+      in: query
+      description: Wait (up to 5s) until this node has applied the Raft index, else forward to the leader.
+      schema: { type: integer, format: int64 }
+    Consistent:
+      name: consistent
+      in: query
+      description: Always read on the leader.
+      schema: { type: boolean, default: false }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Replays return the original operation for 24 hours.
+      schema: { type: string, maxLength: 128 }
+    IfMatch:
+      name: If-Match
+      in: header
+      schema: { type: string }
+    IfMatchRequired:
+      name: If-Match
+      in: header
+      required: true
+      schema: { type: string }
+    CSRF:
+      name: X-CSRF-Token
+      in: header
+      description: Required with the session cookie; not used over the UNIX socket.
+      schema: { type: string }
+
+  headers:
+    Index:
+      description: Raft index of the state this response was built from.
+      schema: { type: integer, format: int64 }
+    Node:
+      description: Node that served the response.
+      schema: { type: string }
+    ETag:
+      schema: { type: string }
+
+  responses:
+    Accepted:
+      description: Accepted; follow the operation.
+      headers:
+        Location:
+          schema: { type: string, examples: ['/v1/operations/op_01JC8Z6Q4M7V3X2N9K5R8T1W0B'] }
+        X-DB-Branch-Index:
+          schema: { type: integer, format: int64 }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Operation' }
+    Error:
+      description: Error. 503 no_leader and 429 rate_limited carry Retry-After.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Name:
+      type: string
+      pattern: '^[a-z](?:[a-z0-9]|-[a-z0-9])*$'
+      maxLength: 32
+      examples: [feature-x]
+    Engine:
+      type: string
+      enum: [mysql, postgres]
+    Arch:
+      type: string
+      enum: [amd64, arm64]
+    RuntimeRef:
+      type: string
+      pattern: '^(mysql|postgres)@[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-z0-9]+(\.[a-z0-9]+)*)?$'
+      examples: ['mysql@8.4.13']
+    Timestamp:
+      type: string
+      format: date-time
+      examples: ['2026-11-09T12:00:00Z']
+    Storage:
+      type: object
+      required: [used, referenced]
+      properties:
+        used: { type: integer, format: int64, description: Bytes unique to this dataset (ZFS used). }
+        referenced: { type: integer, format: int64, description: Bytes visible including data shared with the origin (ZFS referenced). }
+    Progress:
+      type: [object, 'null']
+      required: [done, total, unit]
+      properties:
+        done: { type: integer, format: int64 }
+        total: { type: integer, format: int64 }
+        unit: { type: string, enum: [nodes, bytes] }
+    NodeProgress:
+      type: object
+      required: [done, total, nodes]
+      description: Rendered as "done/total" in the console.
+      properties:
+        done: { type: integer }
+        total: { type: integer }
+        nodes:
+          type: array
+          items:
+            type: object
+            required: [node, state]
+            properties:
+              node: { type: string }
+              state: { type: string, enum: [present, receiving, pending, failed] }
+              progress: { $ref: '#/components/schemas/Progress' }
+
+    BranchStatus:
+      type: string
+      enum: [provisioning, ready, failed, lost, deleting]
+    Branch:
+      type: object
+      required: [name, status, base, snapshot, runtime, node, created_at, expires_at, storage]
+      properties:
+        name: { $ref: '#/components/schemas/Name' }
+        status: { $ref: '#/components/schemas/BranchStatus' }
+        status_reason: { type: [string, 'null'] }
+        base: { $ref: '#/components/schemas/Name' }
+        snapshot: { $ref: '#/components/schemas/Name' }
+        runtime: { $ref: '#/components/schemas/RuntimeRef' }
+        node: { type: string }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        expires_at:
+          oneOf: [{ $ref: '#/components/schemas/Timestamp' }, { type: 'null' }]
+        reset_at:
+          oneOf: [{ $ref: '#/components/schemas/Timestamp' }, { type: 'null' }]
+        storage: { $ref: '#/components/schemas/Storage' }
+        connection:
+          type: [object, 'null']
+          properties:
+            host: { type: string }
+            port: { type: integer }
+            user: { type: string }
+            database: { type: string }
+        routing:
+          type: [object, 'null']
+          description: ProxySQL routing (phase 3+).
+          properties:
+            proxysql_user: { type: string }
+            comment: { type: string, examples: ["/*db_branch='feature-x'*/"] }
+        operation:
+          type: [object, 'null']
+          properties:
+            id: { type: string }
+            kind: { $ref: '#/components/schemas/OperationKind' }
+    CreateBranch:
+      type: object
+      additionalProperties: false
+      required: [name, base]
+      properties:
+        name: { $ref: '#/components/schemas/Name' }
+        base: { $ref: '#/components/schemas/Name' }
+        snapshot:
+          oneOf: [{ $ref: '#/components/schemas/Name' }, { type: 'null' }]
+          description: Defaults to the base's latest snapshot.
+        init_sql: { type: string, maxLength: 1048576 }
+        ttl:
+          type: string
+          description: Go duration such as 72h. Omit for no expiry.
+          examples: ['72h']
+
+    Base:
+      type: object
+      required: [name, runtime, origin_node, status, created_at, latest_snapshot, branch_count, storage]
+      properties:
+        name: { $ref: '#/components/schemas/Name' }
+        runtime: { $ref: '#/components/schemas/RuntimeRef' }
+        origin_node: { type: string }
+        status:
+          type: string
+          enum: [provisioning, ready, maintenance, failed]
+          description: maintenance while the base server is stopped for a snapshot.
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        latest_snapshot:
+          oneOf: [{ $ref: '#/components/schemas/Name' }, { type: 'null' }]
+        branch_count: { type: integer }
+        storage: { $ref: '#/components/schemas/Storage' }
+    CreateBase:
+      type: object
+      additionalProperties: false
+      required: [name, runtime, source]
+      properties:
+        name: { $ref: '#/components/schemas/Name' }
+        runtime: { $ref: '#/components/schemas/RuntimeRef' }
+        source:
+          type: object
+          additionalProperties: false
+          required: [type, path]
+          properties:
+            type: { type: string, enum: [dump] }
+            path: { type: string, description: Dump file on the node that received the request (becomes the base origin). }
+    Snapshot:
+      type: object
+      required: [name, base, created_at, propagation, branch_count]
+      properties:
+        name: { $ref: '#/components/schemas/Name' }
+        base: { $ref: '#/components/schemas/Name' }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        propagation: { $ref: '#/components/schemas/NodeProgress' }
+        branch_count: { type: integer }
+
+    Runtime:
+      type: object
+      required: [runtime, engine, version, source, distribution, used_by]
+      properties:
+        runtime: { $ref: '#/components/schemas/RuntimeRef' }
+        engine: { $ref: '#/components/schemas/Engine' }
+        version: { type: string }
+        source: { type: string, enum: [catalog, import] }
+        sha256: { type: [string, 'null'], pattern: '^[0-9a-f]{64}$' }
+        distribution: { $ref: '#/components/schemas/NodeProgress' }
+        used_by:
+          type: object
+          properties:
+            bases: { type: array, items: { $ref: '#/components/schemas/Name' } }
+
+    Cluster:
+      type: object
+      required: [id, leader, quorum, index, nodes]
+      properties:
+        id: { type: string }
+        leader: { type: [string, 'null'] }
+        quorum:
+          type: object
+          required: [voters, healthy]
+          properties:
+            voters: { type: integer }
+            healthy: { type: integer }
+        index: { type: integer, format: int64 }
+        nodes: { type: array, items: { $ref: '#/components/schemas/Node' } }
+    Node:
+      type: object
+      required: [name, address, leader, status, last_seen_at, version, arch, capacity, branch_count, branches]
+      properties:
+        name: { type: string }
+        address: { type: string }
+        leader: { type: boolean }
+        status: { type: string, enum: [up, down, joining, leaving] }
+        last_seen_at: { $ref: '#/components/schemas/Timestamp' }
+        version: { type: string }
+        arch: { $ref: '#/components/schemas/Arch' }
+        capacity:
+          type: object
+          required: [pool, size, allocated, free]
+          properties:
+            pool: { type: string }
+            size: { type: integer, format: int64 }
+            allocated: { type: integer, format: int64 }
+            free: { type: integer, format: int64 }
+        branch_count: { type: integer }
+        branches: { type: array, items: { $ref: '#/components/schemas/Name' } }
+
+    OperationKind:
+      type: string
+      enum: [runtime.install, base.create, base.snapshot, branch.create, branch.reset, branch.delete]
+    OperationState:
+      type: string
+      enum: [pending, running, succeeded, failed]
+    Operation:
+      type: object
+      required: [id, kind, target, state, progress, error, created_at, updated_at, finished_at]
+      properties:
+        id: { type: string, examples: ['op_01JC8Z6Q4M7V3X2N9K5R8T1W0B'] }
+        kind: { $ref: '#/components/schemas/OperationKind' }
+        target:
+          type: object
+          required: [resource, name]
+          properties:
+            resource: { type: string, enum: [branch, base, runtime] }
+            name: { type: string }
+            snapshot: { type: string }
+        phase:
+          type: [string, 'null']
+          description: >-
+            Current step while running. base.snapshot: quiescing, stopping, verifying,
+            snapshotting, restarting, propagating. Snapshots are taken only after a
+            clean shutdown of the database server.
+        state: { $ref: '#/components/schemas/OperationState' }
+        progress: { $ref: '#/components/schemas/Progress' }
+        error:
+          oneOf: [{ $ref: '#/components/schemas/ErrorBody' }, { type: 'null' }]
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+        finished_at:
+          oneOf: [{ $ref: '#/components/schemas/Timestamp' }, { type: 'null' }]
+
+    Session:
+      type: object
+      required: [user, csrf_token, expires_at]
+      properties:
+        user:
+          type: object
+          required: [name]
+          properties:
+            name: { type: string, examples: [admin] }
+        csrf_token: { type: string }
+        expires_at: { $ref: '#/components/schemas/Timestamp' }
+
+    Capabilities:
+      type: object
+      required: [version, modules]
+      properties:
+        version: { type: string }
+        engines: { type: array, items: { $ref: '#/components/schemas/Engine' } }
+        modules:
+          type: array
+          items:
+            type: object
+            required: [name]
+            properties:
+              name: { type: string, examples: [audit] }
+              version: { type: string }
+              licensed_until: { $ref: '#/components/schemas/Timestamp' }
+        features:
+          type: object
+          properties:
+            proxysql: { type: boolean }
+            cluster: { type: boolean }
+
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        reasons: { type: array, items: { type: string } }
+
+    ErrorCode:
+      type: string
+      enum:
+        - invalid_request
+        - invalid_name
+        - invalid_runtime
+        - unauthenticated
+        - csrf_failed
+        - forbidden
+        - socket_only
+        - not_found
+        - already_exists
+        - conflict
+        - in_use
+        - unclean_shutdown
+        - precondition_failed
+        - idempotency_key_reused
+        - runtime_unavailable
+        - rate_limited
+        - no_leader
+        - insufficient_capacity
+        - internal
+    ErrorBody:
+      type: object
+      required: [code, message]
+      properties:
+        code: { $ref: '#/components/schemas/ErrorCode' }
+        message: { type: string }
+        details: { type: object, additionalProperties: true }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { $ref: '#/components/schemas/ErrorBody' }

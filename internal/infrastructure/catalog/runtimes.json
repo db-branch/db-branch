@@ -1,0 +1,217 @@
+{
+  "runtimes": [
+    {
+      "engine": "mysql",
+      "version": "8.4.13",
+      "artifacts": {
+        "amd64": {
+          "url": "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.13-linux-glibc2.28-x86_64-minimal.tar.xz",
+          "sha256": "5dfbb764f731df40ef9e4f5d69aed32bdac8ba1af20bd96b7d40a942d83d4ed2",
+          "size": 79753532
+        }
+      }
+    },
+    {
+      "engine": "mysql",
+      "version": "9.6.0",
+      "artifacts": {
+        "amd64": {
+          "url": "https://cdn.mysql.com/Downloads/MySQL-9.6/mysql-9.6.0-linux-glibc2.28-x86_64-minimal.tar.xz",
+          "sha256": "06ebd32ab32ccac2132c602ec3bfb4d5791b6ff9e98393b2fb04d1e97ff925b7",
+          "size": 69934940
+        }
+      }
+    },
+    {
+      "engine": "mysql",
+      "version": "8.0.46",
+      "artifacts": {
+        "amd64": {
+          "url": "https://cdn.mysql.com/Downloads/MySQL-8.0/mysql-8.0.46-linux-glibc2.17-x86_64-minimal.tar.xz",
+          "sha256": "e2777d490fcaadc5a4be06db89b6935c78909bd9c3382af859ab284af0c950b0",
+          "size": 61608108
+        }
+      }
+    },
+    {
+      "engine": "postgres",
+      "version": "18.6",
+      "artifacts": {
+        "amd64": {
+          "distros": {
+            "ubuntu-24.04": {
+              "parts": [
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/postgresql-18_18.6-1.pgdg24.04+2_amd64.deb",
+                  "sha256": "c0773357df8769abb70e92722196d9b53422d71c0f29a4f39c834b94276cfa3d",
+                  "size": 7576708
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/postgresql-client-18_18.6-1.pgdg24.04+2_amd64.deb",
+                  "sha256": "b9d10d99a73bf7aa375be2fe36626c40499cfdf553d0ad174674a88a1b256b43",
+                  "size": 2114236
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/libpq5_18.6-1.pgdg24.04+2_amd64.deb",
+                  "sha256": "b487c5ed2ceb9244c6a9d6ae65818ed6707c3c44a2e14488394ae4194c52c53b",
+                  "size": 264072
+                }
+              ]
+            },
+            "ubuntu-26.04": {
+              "parts": [
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/postgresql-18_18.6-1.pgdg26.04+2_amd64.deb",
+                  "sha256": "f1545574e76209082717a177436478b299510c61f1ed3df015671dc552eba2f5",
+                  "size": 7704196
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/postgresql-client-18_18.6-1.pgdg26.04+2_amd64.deb",
+                  "sha256": "8421b4602152394cc26b1742caecf6a7be18b181eeca5b114ce14a969af312eb",
+                  "size": 2120568
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/libpq5_18.6-1.pgdg26.04+2_amd64.deb",
+                  "sha256": "a56bfe4843ae432e7338d0139190397db69a343412e489ae637bfb39c2d6fc30",
+                  "size": 266508
+                }
+              ]
+            }
+          }
+        },
+        "arm64": {
+          "distros": {
+            "ubuntu-24.04": {
+              "parts": [
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/postgresql-18_18.6-1.pgdg24.04+2_arm64.deb",
+                  "sha256": "d7ad4dbdef31fdf1cc820613a3b4bd5a24d5787d64be16d4a6a94c405aa5f674",
+                  "size": 7141796
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/postgresql-client-18_18.6-1.pgdg24.04+2_arm64.deb",
+                  "sha256": "4786cea6affc7190d97b9686ecaa733c994f6c39f7681f4fe4396e09f0ab1fb7",
+                  "size": 2059720
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/libpq5_18.6-1.pgdg24.04+2_arm64.deb",
+                  "sha256": "f593f74119682ffc9b4b114d63c224ceeefa2795e703bb1c7ed2ddb4bd62afe3",
+                  "size": 254888
+                }
+              ]
+            },
+            "ubuntu-26.04": {
+              "parts": [
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/postgresql-18_18.6-1.pgdg26.04+2_arm64.deb",
+                  "sha256": "8318d6c5dbe9382031df70f82845e62919455cadf5e5393007bb7bb5a2c4b357",
+                  "size": 7185852
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/postgresql-client-18_18.6-1.pgdg26.04+2_arm64.deb",
+                  "sha256": "7862e68dd155aac5897099716e76dd96beffe44837689e5af98ff215e60b60d1",
+                  "size": 2065012
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/libpq5_18.6-1.pgdg26.04+2_arm64.deb",
+                  "sha256": "c8032100040a48d47d0615ee03bc0cc28507feb34cfefff8853ac36054de2192",
+                  "size": 255704
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "engine": "postgres",
+      "version": "17.11",
+      "artifacts": {
+        "amd64": {
+          "distros": {
+            "ubuntu-24.04": {
+              "parts": [
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-17/postgresql-17_17.11-1.pgdg24.04+2_amd64.deb",
+                  "sha256": "d5b58058a82a3f344f832aea2cc54badc4f6265c25c960752cb1f5df5d2180ee",
+                  "size": 16949784
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-17/postgresql-client-17_17.11-1.pgdg24.04+2_amd64.deb",
+                  "sha256": "b3b071b67a814a382516d6f6241b529c52f909672457e2f48083acce047b634f",
+                  "size": 2052656
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/libpq5_18.6-1.pgdg24.04+2_amd64.deb",
+                  "sha256": "b487c5ed2ceb9244c6a9d6ae65818ed6707c3c44a2e14488394ae4194c52c53b",
+                  "size": 264072
+                }
+              ]
+            },
+            "ubuntu-26.04": {
+              "parts": [
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-17/postgresql-17_17.11-1.pgdg26.04+2_amd64.deb",
+                  "sha256": "4b2abeefb22fdfb35b2d3dffd26305c07e61f7f9cc22007197819ccac2044585",
+                  "size": 17039248
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-17/postgresql-client-17_17.11-1.pgdg26.04+2_amd64.deb",
+                  "sha256": "4186946d180be3637c18eace5ef9b3f17be8a9bd840fdc774cca5d3c7dbfa816",
+                  "size": 2055892
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/libpq5_18.6-1.pgdg26.04+2_amd64.deb",
+                  "sha256": "a56bfe4843ae432e7338d0139190397db69a343412e489ae637bfb39c2d6fc30",
+                  "size": 266508
+                }
+              ]
+            }
+          }
+        },
+        "arm64": {
+          "distros": {
+            "ubuntu-24.04": {
+              "parts": [
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-17/postgresql-17_17.11-1.pgdg24.04+2_arm64.deb",
+                  "sha256": "4f70a5f9101cab17348f40e4534ea96f9e70b8bb4e44a2b4c8b314e3dee2aca7",
+                  "size": 16463476
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-17/postgresql-client-17_17.11-1.pgdg24.04+2_arm64.deb",
+                  "sha256": "07d62cc509748510bb8e862fbe58d1050e99fb1d457f09036f04253d9995aba7",
+                  "size": 1997216
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/libpq5_18.6-1.pgdg24.04+2_arm64.deb",
+                  "sha256": "f593f74119682ffc9b4b114d63c224ceeefa2795e703bb1c7ed2ddb4bd62afe3",
+                  "size": 254888
+                }
+              ]
+            },
+            "ubuntu-26.04": {
+              "parts": [
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-17/postgresql-17_17.11-1.pgdg26.04+2_arm64.deb",
+                  "sha256": "183a4e3ebcdb4c258205df61f5f3b81248f13edbbfc6cd77276b79b461854fdb",
+                  "size": 16462356
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-17/postgresql-client-17_17.11-1.pgdg26.04+2_arm64.deb",
+                  "sha256": "765742db18f2723b382d393cfa6e294e71077313d3a1b30fdee7cc00314ea135",
+                  "size": 1997332
+                },
+                {
+                  "url": "https://apt.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/libpq5_18.6-1.pgdg26.04+2_arm64.deb",
+                  "sha256": "c8032100040a48d47d0615ee03bc0cc28507feb34cfefff8853ac36054de2192",
+                  "size": 255704
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

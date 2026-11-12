@@ -1,0 +1,19 @@
+[Unit]
+Description=db-branch agent
+Documentation=https://github.com/db-branch/db-branch
+After=network-online.target zfs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Runs as root: mounting ZFS clones requires it on Linux.
+# Database server processes are started as the unprivileged db-branch user.
+ExecStart=/usr/bin/db-branch agent --config /etc/db-branch/config.toml
+Restart=on-failure
+RestartSec=5s
+RuntimeDirectory=db-branch
+StateDirectory=db-branch
+StateDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

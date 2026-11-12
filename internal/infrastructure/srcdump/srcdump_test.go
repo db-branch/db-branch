@@ -1,0 +1,176 @@
+package srcdump_test
+
+import (
+	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/infrastructure/srcdump"
+)
+
+type call struct {
+	env  []string
+	name string
+	args []string
+}
+
+type recorder struct {
+	calls []call
+	err   error
+}
+
+func (r *recorder) stream(_ context.Context, env []string, out io.Writer, name string, args ...string) error {
+	r.calls = append(r.calls, call{env, name, args})
+	_, _ = io.WriteString(out, "-- dump "+args[len(args)-1]+"\n")
+	return r.err
+}
+
+func job(engine domain.Engine, dbs ...string) domain.SourceDumpJob {
+	return domain.SourceDumpJob{
+		Tools:  domain.AdminAccess{Engine: engine, BinDir: "/rt/bin", LibDir: "/rt/lib"},
+		Source: domain.RefreshSource{Host: "db.example.com", Port: 5432, User: "dumper", Password: "hunter2", Databases: dbs},
+	}
+}
+
+func newDumper(t *testing.T) (srcdump.Dumper, *recorder) {
+	r := &recorder{}
+	return srcdump.Dumper{WorkDir: filepath.Join(t.TempDir(), "work"), Stream: r.stream}, r
+}
+
+func TestDump_PostgreSQLはデータベースごとにpg_dumpして一つの0600ファイルにまとめる(t *testing.T) {
+	d, r := newDumper(t)
+	path, err := d.Dump(context.Background(), job(domain.Postgres, "app", "postgres"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	if string(b) != "-- dump app\n-- dump postgres\n" {
+		t.Errorf("dump = %q", b)
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v", fi.Mode().Perm())
+	}
+	if fi, _ := os.Stat(filepath.Dir(path)); fi.Mode().Perm() != 0o700 {
+		t.Errorf("work dir mode = %v", fi.Mode().Perm())
+	}
+	if len(r.calls) != 2 || r.calls[0].name != "/rt/bin/pg_dump" {
+		t.Fatalf("calls = %+v", r.calls)
+	}
+	app, def := strings.Join(r.calls[0].args, " "), strings.Join(r.calls[1].args, " ")
+	if !strings.Contains(app, "--create") || strings.Contains(def, "--create") || !strings.Contains(def, "--clean --if-exists") {
+		t.Errorf("args: %q / %q", app, def)
+	}
+	if !strings.Contains(app, "-h db.example.com -p 5432 -U dumper") {
+		t.Errorf("connection args: %q", app)
+	}
+	if got := strings.Join(r.calls[0].env, " "); !strings.Contains(got, "PGPASSWORD=hunter2") || !strings.Contains(got, "LD_LIBRARY_PATH=/rt/lib") {
+		t.Errorf("env = %q", got)
+	}
+}
+
+func TestDump_MySQLはmysqldumpに一度で全データベースを渡す(t *testing.T) {
+	d, r := newDumper(t)
+	path, err := d.Dump(context.Background(), job(domain.MySQL, "app", "billing"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Discard(path)
+	if len(r.calls) != 1 || r.calls[0].name != "/rt/bin/mysqldump" {
+		t.Fatalf("calls = %+v", r.calls)
+	}
+	args := strings.Join(r.calls[0].args, " ")
+	for _, want := range []string{"--protocol=tcp", "-h db.example.com", "-P 5432", "-u dumper", "--single-transaction", "--add-drop-database", "--databases app billing"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("args %q lack %q", args, want)
+		}
+	}
+	if got := strings.Join(r.calls[0].env, " "); !strings.Contains(got, "MYSQL_PWD=hunter2") {
+		t.Errorf("env = %q", got)
+	}
+}
+
+func TestDump_パスワードはコマンドラインにも環境の空欄にも出さない(t *testing.T) {
+	d, r := newDumper(t)
+	for _, e := range []domain.Engine{domain.Postgres, domain.MySQL} {
+		j := job(e, "app")
+		path, err := d.Dump(context.Background(), j)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Discard(path)
+		if strings.Contains(strings.Join(r.calls[len(r.calls)-1].args, " "), "hunter2") {
+			t.Errorf("%s: password on the command line", e)
+		}
+		j.Source.Password = ""
+		if path, err = d.Dump(context.Background(), j); err != nil {
+			t.Fatal(err)
+		}
+		d.Discard(path)
+		for _, v := range r.calls[len(r.calls)-1].env {
+			if strings.HasPrefix(v, "PGPASSWORD=") || strings.HasPrefix(v, "MYSQL_PWD=") {
+				t.Errorf("%s: empty password still set: %s", e, v)
+			}
+		}
+	}
+}
+
+func TestDump_失敗したら書きかけのファイルを残さない(t *testing.T) {
+	d, r := newDumper(t)
+	r.err = errors.New("connection refused")
+	path, err := d.Dump(context.Background(), job(domain.Postgres, "app"))
+	if err == nil || path != "" || !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("path %q err %v", path, err)
+	}
+	if left, _ := os.ReadDir(d.WorkDir); len(left) != 0 {
+		t.Errorf("left behind: %v", left)
+	}
+}
+
+func TestDump_対応しないエンジンや作業ディレクトリを作れない場合は失敗する(t *testing.T) {
+	d, _ := newDumper(t)
+	if _, err := d.Dump(context.Background(), job(domain.Engine("sqlite"), "app")); err == nil {
+		t.Error("unsupported engine accepted")
+	}
+	blocker := filepath.Join(t.TempDir(), "file")
+	_ = os.WriteFile(blocker, nil, 0o600)
+	d.WorkDir = filepath.Join(blocker, "sub")
+	if _, err := d.Dump(context.Background(), job(domain.MySQL, "app")); err == nil {
+		t.Error("unusable work dir accepted")
+	}
+}
+
+func TestDiscard_ダンプを消し存在しなくても失敗しない(t *testing.T) {
+	d, _ := newDumper(t)
+	path, _ := d.Dump(context.Background(), job(domain.MySQL, "app"))
+	d.Discard(path)
+	d.Discard(path)
+	d.Discard("")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("still there: %v", err)
+	}
+}
+
+func TestDump_MySQLの失敗とファイルを作れない作業ディレクトリも失敗として返す(t *testing.T) {
+	d, r := newDumper(t)
+	r.err = errors.New("access denied")
+	if path, err := d.Dump(context.Background(), job(domain.MySQL, "app")); err == nil || path != "" || !strings.Contains(err.Error(), "mysqldump") {
+		t.Errorf("mysql failure: %q %v", path, err)
+	}
+	if left, _ := os.ReadDir(d.WorkDir); len(left) != 0 {
+		t.Errorf("left behind: %v", left)
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can write anywhere")
+	}
+	ro := filepath.Join(t.TempDir(), "ro")
+	_ = os.Mkdir(ro, 0o500)
+	d.WorkDir = ro
+	if _, err := d.Dump(context.Background(), job(domain.Postgres, "app")); err == nil {
+		t.Error("read-only work dir accepted")
+	}
+}

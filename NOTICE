@@ -1,0 +1,9 @@
+db-branch
+Copyright 2026 Keisuke Masuda
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It bundles third-party software under their own licenses; the console's
+JavaScript dependencies are listed in web/package.json, and Go modules in
+go.mod. The optional db-branch-proxysql package ships ProxySQL (GPL-3.0)
+with its license text.

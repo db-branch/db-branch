@@ -1,0 +1,6 @@
+db-branch-greenmask-mysql
+Copyright 2026 Keisuke Masuda
+License: Apache-2.0
+
+This package does not include Greenmask. Install Greenmask
+(https://github.com/GreenmaskIO/greenmask, Apache-2.0) separately.

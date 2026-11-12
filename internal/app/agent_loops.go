@@ -1,0 +1,111 @@
+package app
+
+import (
+	"context"
+	"log/slog"
+	"time"
+
+	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/usecase/dbbranch"
+	"github.com/db-branch/db-branch/internal/usecase/operation"
+	"github.com/db-branch/db-branch/internal/usecase/routing"
+)
+
+func expireLoop(ctx context.Context, log *slog.Logger, every time.Duration, f func()) {
+	if every == 0 {
+		every = 30 * time.Second
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			f()
+		}
+	}
+}
+
+func expireOnce(ctx context.Context, log *slog.Logger, a *App) {
+	svc, _ := a.Branches()
+	deleted, err := svc.Expire(ctx)
+	for _, n := range deleted {
+		log.Info("branch expired", "branch", n.String())
+	}
+	if err != nil {
+		log.Error("expiring branches", "err", err)
+	}
+	if !pruneSnapshots.Load() {
+		return
+	}
+	pruned, err := svc.PruneSnapshots(ctx)
+	for _, s := range pruned {
+		log.Info("old base snapshot deleted", "snapshot", s)
+	}
+	if err != nil {
+		log.Error("pruning base snapshots", "err", err)
+	}
+}
+
+// refreshDue starts, as operations (shown in events like base.snapshot), the
+// scheduled refreshes of this node's bases that are due. Which are due is the
+// use case's decision.
+func refreshDue(ctx context.Context, log *slog.Logger, svc *dbbranch.Service, ops *operation.Manager, published func(domain.Name)) {
+	due, err := svc.DueRefreshes(ctx)
+	if err != nil {
+		log.Error("finding due base refreshes", "err", err)
+		return
+	}
+	for _, n := range due {
+		if _, busy := ops.Active("base", n.String()); busy {
+			continue
+		}
+		_, err := ops.Start("base.refresh", operation.Target{Resource: "base", Name: n.String()},
+			func(ctx context.Context, report func(string)) error {
+				err := svc.RefreshBase(ctx, n, report)
+				if err != nil {
+					log.Error("scheduled base refresh failed", "base", n.String(), "err", err)
+				}
+				published(n)
+				return err
+			})
+		if err != nil {
+			log.Error("starting a base refresh", "base", n.String(), "err", err)
+		}
+	}
+}
+
+// routingLoop keeps the proxy in line with the branches (cheap when nothing changed).
+func routingLoop(ctx context.Context, rt *routing.Service, log *slog.Logger) {
+	failing := false
+	for {
+		changed, err := rt.Sync(ctx)
+		switch {
+		case err != nil && !failing:
+			log.Warn("configuring the proxy", "err", err)
+			failing = true
+		case err == nil && failing:
+			log.Info("proxy configured again")
+			failing = false
+		case changed:
+			log.Debug("proxy configuration applied")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+func every(ctx context.Context, d time.Duration, f func()) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(d):
+			f()
+		}
+	}
+}

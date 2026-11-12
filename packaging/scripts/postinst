@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+if ! getent group db-branch >/dev/null; then
+	addgroup --system db-branch
+fi
+if ! getent passwd db-branch >/dev/null; then
+	adduser --system --ingroup db-branch --home /var/lib/db-branch --no-create-home \
+		--shell /usr/sbin/nologin --gecos "db-branch" db-branch
+fi
+chgrp db-branch /etc/db-branch/config.toml
+
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload
+	systemctl enable db-branch.service >/dev/null
+	systemctl restart db-branch.service
+fi

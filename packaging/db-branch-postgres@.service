@@ -1,0 +1,28 @@
+[Unit]
+Description=db-branch PostgreSQL server %i
+Documentation=https://github.com/db-branch/db-branch
+After=zfs-mount.service network-online.target
+Wants=network-online.target
+
+[Service]
+# postgres tells systemd when it accepts connections.
+Type=notify
+NotifyAccess=main
+User=db-branch
+Group=db-branch
+Slice=db-branch.slice
+# Written by the agent: PG_BIN, PG_DATA, PG_PORT, PG_BIND, PG_MEM, LD_LIBRARY_PATH
+EnvironmentFile=/var/lib/db-branch/instances/%i/env
+ExecStart=/bin/sh -c 'exec "$PG_BIN/postgres" -D "$PG_DATA" -p "$PG_PORT" -c listen_addresses="$PG_BIND" -c unix_socket_directories=/run/db-branch-postgres/%i -c shared_buffers="$PG_MEM"MB -c jit=off'
+RuntimeDirectory=db-branch-postgres/%i
+RuntimeDirectoryMode=0750
+LimitNOFILE=65535
+# SIGINT is PostgreSQL's fast shutdown: clients are disconnected and a
+# shutdown checkpoint is written, so a snapshot afterwards needs no recovery.
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=900
+Restart=on-abnormal
+
+[Install]
+WantedBy=multi-user.target

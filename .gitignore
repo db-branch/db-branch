@@ -1,0 +1,8 @@
+/bin/
+/dist/
+/coverage.out
+/web/node_modules/
+/web/dist/*
+!/web/dist/.gitkeep
+/web/dist-demo/
+/web/*.tsbuildinfo

@@ -1,0 +1,35 @@
+# db-branch-proxysql: the module that lets db-branch drive ProxySQL on this
+# node (design.md §8), plus a dependency on the pinned official ProxySQL. The
+# proxysql package itself is the upstream .deb, mirrored unchanged into the
+# db-branch repository.
+name: db-branch-proxysql
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+section: database
+priority: optional
+maintainer: MaSuCcHI <MaSuCcHI@users.noreply.github.com>
+description: |
+  ProxySQL routing for db-branch
+  A db-branch module: the agent loads it and routes connections to every
+  branch in the cluster through ProxySQL, by user name or by
+  /*db_branch='name'*/ comments. Pulls in the ProxySQL release db-branch is
+  tested with.
+vendor: db-branch
+homepage: https://github.com/db-branch/db-branch
+license: Apache-2.0 (this package); ProxySQL is GPL-3.0
+depends:
+  - db-branch
+  - proxysql (= ${PROXYSQL_VERSION})
+contents:
+  - src: bin/db-branch-proxysql
+    dst: /usr/lib/db-branch/modules/proxysql
+    file_info:
+      mode: 0755
+  - src: packaging/proxysql/copyright
+    dst: /usr/share/doc/db-branch-proxysql/copyright
+    file_info:
+      mode: 0644
+scripts:
+  postinstall: packaging/proxysql/postinst
+  postremove: packaging/proxysql/restart-agent

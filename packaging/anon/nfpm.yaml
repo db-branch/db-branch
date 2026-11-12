@@ -1,0 +1,31 @@
+# db-branch-anon: the free masker module that writes masked copies of
+# PostgreSQL bases with PostgreSQL Anonymizer (obtained separately).
+name: db-branch-anon
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+section: database
+priority: optional
+maintainer: MaSuCcHI <MaSuCcHI@users.noreply.github.com>
+description: |
+  PostgreSQL Anonymizer masker for db-branch
+  A db-branch module: `db-branch base mask <target> --from <base> --masker
+  anon` copies a PostgreSQL base into another, anonymizes it in place with
+  PostgreSQL Anonymizer security labels, vacuums it and snapshots it.
+vendor: db-branch
+homepage: https://github.com/db-branch/db-branch
+license: Apache-2.0
+depends:
+  - db-branch
+contents:
+  - src: bin/db-branch-anon
+    dst: /usr/lib/db-branch/modules/anon
+    file_info:
+      mode: 0755
+  - src: packaging/anon/copyright
+    dst: /usr/share/doc/db-branch-anon/copyright
+    file_info:
+      mode: 0644
+scripts:
+  postinstall: packaging/proxysql/restart-agent
+  postremove: packaging/proxysql/restart-agent

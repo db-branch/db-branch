@@ -1,0 +1,6 @@
+#!/bin/sh
+# The agent loads modules when it starts.
+set -e
+if [ -d /run/systemd/system ]; then
+	systemctl try-restart db-branch.service || true
+fi

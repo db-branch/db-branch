@@ -1,0 +1,13 @@
+// The demo console as a static-assets-only Worker (no code runs). Build it first:
+//   cd web && npm run build:demo
+// then check with: npx wrangler@4.160.0 deploy --dry-run --outdir /tmp/demo-dry -c web/demo-worker/wrangler.jsonc
+{
+  "name": "db-branch-demo",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "../dist-demo",
+    // Any path that is not a file (/, /admin, /admin/bases, /account) gets index.html.
+    "not_found_handling": "single-page-application"
+  },
+  "routes": [{ "pattern": "demo.db-branch.com", "custom_domain": true }]
+}

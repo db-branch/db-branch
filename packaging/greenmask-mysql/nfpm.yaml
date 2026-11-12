@@ -1,0 +1,31 @@
+# db-branch-greenmask-mysql: the free masker module that writes masked
+# copies of MySQL bases with Greenmask v1 (beta), installed separately.
+name: db-branch-greenmask-mysql
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+section: database
+priority: optional
+maintainer: MaSuCcHI <MaSuCcHI@users.noreply.github.com>
+description: |
+  Greenmask (MySQL, beta) masker for db-branch
+  A db-branch module: `db-branch base mask <target> --from <base> --masker
+  greenmask-mysql` copies a MySQL base into another, transformed by
+  Greenmask rules, and snapshots it. Install greenmask-mysql v1 separately.
+vendor: db-branch
+homepage: https://github.com/db-branch/db-branch
+license: Apache-2.0
+depends:
+  - db-branch
+contents:
+  - src: bin/db-branch-greenmask-mysql
+    dst: /usr/lib/db-branch/modules/greenmask-mysql
+    file_info:
+      mode: 0755
+  - src: packaging/greenmask-mysql/copyright
+    dst: /usr/share/doc/db-branch-greenmask-mysql/copyright
+    file_info:
+      mode: 0644
+scripts:
+  postinstall: packaging/proxysql/restart-agent
+  postremove: packaging/proxysql/restart-agent

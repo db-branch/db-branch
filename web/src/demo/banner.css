@@ -1,0 +1,21 @@
+/* The demo banner: fixed to the top, the page moves down by its height (--demo-bar). */
+:root { --demo-bar: 36px; }
+body { padding-top: var(--demo-bar); }
+.demo-banner {
+  position: fixed; inset: 0 0 auto 0; z-index: 50; min-height: var(--demo-bar);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 5px 16px;
+  background: var(--ink); color: var(--paper); font: 12px/1.4 var(--sans, system-ui, sans-serif);
+}
+.demo-tag { font: 500 11px var(--mono, monospace); letter-spacing: 0.08em; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; background: var(--accent); color: #fff; }
+.demo-spacer { flex: 1; }
+.demo-as { display: inline-flex; align-items: center; gap: 6px; }
+.demo-as button {
+  height: 22px; padding: 0 10px; border-radius: 11px; border: 1px solid color-mix(in srgb, var(--paper) 40%, transparent);
+  background: transparent; color: inherit; font: inherit; cursor: pointer;
+}
+.demo-as button.on { background: var(--paper); color: var(--ink); border-color: var(--paper); }
+.demo-as button:focus-visible, .demo-home:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.demo-home { color: inherit; text-underline-offset: 3px; }
+.portal-get { top: calc(var(--s4) + var(--demo-bar)); }
+.module-frame { height: calc(100vh - 48px - var(--demo-bar)); }
+@media (max-width: 640px) { .demo-spacer { display: none; } }

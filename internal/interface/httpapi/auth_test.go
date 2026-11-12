@@ -1,0 +1,170 @@
+package httpapi_test
+
+import (
+	"bufio"
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+func login(t *testing.T, f *fixture) (cookie *http.Cookie, csrf string) {
+	t.Helper()
+	resp, body := send(t, f.srv.Handler(false), "POST", "/v1/auth/login",
+		map[string]any{"username": "admin", "password": "correct horse battery"}, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("login: %d %v", resp.StatusCode, body)
+	}
+	for _, c := range resp.Cookies() {
+		if c.Name == "dbb_session" {
+			cookie = c
+		}
+	}
+	if cookie == nil || !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode {
+		t.Fatalf("cookie = %+v", cookie)
+	}
+	return cookie, body["csrf_token"].(string)
+}
+
+func withSession(c *http.Cookie, csrf string) func(*http.Request) {
+	return func(r *http.Request) {
+		r.AddCookie(c)
+		if csrf != "" {
+			r.Header.Set("X-CSRF-Token", csrf)
+		}
+	}
+}
+
+func TestConsole_ログインしていなければ401(t *testing.T) {
+	f := newFixture(t)
+	resp, body := send(t, f.srv.Handler(false), "GET", "/v1/branches", nil, nil)
+	if resp.StatusCode != 401 || errCode(body) != "unauthenticated" {
+		t.Errorf("%d %v", resp.StatusCode, body)
+	}
+}
+
+func TestConsole_ログインすれば読めて書き込みにはCSRFトークンが要る(t *testing.T) {
+	f := newFixture(t)
+	h := f.srv.Handler(false)
+	cookie, csrf := login(t, f)
+
+	if resp, _ := send(t, h, "GET", "/v1/branches", nil, withSession(cookie, "")); resp.StatusCode != 200 {
+		t.Errorf("read: %d", resp.StatusCode)
+	}
+	resp, body := send(t, h, "POST", "/v1/branches", map[string]any{"name": "x", "base": "prod"}, withSession(cookie, ""))
+	if resp.StatusCode != 403 || errCode(body) != "csrf_failed" {
+		t.Errorf("no csrf: %d %v", resp.StatusCode, body)
+	}
+	resp, body = send(t, h, "POST", "/v1/branches", map[string]any{"name": "x", "base": "prod"}, withSession(cookie, "wrong"))
+	if resp.StatusCode != 403 {
+		t.Errorf("wrong csrf: %d %v", resp.StatusCode, body)
+	}
+	resp, body = send(t, h, "POST", "/v1/branches", map[string]any{"name": "x", "base": "prod"}, withSession(cookie, csrf))
+	if resp.StatusCode != 202 {
+		t.Errorf("with csrf: %d %v", resp.StatusCode, body)
+	}
+	f.waitOp(t, body["id"].(string))
+}
+
+func TestConsole_セッション確認とログアウト(t *testing.T) {
+	f := newFixture(t)
+	h := f.srv.Handler(false)
+	cookie, csrf := login(t, f)
+
+	resp, body := send(t, h, "GET", "/v1/auth/session", nil, withSession(cookie, ""))
+	if resp.StatusCode != 200 || body["csrf_token"] != csrf || body["user"].(map[string]any)["name"] != "admin" {
+		t.Errorf("session: %d %v", resp.StatusCode, body)
+	}
+	if resp, _ := send(t, h, "POST", "/v1/auth/logout", nil, withSession(cookie, csrf)); resp.StatusCode != 204 {
+		t.Errorf("logout: %d", resp.StatusCode)
+	}
+	if resp, _ := send(t, h, "GET", "/v1/auth/session", nil, withSession(cookie, "")); resp.StatusCode != 401 {
+		t.Errorf("after logout: %d", resp.StatusCode)
+	}
+}
+
+func TestConsole_パスワードを間違えると401で続けば429(t *testing.T) {
+	f := newFixture(t)
+	h := f.srv.Handler(false)
+	var last *http.Response
+	for i := 0; i < 6; i++ {
+		last, _ = send(t, h, "POST", "/v1/auth/login", map[string]any{"username": "admin", "password": "nope"}, nil)
+	}
+	if last.StatusCode != 429 || last.Header.Get("Retry-After") == "" {
+		t.Errorf("status %d retry-after %q", last.StatusCode, last.Header.Get("Retry-After"))
+	}
+	resp, body := send(t, newFixture(t).srv.Handler(false), "POST", "/v1/auth/login", map[string]any{"username": "admin", "password": "nope"}, nil)
+	if resp.StatusCode != 401 || errCode(body) != "invalid_credentials" {
+		t.Errorf("first failure: %d %v", resp.StatusCode, body)
+	}
+}
+
+func TestConsole_パスワードを変更する(t *testing.T) {
+	f := newFixture(t)
+	h := f.srv.Handler(false)
+	cookie, csrf := login(t, f)
+
+	resp, body := send(t, h, "PUT", "/v1/auth/password",
+		map[string]any{"current_password": "correct horse battery", "new_password": "short"}, withSession(cookie, csrf))
+	if resp.StatusCode != 400 || errCode(body) != "weak_password" {
+		t.Errorf("weak: %d %v", resp.StatusCode, body)
+	}
+	resp, body = send(t, h, "PUT", "/v1/auth/password",
+		map[string]any{"current_password": "wrong", "new_password": "a much better passphrase"}, withSession(cookie, csrf))
+	if resp.StatusCode != 401 {
+		t.Errorf("wrong current: %d %v", resp.StatusCode, body)
+	}
+	resp, _ = send(t, h, "PUT", "/v1/auth/password",
+		map[string]any{"current_password": "correct horse battery", "new_password": "a much better passphrase"}, withSession(cookie, csrf))
+	if resp.StatusCode != 204 {
+		t.Errorf("change: %d", resp.StatusCode)
+	}
+}
+
+func TestConsole_画面はログインなしで配信する(t *testing.T) {
+	f := newFixture(t)
+	f.srv.Console = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("<html>console</html>")) })
+	req := httptest.NewRequest("GET", "/branches", nil)
+	rec := httptest.NewRecorder()
+	f.srv.Handler(false).ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "console") {
+		t.Errorf("%d %q", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("X-Frame-Options") != "DENY" || rec.Header().Get("Content-Security-Policy") == "" {
+		t.Errorf("security headers missing: %v", rec.Header())
+	}
+}
+
+func TestEvents_変化をSSEで流す(t *testing.T) {
+	f := newFixture(t)
+	srv := httptest.NewServer(f.srv.Handler(true))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/v1/events", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content-type %q", ct)
+	}
+
+	f.srv.Bus.Publish("branch.updated", map[string]string{"name": "x"})
+
+	sc := bufio.NewScanner(resp.Body)
+	var lines []string
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+		if sc.Text() == "" && len(lines) > 1 {
+			break
+		}
+	}
+	got := strings.Join(lines, "\n")
+	if !strings.Contains(got, "id: 1") || !strings.Contains(got, "event: branch.updated") || !strings.Contains(got, `data: {"name":"x"}`) {
+		t.Errorf("stream = %q", got)
+	}
+}

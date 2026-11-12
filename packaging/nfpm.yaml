@@ -1,0 +1,72 @@
+# Debian package definition. Built with `make deb`.
+name: db-branch
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+version_schema: none
+section: database
+priority: optional
+maintainer: MaSuCcHI <MaSuCcHI@users.noreply.github.com>
+homepage: https://github.com/db-branch/db-branch
+license: Apache-2.0
+description: |-
+  Instant database branches on ZFS clones
+   db-branch creates, resets and deletes MySQL and PostgreSQL database
+   branches in seconds using ZFS clones, optionally clustered across
+   several machines with ProxySQL routing.
+
+depends:
+  - zfsutils-linux
+  - tar
+  - xz-utils
+  # Shared libraries the upstream MySQL binaries need.
+  - libaio1t64 | libaio1
+  - libnuma1
+  # The MySQL 8.0 client links ncurses 5; db-branch points it at ncurses 6.
+  - libncurses6
+  # ... and the upstream PostgreSQL (PGDG) binaries. ICU and libxml2 are named
+  # per release: 24.04 has libicu74 and libxml2, 26.04 libicu78 and libxml2-16.
+  - libicu74 | libicu76 | libicu78
+  - libxml2 | libxml2-16
+  - libxslt1.1
+  - liblz4-1
+  - libzstd1
+  - libldap2
+  - libgssapi-krb5-2
+  - libpam0g
+  - liburing2
+  - libreadline8t64
+recommends:
+  # ProxySQL routes connections to every branch in the cluster (design.md
+  # §8). From the db-branch repository; db-branch works without it.
+  - db-branch-proxysql
+
+contents:
+  - src: bin/db-branch
+    dst: /usr/bin/db-branch
+    file_info:
+      mode: 0755
+  - src: packaging/db-branch.service
+    dst: /usr/lib/systemd/system/db-branch.service
+  - src: packaging/db-branch-mysqld@.service
+    dst: /usr/lib/systemd/system/db-branch-mysqld@.service
+  - src: packaging/db-branch-postgres@.service
+    dst: /usr/lib/systemd/system/db-branch-postgres@.service
+  - src: packaging/config.toml
+    dst: /etc/db-branch/config.toml
+    type: config|noreplace
+    file_info:
+      mode: 0640
+  - src: LICENSE
+    dst: /usr/share/doc/db-branch/copyright
+    file_info:
+      mode: 0644
+  - src: NOTICE
+    dst: /usr/share/doc/db-branch/NOTICE
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: packaging/scripts/postinst
+  preremove: packaging/scripts/prerm
+  postremove: packaging/scripts/postrm

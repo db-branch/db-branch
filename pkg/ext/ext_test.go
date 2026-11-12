@@ -1,0 +1,225 @@
+package ext_test
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/db-branch/db-branch/pkg/ext"
+)
+
+var ctx = context.Background()
+
+func TestAllowAuthenticated_ログインしていれば何でも許す(t *testing.T) {
+	a := ext.AllowAuthenticated{}
+	if err := a.Authorize(ctx, ext.Principal{ID: "admin"}, "branch.delete", ext.Resource{Kind: "branch", Name: "x"}); err != nil {
+		t.Error(err)
+	}
+	if err := a.Authorize(ctx, ext.Principal{}, "branch.read", ext.Resource{}); !errors.Is(err, ext.ErrForbidden) {
+		t.Errorf("anonymous: %v", err)
+	}
+}
+
+type sink struct {
+	got []ext.Event
+	err error
+}
+
+func (s *sink) Record(_ context.Context, e ext.Event) error { s.got = append(s.got, e); return s.err }
+
+func TestSinks_全部に配り失敗をまとめて返す(t *testing.T) {
+	a, b := &sink{}, &sink{err: errors.New("disk full")}
+	err := ext.Sinks{a, b}.Record(ctx, ext.Event{Action: "branch.create"})
+	if len(a.got) != 1 || len(b.got) != 1 || err == nil {
+		t.Errorf("a %v b %v err %v", a.got, b.got, err)
+	}
+	if err := (ext.Sinks{}).Record(ctx, ext.Event{}); err != nil {
+		t.Error(err)
+	}
+}
+
+type authFunc func(ext.Credentials) (ext.Principal, error)
+
+func (f authFunc) Authenticate(_ context.Context, c ext.Credentials) (ext.Principal, error) {
+	return f(c)
+}
+
+func TestChain_扱えない資格情報は次へ回す(t *testing.T) {
+	tokens := authFunc(func(c ext.Credentials) (ext.Principal, error) {
+		if c.Token == "" {
+			return ext.Principal{}, ext.ErrUnauthenticated
+		}
+		return ext.Principal{ID: "token:" + c.Token}, nil
+	})
+	passwords := authFunc(func(c ext.Credentials) (ext.Principal, error) {
+		if c.Password != "pw" {
+			return ext.Principal{}, errors.New("wrong password")
+		}
+		return ext.Principal{ID: c.Username}, nil
+	})
+	chain := ext.Chain{tokens, passwords}
+	if p, err := chain.Authenticate(ctx, ext.Credentials{Token: "t1"}); err != nil || p.ID != "token:t1" {
+		t.Errorf("token: %+v %v", p, err)
+	}
+	if p, err := chain.Authenticate(ctx, ext.Credentials{Username: "admin", Password: "pw"}); err != nil || p.ID != "admin" {
+		t.Errorf("password: %+v %v", p, err)
+	}
+	if _, err := chain.Authenticate(ctx, ext.Credentials{Username: "admin", Password: "no"}); err == nil || errors.Is(err, ext.ErrUnauthenticated) {
+		t.Errorf("a decided failure must not fall through: %v", err)
+	}
+	if _, err := (ext.Chain{tokens}).Authenticate(ctx, ext.Credentials{}); !errors.Is(err, ext.ErrUnauthenticated) {
+		t.Errorf("nobody: %v", err)
+	}
+}
+
+type deny string
+
+func (d deny) Authorize(_ context.Context, _ ext.Principal, action string, _ ext.Resource) error {
+	if action == string(d) {
+		return ext.ErrForbidden
+	}
+	return nil
+}
+
+func TestCombine_認証は順に試し認可は全員の許可が要り監査は全員に届く(t *testing.T) {
+	if m := ext.Combine(nil); m.Authenticator != nil || m.Authorizer != nil || m.AuditSink != nil {
+		t.Errorf("no modules: %+v", m)
+	}
+	s1, s2 := &sink{}, &sink{}
+	m := ext.Combine([]ext.Module{
+		{Authorizer: deny("branch.delete"), AuditSink: s1},
+		{Authenticator: authFunc(func(c ext.Credentials) (ext.Principal, error) { return ext.Principal{ID: "x"}, nil }), Authorizer: deny("base.delete"), AuditSink: s2},
+	})
+	if p, _ := m.Authenticator.Authenticate(ctx, ext.Credentials{}); p.ID != "x" {
+		t.Errorf("authenticator: %+v", p)
+	}
+	for action, want := range map[string]bool{"branch.delete": false, "base.delete": false, "branch.read": true} {
+		if err := m.Authorizer.Authorize(ctx, ext.Principal{ID: "x"}, action, ext.Resource{}); (err == nil) != want {
+			t.Errorf("%s: %v", action, err)
+		}
+	}
+	_ = m.AuditSink.Record(ctx, ext.Event{})
+	if len(s1.got) != 1 || len(s2.got) != 1 {
+		t.Errorf("sinks %d %d", len(s1.got), len(s2.got))
+	}
+}
+
+type router struct{ n int }
+
+func (r *router) Route(context.Context, ext.RouteConfig) error { r.n++; return nil }
+
+func TestCombine_振り分けは最初のモジュールのものを使う(t *testing.T) {
+	a, b := &router{}, &router{}
+	m := ext.Combine([]ext.Module{{Name: "audit"}, {Router: a, Ports: map[string]int{"mysql": 6033}}, {Router: b}})
+	_ = m.Router.Route(ctx, ext.RouteConfig{})
+	if a.n != 1 || b.n != 0 || m.Ports["mysql"] != 6033 {
+		t.Errorf("a %d b %d ports %v", a.n, b.n, m.Ports)
+	}
+	if ext.Combine([]ext.Module{{Name: "x"}}).Router != nil {
+		t.Error("no router: want nil")
+	}
+}
+
+// pwAuth is an authenticator whose users (IDs with its prefix) change passwords.
+type pwAuth struct {
+	prefix  string
+	changed *[]string
+}
+
+func (pwAuth) Authenticate(context.Context, ext.Credentials) (ext.Principal, error) {
+	return ext.Principal{}, ext.ErrUnauthenticated
+}
+
+func (a pwAuth) ChangePassword(_ context.Context, p ext.Principal, _, next string) error {
+	if !strings.HasPrefix(p.ID, a.prefix) {
+		return ext.ErrUnauthenticated
+	}
+	*a.changed = append(*a.changed, p.ID+"="+next)
+	return nil
+}
+
+type plainAuth struct{}
+
+func (plainAuth) Authenticate(context.Context, ext.Credentials) (ext.Principal, error) {
+	return ext.Principal{}, ext.ErrUnauthenticated
+}
+
+func TestCombine_パスワードを変えられる認証を引き継ぐ(t *testing.T) {
+	var changed []string
+	all := ext.Combine([]ext.Module{{Authenticator: plainAuth{}}, {Authenticator: pwAuth{"user:", &changed}}, {Authenticator: pwAuth{"sso:", &changed}}})
+	pc, ok := all.Authenticator.(ext.PasswordChanger)
+	if !ok {
+		t.Fatal("combined authenticator should change passwords")
+	}
+	if err := pc.ChangePassword(ctx, ext.Principal{ID: "sso:bob"}, "a", "b"); err != nil || len(changed) != 1 || changed[0] != "sso:bob=b" {
+		t.Errorf("%v %v", err, changed)
+	}
+	if err := pc.ChangePassword(ctx, ext.Principal{ID: "token:x"}, "a", "b"); !errors.Is(err, ext.ErrUnauthenticated) {
+		t.Errorf("nobody's user: %v", err)
+	}
+	if _, ok := ext.Combine([]ext.Module{{Authenticator: plainAuth{}}}).Authenticator.(ext.PasswordChanger); ok {
+		t.Error("no module changes passwords")
+	}
+}
+
+type pol struct {
+	deny  error
+	share bool
+}
+
+func (p pol) CheckBranch(context.Context, ext.Principal, ext.BranchRequest) error { return p.deny }
+func (p pol) SharesBranches(context.Context, ext.Principal, string) bool          { return p.share }
+
+func TestCombine_ブランチの方針は全員が許せば作れどれかが許せば共有する(t *testing.T) {
+	no := errors.New("no")
+	all := ext.Combine([]ext.Module{{BranchPolicy: pol{}}, {BranchPolicy: pol{share: true}}})
+	if err := all.BranchPolicy.CheckBranch(ctx, ext.Principal{}, ext.BranchRequest{}); err != nil {
+		t.Errorf("allowed: %v", err)
+	}
+	if !all.BranchPolicy.SharesBranches(ctx, ext.Principal{}, "x") {
+		t.Error("one shares")
+	}
+	deny := ext.Combine([]ext.Module{{BranchPolicy: pol{}}, {BranchPolicy: pol{deny: no}}})
+	if err := deny.BranchPolicy.CheckBranch(ctx, ext.Principal{}, ext.BranchRequest{}); !errors.Is(err, no) {
+		t.Errorf("denied: %v", err)
+	}
+	if deny.BranchPolicy.SharesBranches(ctx, ext.Principal{}, "x") {
+		t.Error("none shares")
+	}
+	if ext.Combine(nil).BranchPolicy != nil {
+		t.Error("no policy")
+	}
+}
+
+type follower struct {
+	runs []ext.MaskRun
+	err  error
+	got  [2]string
+}
+
+func (f *follower) AfterRefresh(_ context.Context, base, snapshot string) ([]ext.MaskRun, error) {
+	f.got = [2]string{base, snapshot}
+	return f.runs, f.err
+}
+
+func TestCombine_更新後のマスク実行はモジュールをまたいで連結し一つの失敗で他を止めない(t *testing.T) {
+	a := &follower{runs: []ext.MaskRun{{Target: "dev", Masker: "greenmask"}}}
+	bad := &follower{err: errors.New("licence expired"), runs: []ext.MaskRun{{Target: "ignored"}}}
+	c := &follower{runs: []ext.MaskRun{{Target: "qa", Masker: "anon"}}}
+	out := ext.Combine([]ext.Module{{Name: "a", RefreshFollower: a}, {Name: "none"}, {Name: "bad", RefreshFollower: bad}, {Name: "c", RefreshFollower: c}})
+	runs, err := out.RefreshFollower.AfterRefresh(ctx, "prod", "s1")
+	want := []ext.MaskRun{{Target: "dev", Masker: "greenmask"}, {Target: "qa", Masker: "anon"}}
+	if err != nil || len(runs) != 2 || runs[0] != want[0] || runs[1] != want[1] {
+		t.Errorf("runs %v err %v", runs, err)
+	}
+	if c.got != [2]string{"prod", "s1"} {
+		t.Errorf("got %v", c.got)
+	}
+}
+
+func TestCombine_更新後のマスク実行を持つモジュールがなければ空のまま(t *testing.T) {
+	if out := ext.Combine([]ext.Module{{Name: "a"}}); out.RefreshFollower != nil {
+		t.Errorf("%v", out.RefreshFollower)
+	}
+}

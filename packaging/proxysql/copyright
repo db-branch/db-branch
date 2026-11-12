@@ -1,0 +1,12 @@
+db-branch-proxysql (Apache-2.0) is the db-branch module that configures
+ProxySQL, and depends on ProxySQL.
+
+ProxySQL is Copyright ProxySQL LLC and contributors, licensed under the GNU
+General Public License version 3 (GPL-3.0). The proxysql package in the
+db-branch APT repository is the unmodified official release from
+https://github.com/sysown/proxysql/releases. Its complete corresponding
+source is published in the same repository, next to the binaries:
+
+  pool/main/p/proxysql/proxysql-<version>.tar.gz
+
+and upstream at https://github.com/sysown/proxysql.
