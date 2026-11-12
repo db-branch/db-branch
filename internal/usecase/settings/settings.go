@@ -148,3 +148,12 @@ func Check(def ext.Setting, v string) error {
 	}
 	return nil
 }
+
+// NonNegativeInt checks a count setting: a whole number from 0 to 100000.
+func NonNegativeInt(v string) error {
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > 100000 {
+		return errors.New("must be a whole number from 0 to 100000")
+	}
+	return nil
+}

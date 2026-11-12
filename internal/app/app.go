@@ -165,12 +165,17 @@ func New(cfg config.Config) (*App, error) {
 		// Scheduled refreshes: dumps (unmasked data) live here only while loading.
 		Dumper:    srcdump.Dumper{WorkDir: filepath.Join(cfg.DataDir, "refresh"), Stream: run.StreamEnv},
 		AutoPrune: pruneSnapshots.Load,
-		Pool:      pool,
-		Node:      hostname(),
-		Ports:     dbbranch.PortRange{Min: cfg.Ports.Min, Max: cfg.Ports.Max},
-		MemoryMB:  cfg.Branch.MemoryMB,
-		Clock:     time.Now,
-		Password:  Password,
+		// Checkpoints rename, promote and label ZFS datasets: only this node's own ZFS.
+		MaxCheckpoints: func() int { return int(maxCheckpoints.Load()) },
+		Pool:           pool,
+		Node:           hostname(),
+		Ports:          dbbranch.PortRange{Min: cfg.Ports.Min, Max: cfg.Ports.Max},
+		MemoryMB:       cfg.Branch.MemoryMB,
+		Clock:          time.Now,
+		Password:       Password,
+	}
+	if cfg.Storage == "" {
+		a.branches.Lineage = zfs.New(run)
 	}
 	return a, nil
 }

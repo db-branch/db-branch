@@ -167,7 +167,7 @@ func TestMCP_トークンで接続しブランチを作って使える(t *testin
 	}
 	defer s.Close()
 	tools, err := s.ListTools(context.Background(), nil)
-	if err != nil || len(tools.Tools) != 8 {
+	if err != nil || len(tools.Tools) != 11 {
 		t.Fatalf("tools: %v %v", err, tools)
 	}
 	out, isErr := callText(t, s, "create_branch", map[string]any{"name": "feature-x", "base": "prod", "ttl": "4h", "access": "open"})
@@ -201,6 +201,40 @@ func TestMCP_トークンで接続しブランチを作って使える(t *testin
 	// Every tool call was authorized and audited as the token's principal.
 	got := strings.Join(sink.actions(), " ")
 	for _, want := range []string{"branch.create:token:dev:branch/feature-x:ok", "branch.query:token:dev:branch/feature-x:ok", "branch.delete:token:dev:branch/feature-x:ok"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("audit lacks %s: %s", want, got)
+		}
+	}
+}
+
+func TestMCP_危ない作業の前にチェックポイントを取り失敗したら戻せる(t *testing.T) {
+	httpapi.MCPPoll = time.Millisecond
+	f := checkpointFixture(t)
+	sink := &recordingSink{}
+	f.srv.TokenAuth, f.srv.Ext = &fakeTokens{}, ext.Module{AuditSink: sink}
+	s, err := mcpSession(t, f, "t-branches")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	out, isErr := callText(t, s, "create_checkpoint", map[string]any{"branch": "x", "name": "before-migration"})
+	if isErr || !strings.Contains(out, `"name": "before-migration"`) {
+		t.Errorf("create: %v %s", isErr, out)
+	}
+	if out, isErr := callText(t, s, "create_checkpoint", map[string]any{"branch": "x"}); isErr || !strings.Contains(out, "20261109-120000") {
+		t.Errorf("create without a name: %v %s", isErr, out)
+	}
+	if out, isErr := callText(t, s, "list_checkpoints", map[string]any{"branch": "x"}); isErr || !strings.Contains(out, `"name": "c1"`) || !strings.Contains(out, `"current": true`) {
+		t.Errorf("list: %v %s", isErr, out)
+	}
+	if out, isErr := callText(t, s, "restore_checkpoint", map[string]any{"branch": "x", "checkpoint": "c1"}); isErr || !strings.Contains(out, "restored") {
+		t.Errorf("restore: %v %s", isErr, out)
+	}
+	if out, isErr := callText(t, s, "restore_checkpoint", map[string]any{"branch": "x", "checkpoint": "nope"}); !isErr || !strings.Contains(out, "not found") {
+		t.Errorf("restore unknown: %v %s", isErr, out)
+	}
+	got := strings.Join(sink.actions(), " ")
+	for _, want := range []string{"branch.checkpoint:token:dev:branch/x:ok", "branch.restore:token:dev:branch/x:ok"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("audit lacks %s: %s", want, got)
 		}

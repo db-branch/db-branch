@@ -132,3 +132,16 @@ func TestPut_項目ごとの追加検査で断り通ったものは保存する(
 		t.Fatal(err)
 	}
 }
+
+func TestNonNegativeInt_負の数と整数でない値を断る(t *testing.T) {
+	for _, ok := range []string{"0", "20", "1000"} {
+		if err := settings.NonNegativeInt(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"-1", "x", "1.5", "100001"} {
+		if err := settings.NonNegativeInt(bad); err == nil {
+			t.Errorf("%q: want an error", bad)
+		}
+	}
+}

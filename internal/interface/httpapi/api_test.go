@@ -42,6 +42,9 @@ type fakeBranches struct {
 	place     string
 	placeErr  error
 	refreshes map[string]domain.BaseRefresh
+	// cps are the checkpoints every branch has; cpErr fails checkpoint calls.
+	cps   []domain.Checkpoint
+	cpErr error
 }
 
 func (f *fakeBranches) PlaceRecreate(_ context.Context, n domain.Name) (string, error) {

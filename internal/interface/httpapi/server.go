@@ -33,6 +33,10 @@ type Branches interface {
 	GetBranch(ctx context.Context, name domain.Name) (domain.Branch, error)
 	ListBranches(ctx context.Context) ([]domain.Branch, error)
 	BranchStorage(ctx context.Context, name domain.Name) (domain.DatasetInfo, error)
+	ListCheckpoints(ctx context.Context, name domain.Name) ([]domain.Checkpoint, error)
+	CreateCheckpoint(ctx context.Context, name domain.Name, checkpoint string) (domain.Checkpoint, error)
+	RestoreCheckpoint(ctx context.Context, name domain.Name, checkpoint string, report dbbranch.Reporter) (domain.Branch, error)
+	DeleteCheckpoint(ctx context.Context, name domain.Name, checkpoint string) error
 
 	CreateBase(ctx context.Context, req dbbranch.CreateBaseRequest, report dbbranch.Reporter) (domain.Base, error)
 	SnapshotBase(ctx context.Context, name domain.Name, report dbbranch.Reporter) (domain.BaseSnapshot, error)
@@ -212,6 +216,10 @@ func (s *Server) routes(mux *http.ServeMux, local bool) {
 	r("DELETE /v1/branches/{name}", "branch.delete", s.named(s.deleteBranch))
 	r("POST /v1/branches/{name}/reset", "branch.reset", s.named(s.resetBranch))
 	r("POST /v1/branches/{name}/recreate", "branch.recreate", s.named(s.recreateBranch))
+	r("GET /v1/branches/{name}/checkpoints", "branch.checkpoint.read", s.named(s.listCheckpoints))
+	r("POST /v1/branches/{name}/checkpoints", "branch.checkpoint", s.named(s.createCheckpoint))
+	r("POST /v1/branches/{name}/checkpoints/{checkpoint}/restore", "branch.restore", s.named(s.restoreCheckpoint))
+	r("DELETE /v1/branches/{name}/checkpoints/{checkpoint}", "branch.checkpoint_delete", s.named(s.deleteCheckpoint))
 	r("GET /v1/branches/{name}/dsn", "branch.connect", s.named(s.branchDSN))
 	r("POST /v1/branches/{name}/query", "branch.query", s.named(s.queryBranch))
 

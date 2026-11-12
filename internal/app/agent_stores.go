@@ -78,6 +78,9 @@ func newNotifier(st notify.State) *notify.Service {
 		}}
 }
 
+// maxCheckpoints follows the branch.max_checkpoints setting.
+var maxCheckpoints = newInt64(domain.DefaultMaxCheckpoints)
+
 // pruneSnapshots follows the base.prune_snapshots setting.
 var pruneSnapshots = newBool(true)
 

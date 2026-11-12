@@ -232,10 +232,16 @@ func (a *App) branchCommand() *cobra.Command {
 			})(cmd, args)
 		},
 	}
-	for _, c := range []*cobra.Command{create, reset, recreate, del} {
+	restore := &cobra.Command{
+		Use:   "restore <name> <checkpoint>",
+		Short: "Put a branch back to a checkpoint (nothing is lost: see 'branch checkpoints')",
+		Args:  cobra.ExactArgs(2),
+		RunE:  a.restoreCheckpoint(&noWait),
+	}
+	for _, c := range []*cobra.Command{create, reset, recreate, del, restore} {
 		c.Flags().BoolVar(&noWait, "no-wait", false, "print the operation ID and return immediately")
 	}
-	cmd.AddCommand(create, list, show, dsn, reset, recreate, del, extend)
+	cmd.AddCommand(create, list, show, dsn, reset, recreate, del, extend, a.checkpointCommand(), a.checkpointsCommand(), restore)
 	return cmd
 }
 

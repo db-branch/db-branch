@@ -20,7 +20,10 @@ import (
 const mcpInstructions = `db-branch gives you disposable copies (branches) of real databases.
 Create a branch from a base, work in it freely (query, change data or schema),
 reset it to start over, and delete it when done. Branches are isolated: nothing
-you do reaches the base or other branches. Prefer a short ttl (e.g. "4h").`
+you do reaches the base or other branches. Prefer a short ttl (e.g. "4h").
+Before risky work (a migration, a bulk update) take a checkpoint with
+create_checkpoint; if it goes wrong, restore_checkpoint puts the branch back.
+Restoring loses nothing: the state you leave is kept as another checkpoint.`
 
 // internalMux serves tool calls through the same routes (and so the same
 // authorization and audit) as HTTP clients.
@@ -127,6 +130,20 @@ type extendIn struct {
 	TTL  string `json:"ttl" jsonschema:"new time to live from now, e.g. 24h"`
 }
 
+type branchIn struct {
+	Branch string `json:"branch" jsonschema:"the branch"`
+}
+
+type checkpointIn struct {
+	Branch string `json:"branch" jsonschema:"the branch to take a checkpoint of"`
+	Name   string `json:"name,omitempty" jsonschema:"checkpoint name: lowercase letters, digits and hyphens; default the current time"`
+}
+
+type restoreIn struct {
+	Branch     string `json:"branch" jsonschema:"the branch to restore"`
+	Checkpoint string `json:"checkpoint" jsonschema:"the checkpoint name (see list_checkpoints)"`
+}
+
 type queryIn struct {
 	Branch  string `json:"branch" jsonschema:"the branch to run on"`
 	SQL     string `json:"sql" jsonschema:"one SQL statement"`
@@ -208,6 +225,32 @@ func (s *Server) mcpServer(r *http.Request) *mcp.Server {
 			var out any
 			_ = json.Unmarshal(body, &out)
 			return text(out), nil, nil
+		})
+	mcp.AddTool(srv, &mcp.Tool{Name: "create_checkpoint", Description: "Save the branch's current state as a checkpoint (instant, the branch keeps running). Take one before risky work so restore_checkpoint can undo it."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in checkpointIn) (*mcp.CallToolResult, any, error) {
+			status, body := s.call(ctx, r, http.MethodPost, "/v1/branches/"+url.PathEscape(in.Branch)+"/checkpoints", map[string]string{"name": in.Name})
+			if status >= 300 {
+				return nil, nil, apiError(status, body)
+			}
+			var out any
+			_ = json.Unmarshal(body, &out)
+			return text(out), nil, nil
+		})
+	mcp.AddTool(srv, &mcp.Tool{Name: "list_checkpoints", Description: "List a branch's checkpoints, oldest first. current marks the one its data descends from; auto marks those taken before a restore."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in branchIn) (*mcp.CallToolResult, any, error) {
+			var out map[string]any
+			if err := s.get(ctx, r, "/v1/branches/"+url.PathEscape(in.Branch)+"/checkpoints", &out); err != nil {
+				return nil, nil, err
+			}
+			return text(out["items"]), nil, nil
+		})
+	mcp.AddTool(srv, &mcp.Tool{Name: "restore_checkpoint", Description: "Put a branch back to a checkpoint (it restarts briefly). Nothing is lost: the state it leaves is saved as an automatic checkpoint and every other checkpoint stays restorable."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in restoreIn) (*mcp.CallToolResult, any, error) {
+			path := "/v1/branches/" + url.PathEscape(in.Branch) + "/checkpoints/" + url.PathEscape(in.Checkpoint) + "/restore"
+			if err := s.startAndWait(ctx, r, http.MethodPost, path, nil); err != nil {
+				return nil, nil, err
+			}
+			return text(map[string]string{"branch": in.Branch, "checkpoint": in.Checkpoint, "result": "restored"}), nil, nil
 		})
 	mcp.AddTool(srv, &mcp.Tool{Name: "query", Description: "Run one SQL statement in a branch and return its rows (as text) or the number of affected rows. Changes stay in the branch."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryIn) (*mcp.CallToolResult, any, error) {

@@ -36,6 +36,8 @@ func coreSettings(cfg config.Config) []ext.Setting {
 	return []ext.Setting{
 		{Key: "branch.memory_mb", Label: "Branch memory (MB)", Type: "int", Default: strconv.Itoa(cfg.Branch.MemoryMB),
 			Help: "InnoDB buffer pool / shared_buffers of each branch server. Branches started from now on use it."},
+		{Key: "branch.max_checkpoints", Label: "Checkpoints per branch", Type: "int", Default: strconv.Itoa(domain.DefaultMaxCheckpoints),
+			Help: "The most checkpoints one branch may hold, over all its lines of history. The checkpoint taken automatically before a restore may exceed it by one. Each checkpoint keeps the data it protects, so it uses disk space as the branch changes. 0: none."},
 		{Key: "branch.default_ttl", Label: "Default TTL", Type: "duration", Default: "",
 			Help: "Expiry for branches created without one, e.g. 72h. Empty: no expiry."},
 		{Key: "ports.min", Label: "First branch port", Type: "int", Default: strconv.Itoa(cfg.Ports.Min)},
@@ -85,7 +87,7 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 	mods []*plugin.Loaded, moduleSettings map[string][]ext.Setting, loadedNames []string, nodes func() int,
 	problems *moduleProblems, arc *arcNode, rolled func(context.Context) map[string]string, leading func() bool, log *slog.Logger) func() {
 	set := &settings.Service{Core: coreSettings(cfg), Modules: func() map[string][]ext.Setting { return moduleSettings },
-		Checks: map[string]func(string) error{"zfs.arc_max": arc.ctl.Check}}
+		Checks: map[string]func(string) error{"zfs.arc_max": arc.ctl.Check, "branch.max_checkpoints": settings.NonNegativeInt}}
 	if st, ok := svc.Store.(domain.SettingsStore); ok {
 		set.Store = st
 		srv.Settings = set
@@ -133,6 +135,9 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 			}
 			if n, err := strconv.Atoi(v["branch.anonymous_rate"]); err == nil && n >= 0 {
 				anonRate.Store(int64(n))
+			}
+			if n, err := strconv.Atoi(v["branch.max_checkpoints"]); err == nil && n >= 0 {
+				maxCheckpoints.Store(int64(n))
 			}
 			pruneSnapshots.Store(v["base.prune_snapshots"] != "false")
 			updateAutoCheck.Store(v["update.auto_check"] == "true")

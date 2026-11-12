@@ -121,9 +121,7 @@ func (c *clusterRuntime) heartbeat(ctx context.Context, log *slog.Logger) {
 			n.Modules = c.modules
 		}
 		if c.pool != "" {
-			if u, err := zfs.New(execx.Runner{}).Usage(ctx, c.pool+"/db-branch/branches"); err == nil {
-				n.Usage = u
-			}
+			n.Usage = branchUsage(ctx, c.pool)
 		}
 		if err := c.store.PutNode(ctx, n); err != nil {
 			log.Debug("heartbeat", "err", err)
@@ -276,4 +274,23 @@ func (c *clusterRuntime) membershipLoop(ctx context.Context, log *slog.Logger) {
 		case <-time.After(heartbeatEvery):
 		}
 	}
+}
+
+// branchUsage is the space each branch uses on this node: its live dataset
+// plus the lines and checkpoints set aside (history).
+func branchUsage(ctx context.Context, pool string) map[string]domain.Usage {
+	z := zfs.New(execx.Runner{})
+	usage, err := z.Usage(ctx, pool+"/db-branch/branches")
+	if err != nil {
+		return nil
+	}
+	if history, err := z.Usage(ctx, pool+"/db-branch/history"); err == nil {
+		for name, h := range history {
+			if u, ok := usage[name]; ok {
+				u.Used += h.Used
+				usage[name] = u
+			}
+		}
+	}
+	return usage
 }
