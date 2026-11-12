@@ -379,6 +379,10 @@ type BranchState struct {
 	Record    bool      `json:"record"`
 	Anonymous bool      `json:"anonymous"`
 	CreatedAt time.Time `json:"created_at"`
+	// Base and Snapshot are what the branch was made from (empty from an
+	// agent that does not tell).
+	Base     string `json:"base,omitempty"`
+	Snapshot string `json:"snapshot,omitempty"`
 }
 
 // CheckpointInfo is one checkpoint (see docs/checkpoints.md).
@@ -457,8 +461,23 @@ type BranchHost interface {
 	EndOperation(ctx context.Context, id, failure string) error
 }
 
+// ModuleAPI lets a module call its own API (its Handler) through the agent,
+// the way a client would, and so reach the same module on another node: a
+// request below /branches/<name>/ is answered by the node holding the
+// branch, and "node=<name>" in RawQuery names a node. The call is
+// authorized as the module's ext.<module>.read (GET) or .write action for
+// r.Principal, which the module passes on from the request it is serving,
+// and a write is audited like any other. Host.API is nil when the agent is
+// older than the module.
+type ModuleAPI interface {
+	Call(ctx context.Context, r Request) (Response, error)
+}
+
 // Host is what the agent gives a module at start.
 type Host struct {
+	// API is the module's way to call its own API on any node (see
+	// ModuleAPI). Nil when the agent is older than the module.
+	API ModuleAPI
 	// Branches lets the module work with this node's branches. Nil when the
 	// agent is older than the module.
 	Branches BranchHost

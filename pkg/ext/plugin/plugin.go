@@ -162,6 +162,8 @@ type StartArgs struct {
 	StoreID       uint32
 	// BranchesID is the broker stream of the agent's BranchHost (0: none).
 	BranchesID uint32
+	// APIID is the broker stream of the agent's ModuleAPI (0: none).
+	APIID uint32
 }
 
 func (s *rpcServer) Start(a StartArgs, out *RPCError) error {
@@ -181,6 +183,14 @@ func (s *rpcServer) Start(a StartArgs, out *RPCError) error {
 			return nil
 		}
 		h.Branches = &hostRemote{c: rpc.NewClient(bconn)}
+	}
+	if a.APIID != 0 {
+		aconn, err := s.broker.Dial(a.APIID)
+		if err != nil {
+			*out = toRPC(err)
+			return nil
+		}
+		h.API = &apiRemote{c: rpc.NewClient(aconn)}
 	}
 	*out = toRPC(s.m.Starter.Start(context.Background(), h))
 	return nil
@@ -548,6 +558,10 @@ func (r *Remote) Start(_ context.Context, h ext.Host) error {
 	if h.Branches != nil {
 		args.BranchesID = r.broker.NextId()
 		go r.broker.AcceptAndServe(args.BranchesID, &BranchHostServer{H: h.Branches})
+	}
+	if h.API != nil {
+		args.APIID = r.broker.NextId()
+		go r.broker.AcceptAndServe(args.APIID, &APIServer{A: h.API})
 	}
 	var out RPCError
 	if err := r.c.Call("Plugin.Start", args, &out); err != nil {

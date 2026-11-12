@@ -335,7 +335,7 @@ func wireModuleHooks(svc *dbbranch.Service, m ext.Module) {
 
 // startModules gives each module its host: node-local directory and its
 // cluster-wide store (unavailable before `db-branch init`).
-func startModules(ctx context.Context, a *App, cfg config.Config, node string, mods []*plugin.Loaded, branches ext.BranchHost, log *slog.Logger) {
+func startModules(ctx context.Context, a *App, cfg config.Config, node string, mods []*plugin.Loaded, branches ext.BranchHost, api func(module string) ext.ModuleAPI, log *slog.Logger) {
 	var data domain.ModuleDataStore
 	if svc, err := a.Branches(); err == nil {
 		data, _ = svc.Store.(domain.ModuleDataStore)
@@ -349,7 +349,7 @@ func startModules(ctx context.Context, a *App, cfg config.Config, node string, m
 			log.Error("module directory", "module", m.Info.Name, "err", err)
 			continue
 		}
-		h := ext.Host{Node: node, DataDir: dir, Store: moduledata.For(data, m.Info.Name), Branches: branches}
+		h := ext.Host{Node: node, DataDir: dir, Store: moduledata.For(data, m.Info.Name), Branches: branches, API: api(m.Info.Name)}
 		if err := m.Module.Starter.Start(ctx, h); err != nil {
 			log.Error("starting module", "module", m.Info.Name, "err", err)
 		}

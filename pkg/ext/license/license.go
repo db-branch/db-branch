@@ -82,13 +82,14 @@ const (
 	FeatureSSO     = "sso"     // single sign-on (auth)
 	FeatureMasking = "masking" // masking governance (masking)
 	FeatureHistory = "history" // recording a branch's changes and restoring to any point (history)
+	FeatureDiff    = "diff"    // comparing the data and schema of two branches (diff)
 )
 
 // planFeatures is the one place that says which plan includes which feature.
-// History is in both plans for now: to move it, change only these lists.
+// History and diff are in both plans for now: to move one, change only these lists.
 var planFeatures = map[string][]string{
-	Team:     {FeatureUsers, FeatureHistory},
-	Business: {FeatureUsers, FeatureAudit, FeatureSSO, FeatureMasking, FeatureHistory},
+	Team:     {FeatureUsers, FeatureHistory, FeatureDiff},
+	Business: {FeatureUsers, FeatureAudit, FeatureSSO, FeatureMasking, FeatureHistory, FeatureDiff},
 }
 
 var planNodes = map[string]int{Team: 5, Business: 10}

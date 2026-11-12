@@ -85,3 +85,16 @@ func main() {
 - `POST /v1/branches` の `record: true` は `ServerOptioner` が受け付けたときだけ通る。`GET /v1/capabilities` の `record` が true のとき、コンソールは作成画面にチェックボックスを出す
 - `GET /v1/branches/{name}/checkpoints` は `lines`（線の構造: 番号・現在の線か・親の線・元のチェックポイント）、`live`、`head` を足して返す。コンソールのグラフはこれで描く
 - ライセンス: `license.FeatureHistory`（`history`）。どのプランに入れるかは `pkg/ext/license` の `planFeatures` の 1 か所
+
+## 自分のモジュールを他のノードで呼ぶ（diff モジュール向け）
+
+2 つのブランチのデータとスキーマを比べる有償モジュール `diff`（`db-branch-modules` の `docs/diff.md`）のために足した拡張点。追加のみ。古い agent では `Host.API` が nil になる。
+
+| 拡張点 | 内容 |
+|---|---|
+| `ext.Host.API`（`ext.ModuleAPI`） | `Call(ctx, ext.Request) (ext.Response, error)`。モジュールが**自分自身の API**（`Handler`）を、クライアントが呼ぶのと同じ経路で呼ぶ。`/branches/<名前>/...` のパスはそのブランチを持つノードのモジュールが、`RawQuery` に `node=<ノード>` を付ければそのノードのモジュールが答える。モジュールが `Request.Principal` に渡した利用者として `ext.<モジュール>.read`（GET）・`.write`（それ以外）を認可し、書き込みは監査する |
+| `ext.BranchState.Base` / `Snapshot` | ブランチの作成元のベースとスナップショット |
+
+- 用途: ブランチ A のノードで動くモジュールが、別のノードにあるブランチ B の中身（チェックサムや行）を、B のノードのモジュールに頼む。データベースの認証情報はノードの外に出ない（各ノードのモジュールがローカルのソケットで自分のブランチだけを読み、結果だけが agent 間の相互 TLS を通る）
+- `Principal` は呼び出し元のモジュールが責任を持つ（モジュールは agent と同じ信頼の内側で動く）。受けた要求の利用者をそのまま渡すこと
+- ライセンス: `license.FeatureDiff`（`diff`）。Team と Business の両方（`planFeatures` の 1 か所）
