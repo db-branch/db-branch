@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/db-branch/db-branch/internal/domain"
 )
 
 // requestCounter counts API requests by action and outcome on this node.
@@ -155,6 +157,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, svc Branches) {
 	for _, b := range bases {
 		p.sample("dbbranch_base_snapshots", map[string]string{"base": b.Name.String()}, len(b.Snapshots))
 	}
+	nodes := statusNodes(st)
 	p.family("dbbranch_base_replicas_missing", "gauge", "Up nodes that do not hold the base's latest snapshot yet (replication lag).")
 	for _, b := range bases {
 		latest, ok := b.LatestSnapshot()
@@ -165,9 +168,14 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, svc Branches) {
 		for _, n := range b.Holders(latest.Name) {
 			have[s.nodeOf(n)] = true
 		}
+		// Only nodes that are to get a copy count: not those the replica
+		// list leaves out, nor those of another distribution (see holdersOf).
+		origin := b
+		origin.Node = s.nodeOf(b.Node)
+		want := domain.OriginDistro(origin, latest, nodes)
 		missing := 0
-		for node, isUp := range up {
-			if isUp && !have[node] {
+		for _, n := range nodes {
+			if up[n.Name] && !have[n.Name] && b.Wants(n.Name) && domain.SameDistro(want, n.System.Distro) {
 				missing++
 			}
 		}

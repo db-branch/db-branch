@@ -42,7 +42,8 @@ type baseJSON struct {
 	// names the other nodes that do (the base's own node is implied).
 	ReplicaNodes *[]string `json:"replica_nodes"`
 	// Holders says, per node, whether it holds the base ("held"), is pulling
-	// it ("pulling") or still holds a copy it is giving up ("draining").
+	// it ("pulling"), still holds a copy it is giving up ("draining") or is
+	// left out because of its operating system ("skipped", with reason).
 	Holders     []holderJSON `json:"holders"`
 	Operation   *opRef       `json:"operation"`
 	Description string       `json:"description"`
@@ -76,6 +77,10 @@ type holderJSON struct {
 	State string `json:"state"`
 	// Origin marks the node the base lives on.
 	Origin bool `json:"origin"`
+	// Reason says why a "skipped" node gets no copy (e.g. "other OS:
+	// ubuntu-26.04", docs/mixed-os.md) and Distro is that node's distribution.
+	Reason string `json:"reason,omitempty"`
+	Distro string `json:"distro,omitempty"`
 }
 
 // Replica states of a node, as shown in holderJSON.State.
@@ -83,16 +88,28 @@ const (
 	replicaHeld     = "held"
 	replicaPulling  = "pulling"
 	replicaDraining = "draining"
+	// replicaSkipped: wanted by the setting but never copied there, because
+	// a PostgreSQL copy is unusable on another distribution (domain.OriginDistro).
+	replicaSkipped = "skipped"
 )
 
 // holdersOf lists every node that holds, pulls or is draining the base. nodes
 // are all the cluster's nodes (a node that wants a copy but has none yet is
-// pulling).
-func holdersOf(b domain.Base, origin string, nodes []string) []holderJSON {
+// pulling, unless its distribution rules the copy out: then it is skipped).
+func holdersOf(b domain.Base, origin string, nodes []domain.Node) []holderJSON {
 	latest, hasLatest := b.LatestSnapshot()
+	distros := map[string]string{}
+	for _, n := range nodes {
+		distros[n.Name] = n.System.Distro
+	}
+	b.Node = origin
+	want := domain.OriginDistro(b, latest, nodes)
 	seen := map[string]bool{origin: true}
 	out := []holderJSON{{Node: origin, State: replicaHeld, Origin: true}}
-	names := append([]string{}, nodes...)
+	names := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		names = append(names, n.Name)
+	}
 	if b.ReplicaNodes != nil {
 		names = append(names, *b.ReplicaNodes...)
 	}
@@ -112,6 +129,8 @@ func holdersOf(b domain.Base, origin string, nodes []string) []holderJSON {
 			}
 		case hasLatest && b.HasReplica(latest.Name, n):
 			out = append(out, holderJSON{Node: n, State: replicaHeld})
+		case hasLatest && !domain.SameDistro(want, distros[n]):
+			out = append(out, holderJSON{Node: n, State: replicaSkipped, Reason: "other OS: " + distros[n], Distro: distros[n]})
 		case hasLatest:
 			out = append(out, holderJSON{Node: n, State: replicaPulling})
 		}
@@ -119,18 +138,28 @@ func holdersOf(b domain.Base, origin string, nodes []string) []holderJSON {
 	return out
 }
 
-// nodeNames lists the cluster's nodes (this node alone when not clustered).
-func (s *Server) nodeNames(ctx context.Context) []string {
+// clusterNodes lists the cluster's nodes with the system they report (this
+// node alone when not clustered).
+func (s *Server) clusterNodes(ctx context.Context) []domain.Node {
 	if s.Cluster == nil {
-		return []string{s.Node}
+		n := domain.Node{Name: s.Node}
+		if s.System != nil {
+			n.System = s.System(ctx)
+		}
+		return []domain.Node{n}
 	}
 	st, err := s.Cluster.Status(ctx)
 	if err != nil {
 		return nil
 	}
-	out := make([]string, 0, len(st.Nodes))
+	return statusNodes(st)
+}
+
+// statusNodes is the nodes of a cluster status as the domain sees them.
+func statusNodes(st ClusterStatus) []domain.Node {
+	out := make([]domain.Node, 0, len(st.Nodes))
 	for _, n := range st.Nodes {
-		out = append(out, n.Name)
+		out = append(out, domain.Node{Name: n.Name, System: n.System})
 	}
 	return out
 }
@@ -160,7 +189,7 @@ func (s *Server) baseView(ctx context.Context, b domain.Base) baseJSON {
 		v.Replicas[snap] = nodes
 	}
 	v.ReplicaNodes = b.ReplicaNodes
-	v.Holders = holdersOf(b, v.Node, s.nodeNames(ctx))
+	v.Holders = holdersOf(b, v.Node, s.clusterNodes(ctx))
 	for _, snap := range b.Snapshots {
 		v.Snapshots = append(v.Snapshots, snapshotJSON{Name: snap.Name, CreatedAt: ts(snap.CreatedAt), Public: snap.Public, Mask: snap.Mask})
 	}

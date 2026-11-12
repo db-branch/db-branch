@@ -913,9 +913,10 @@ func TestBaseCreateとShow_レプリカ先を指定でき保持ノードを表�
 		t.Error("bad list: want failure")
 	}
 	api.answers["GET /v1/bases/big"] = map[string]any{"name": "big", "status": "ready", "replica_nodes": []string{"n2"},
-		"holders": []any{map[string]any{"node": "n1", "state": "held", "origin": true}, map[string]any{"node": "n3", "state": "draining"}}}
+		"holders": []any{map[string]any{"node": "n1", "state": "held", "origin": true}, map[string]any{"node": "n3", "state": "draining"},
+			map[string]any{"node": "n4", "state": "skipped", "reason": "other OS: ubuntu-26.04", "distro": "ubuntu-26.04"}}}
 	_, out, _ := runAPI(t, api, "base", "show", "big")
-	for _, want := range []string{"origin + n2", "n1  origin", "n3  draining"} {
+	for _, want := range []string{"origin + n2", "n1  origin", "n3  draining", "n4  skipped (other OS: ubuntu-26.04)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show lacks %q:\n%s", want, out)
 		}

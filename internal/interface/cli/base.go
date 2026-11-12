@@ -23,6 +23,7 @@ type baseView struct {
 		Node   string `json:"node"`
 		State  string `json:"state"`
 		Origin bool   `json:"origin"`
+		Reason string `json:"reason"`
 	} `json:"holders"`
 	LatestSnapshot *string `json:"latest_snapshot"`
 	Snapshots      []struct {
@@ -141,6 +142,8 @@ func (a *App) baseCommand() *cobra.Command {
 				role := h.State
 				if h.Origin {
 					role = "origin"
+				} else if h.State == "skipped" && h.Reason != "" {
+					role = "skipped (" + h.Reason + ")"
 				}
 				fmt.Fprintf(tw, "Holder:\t%s  %s\n", h.Node, role)
 			}

@@ -197,3 +197,27 @@ func TestNodeSystem_OrUnknown_報告のない項目をunknownにする(t *testin
 		t.Errorf("got %+v", got)
 	}
 }
+
+func TestOriginDistro_記録があればそれ_なければ担当ノードがいま報告する値_MySQLは見ない(t *testing.T) {
+	nodes := []domain.Node{
+		{Name: "a", System: domain.NodeSystem{Distro: "ubuntu-24.04"}},
+		{Name: "b", System: domain.NodeSystem{Distro: "ubuntu-26.04"}},
+	}
+	pg := domain.RuntimeRef{Engine: domain.Postgres, Version: "18.6"}
+	my := domain.RuntimeRef{Engine: domain.MySQL, Version: "8.4.13"}
+	for _, tc := range []struct {
+		name string
+		base domain.Base
+		snap domain.BaseSnapshot
+		want string
+	}{
+		{"記録あり", domain.Base{Node: "a", Runtime: pg}, domain.BaseSnapshot{Distro: "ubuntu-26.04"}, "ubuntu-26.04"},
+		{"記録なしは担当ノードの値", domain.Base{Node: "a", Runtime: pg}, domain.BaseSnapshot{}, "ubuntu-24.04"},
+		{"担当ノードが一覧にない", domain.Base{Node: "z", Runtime: pg}, domain.BaseSnapshot{}, ""},
+		{"MySQLは空", domain.Base{Node: "a", Runtime: my}, domain.BaseSnapshot{Distro: "ubuntu-26.04"}, ""},
+	} {
+		if got := domain.OriginDistro(tc.base, tc.snap, nodes); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

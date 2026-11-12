@@ -41,6 +41,25 @@ func CollationBound(e Engine) bool { return e == Postgres }
 // block: it cannot be shown to differ.
 func SameDistro(want, have string) bool { return want == "" || have == "" || want == have }
 
+// OriginDistro is the distribution a copy of snap of base must run on, or ""
+// when the engine does not care or it is not known. It is the one recorded on
+// the snapshot, else (for snapshots made before it was recorded) the one the
+// base's node reports now.
+func OriginDistro(base Base, snap BaseSnapshot, nodes []Node) string {
+	if !CollationBound(base.Runtime.Engine) {
+		return ""
+	}
+	if snap.Distro != "" {
+		return snap.Distro
+	}
+	for _, n := range nodes {
+		if n.Name == base.Node {
+			return n.System.Distro
+		}
+	}
+	return ""
+}
+
 // ErrDistroMismatch explains why a PostgreSQL base cannot be used on a node
 // of another distribution. It is a conflict (HTTP 409).
 func ErrDistroMismatch(node, have, want string) error {
