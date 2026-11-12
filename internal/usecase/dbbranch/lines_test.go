@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/usecase/dbbranch"
 )
 
 func TestOpenLine_ライブは自分のディレクトリを退避した線と過去の時点は読み取り専用でマウントする(t *testing.T) {
@@ -88,5 +89,27 @@ func TestBranchAdmin_ブランチのサーバーに管理者として入る方�
 	z.sim.readFail = "Info"
 	if _, err := z.svc.BranchAdmin(ctx, name("x")); err == nil {
 		t.Error("info failure: want error")
+	}
+}
+
+func TestOpenLine_作成時の状態はリセット点として開く(t *testing.T) {
+	z := newZEnv(t)
+	z.history(t)
+	z.restore(t, "c1")
+	dir, err := z.svc.OpenLine(ctx, name("x"), 0, dbbranch.ResetPoint)
+	if err != nil || !z.j.has("mount ro "+live+"@reset") {
+		t.Fatalf("dir=%q err=%v journal=%v", dir, err, z.j.entries)
+	}
+	if err := z.svc.CloseLine(ctx, dir); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestOpenLine_リセット点が無ければ見つからない(t *testing.T) {
+	z := newZEnv(t)
+	z.history(t)
+	z.sim.ds[live].snaps = z.sim.ds[live].snaps[1:] // drop "reset"
+	if _, err := z.svc.OpenLine(ctx, name("x"), 0, dbbranch.ResetPoint); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("err = %v", err)
 	}
 }

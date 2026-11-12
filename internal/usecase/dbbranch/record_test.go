@@ -63,12 +63,17 @@ func TestCreateBranch_追加設定を得られなければ作成を失敗させ�
 	}
 }
 
-func TestRecover_再起動では追加設定を得られなくてもブランチを起動する(t *testing.T) {
+func TestRecover_追加設定を得られないとき記録を頼んだブランチは起動せずそれ以外は起動する(t *testing.T) {
 	z := newZEnv(t)
 	z.options()
 	z.withBase(t)
-	if _, err := z.svc.CreateBranch(ctx, createReq("x", true), nil); err != nil {
-		t.Fatal(err)
+	for _, b := range []struct {
+		n      string
+		record bool
+	}{{"rec", true}, {"plain", false}} {
+		if _, err := z.svc.CreateBranch(ctx, createReq(b.n, b.record), nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var logged []string
 	z.svc.Logf = func(f string, a ...any) { logged = append(logged, f) }
@@ -77,11 +82,12 @@ func TestRecover_再起動では追加設定を得られなくてもブランチ
 	}
 	z.server.running = map[string]bool{}
 
-	if err := z.svc.Recover(ctx); err != nil {
-		t.Fatal(err)
+	err := z.svc.Recover(ctx)
+	if err == nil || !strings.Contains(err.Error(), "licence lapsed") {
+		t.Errorf("a branch that records must not start without the module: %v", err)
 	}
-	if !z.server.running["branch-x"] || len(lastStart(z).Extra) != 0 || len(logged) != 1 {
-		t.Errorf("running=%v last=%+v logged=%v", z.server.running, lastStart(z), logged)
+	if z.server.running["branch-rec"] || !z.server.running["branch-plain"] || len(logged) != 1 {
+		t.Errorf("running=%v logged=%v", z.server.running, logged)
 	}
 }
 

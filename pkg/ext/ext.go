@@ -441,8 +441,8 @@ type BranchHost interface {
 	DB(ctx context.Context, name string) (DBAccess, error)
 	// OpenLine mounts, read-only, the data of a line of the branch (the live
 	// one, or one a restore set aside) at a directory on this node; when
-	// checkpoint is not empty, the data as that checkpoint saved it. Close it
-	// with CloseLine. The live line's directory is the server's own data
+	// checkpoint is not empty, the data as that checkpoint saved it ("@reset":
+	// the branch's creation state). Close it with CloseLine. The live line's directory is the server's own data
 	// directory: read, never write.
 	OpenLine(ctx context.Context, name string, line int, checkpoint string) (dir string, err error)
 	// CloseLine releases what OpenLine returned.

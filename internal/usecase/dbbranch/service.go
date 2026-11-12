@@ -75,7 +75,8 @@ type Service struct {
 	// ServerOptions asks modules for extra configuration of a branch's server
 	// each time its configuration is written (create, start, restore). Nil:
 	// none. An error leaves the server without the extras, except when the
-	// branch is created.
+	// branch is created or was created to record (Branch.Record): then the
+	// server does not start.
 	ServerOptions func(ctx context.Context, br domain.Branch, maintenance bool) ([]string, error)
 	// AfterRestore lets a module work on a restored branch's data while its
 	// server runs in maintenance mode (no network), before anyone can connect.
@@ -178,7 +179,9 @@ func (s *Service) branchSpec(ctx context.Context, br domain.Branch, dataset stri
 	switch {
 	case err == nil:
 		spec.Extra = extra
-	case strict:
+	case strict || br.Record:
+		// A branch that was asked to record must not run unrecorded: its log
+		// would have a gap that a later restore cannot see.
 		return spec, fmt.Errorf("server options: %w", err)
 	case s.Logf != nil:
 		s.Logf("branch %s: starting without the options a module asked for: %v", br.Name, err)

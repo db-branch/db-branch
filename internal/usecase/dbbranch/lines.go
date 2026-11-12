@@ -33,6 +33,10 @@ func (m *lineMounts) take(dir string) (mounted, known bool) {
 	return mounted, known
 }
 
+// ResetPoint, as the checkpoint of OpenLine, names the branch's creation
+// state (the reset point). It cannot clash with a checkpoint name.
+const ResetPoint = "@reset"
+
 // BranchAdmin is how a tool on this node reaches the branch's server as its
 // local admin.
 func (s *Service) BranchAdmin(ctx context.Context, n domain.Name) (domain.AdminAccess, error) {
@@ -66,6 +70,13 @@ func (s *Service) OpenLine(ctx context.Context, n domain.Name, line int, checkpo
 	lines, err := s.family(ctx, n)
 	if err != nil {
 		return "", err
+	}
+	if checkpoint == ResetPoint {
+		ds, ok := domain.FindSnapshot(lines, ResetSnapshot)
+		if !ok {
+			return "", fmt.Errorf("the creation state of branch %s: %w", n, domain.ErrNotFound)
+		}
+		return s.mountLine(ctx, ds+"@"+ResetSnapshot)
 	}
 	if checkpoint != "" {
 		ds, info, ok := domain.FindCheckpoint(lines, checkpoint)
