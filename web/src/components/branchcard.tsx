@@ -4,6 +4,7 @@ import { confirmReducer, countdown, elapsed, expiryState, extendTtl, isBusy, lon
 import { bytes, relative } from "../lib/format";
 import { t } from "../lib/i18n";
 import { splitOwned } from "../lib/branchname";
+import { showCheckpoints } from "../lib/checkpoints";
 import { CheckpointPanel } from "./checkpoints";
 import { ConnectPanel } from "./connect";
 import { CopyButton, Engine, Icon, Status, StorageBar, TtlBar } from "./marks";
@@ -236,7 +237,7 @@ export function BranchRow({
               </>
             )}
           </dl>
-          {manage && !failed && <CheckpointPanel branch={b} ready={ready} allow={(a) => allowed(can, a)} onChange={onChange} />}
+          {manage && !failed && showCheckpoints(b, (a) => allowed(can, a)) && <CheckpointPanel branch={b} ready={ready} allow={(a) => allowed(can, a)} onChange={onChange} />}
           {manage ? (
             <div className="brow-manage">
               {more.length > 0 && ready && !extendWhy && (

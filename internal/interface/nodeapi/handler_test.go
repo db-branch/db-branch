@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,7 @@ type fakeStore struct {
 	state    raftstore.State
 	applyErr error
 	voterErr error
+	joinHash string
 }
 
 func (f *fakeStore) ApplyAt(context.Context, raftstore.Command) (uint64, error) {
@@ -30,7 +32,7 @@ func (f *fakeStore) ApplyAt(context.Context, raftstore.Command) (uint64, error) 
 func (f *fakeStore) IsLeader() bool                   { return f.leader }
 func (f *fakeStore) Leader() (string, string)         { return f.leaderID, "" }
 func (f *fakeStore) AddNonvoter(string, string) error { return f.voterErr }
-func (f *fakeStore) JoinSecretHash() string           { return "" }
+func (f *fakeStore) JoinSecretHash() string           { return f.joinHash }
 func (f *fakeStore) State() raftstore.State           { return f.state }
 
 func asMember(r *http.Request) *http.Request {
@@ -125,5 +127,39 @@ func Testクラスタの更新待ちは412で返しクライアントで元の�
 	c := nodeapi.NewClient(&tls.Config{InsecureSkipVerify: true})
 	if _, err := c.Forward(context.Background(), strings.TrimPrefix(srv.URL, "https://"), raftstore.Command{Op: "add_replica"}); !errors.Is(err, domain.ErrClusterUpgrading) {
 		t.Errorf("client: %v", err)
+	}
+}
+
+func Test参加の応答にクラスタのユーザーidを載せる(t *testing.T) {
+	ca, _ := clusterpki.InitCA(t.TempDir())
+	secret := "s3cret"
+	st := &fakeStore{leader: true}
+	st.joinHash = clusterpki.HashSecret(secret)
+	for _, tc := range []struct {
+		name string
+		ids  func() domain.ServiceIDs
+		want domain.ServiceIDs
+	}{
+		{"recorded", func() domain.ServiceIDs { return domain.ServiceIDs{UID: 109, GID: 112} }, domain.ServiceIDs{UID: 109, GID: 112}},
+		{"not recorded", func() domain.ServiceIDs { return domain.ServiceIDs{} }, domain.ServiceIDs{}},
+		{"no source", nil, domain.ServiceIDs{}},
+	} {
+		s := &nodeapi.Server{Store: st, CA: ca, ServiceIDs: tc.ids}
+		r := httptest.NewRequest("POST", "/internal/v1/join", strings.NewReader(`{"secret":"`+secret+`"}`))
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		var out struct {
+			IDs *domain.ServiceIDs `json:"service_ids"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+			t.Fatalf("%s: %d %s", tc.name, w.Code, w.Body)
+		}
+		got := domain.ServiceIDs{}
+		if out.IDs != nil {
+			got = *out.IDs
+		}
+		if got != tc.want {
+			t.Errorf("%s: ids %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

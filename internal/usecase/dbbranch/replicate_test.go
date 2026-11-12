@@ -307,3 +307,27 @@ func TestPlaceBranch_コピーを持つノードにも置ける(t *testing.T) {
 		t.Errorf("branch %+v journal %v", b, p.replica.j.entries)
 	}
 }
+
+func TestReplicate_dbbranchのidがクラスタと違うノードはコピーを受け取らない(t *testing.T) {
+	p := newPair(t)
+	p.withBase(t)
+	nodes := p.replica.svc.Nodes.(*fakeNodes).nodes
+	for i := range nodes {
+		if nodes[i].Name == "node2" {
+			nodes[i].IDProblem = "ids differ"
+		}
+	}
+	if err := p.replica.svc.Replicate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.replica.j.entries) != 0 {
+		t.Errorf("received anyway: %v", p.replica.j.entries)
+	}
+	for i := range nodes {
+		nodes[i].IDProblem = ""
+	}
+	_ = p.replica.svc.Replicate(ctx)
+	if len(p.replica.j.entries) == 0 {
+		t.Errorf("after the fix: %v", p.replica.j.entries)
+	}
+}

@@ -704,3 +704,5 @@ li.brow.skeleton { height: 56px; border-radius: 0; border-bottom: 2px solid var(
 @media (max-width: 640px) { .hg-detail-body button { width: 100%; } }
 @media (prefers-reduced-motion: no-preference) { .hg-cp, .hg-dot { transition: fill 0.12s, opacity 0.12s; } }
 .field-error { color: var(--bad); margin: 0; }
+
+.cps-warning { color: var(--warn); margin: 0.4rem 0; }

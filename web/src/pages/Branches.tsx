@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { api, Base, Branch, can, isAdmin } from "../api";
 import { CheckpointPanel } from "../components/checkpoints";
+import { showCheckpoints } from "../lib/checkpoints";
 import { ConnectPanel } from "../components/connect";
 import { CopyButton, Engine, Icon, Status, StorageBar, TtlBar } from "../components/marks";
 import { Dialog, Drawer, Empty, ErrorLine, Field, Menu } from "../components/ui";
@@ -101,7 +102,7 @@ export function Branches() {
                     label={`Actions for ${b.name}`}
                     items={[
                       ...(b.status === "ready" ? [{ label: t("Connect…"), onSelect: () => setConnecting(b) }] : []),
-                      ...(["ready", "restoring"].includes(b.status) ? [{ label: t("Checkpoints…"), onSelect: () => setCheckpointing(b) }] : []),
+                      ...(["ready", "restoring"].includes(b.status) && showCheckpoints(b, can) ? [{ label: t("Checkpoints…"), onSelect: () => setCheckpointing(b) }] : []),
                       ...(b.status === "lost" ? [{ label: t("Recreate"), onSelect: () => run(api.recreateBranch(b.name)) }] : []),
                       ...(b.proxy
                         ? [{ label: t("Copy proxy URL"), onSelect: () => run(api.dsn(b.name, "proxy").then((d) => navigator.clipboard.writeText(d))) }]

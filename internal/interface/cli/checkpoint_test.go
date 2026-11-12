@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"encoding/json"
+	"github.com/db-branch/db-branch/internal/interface/cli"
 	"strings"
 	"testing"
 )
@@ -111,5 +112,47 @@ func TestBranchCheckpoint_不正な名前とAPIの失敗は失敗にする(t *te
 	}
 	if code, _, _ := runAPI(t, api, "branch", "checkpoints", "x"); code == 0 {
 		t.Error("an API failure should fail")
+	}
+}
+
+func TestCheckpoint_ストレージが対応しないときは一行で伝える(t *testing.T) {
+	unavailable := &cli.APIError{Status: 409, Code: "checkpoints_unavailable", Message: "conflict: checkpoints are not available on this storage (long server text)"}
+	for _, c := range []struct {
+		method, path string
+		args         []string
+	}{
+		{"POST", "/v1/branches/x/checkpoints", []string{"branch", "checkpoint", "x"}},
+		{"GET", "/v1/branches/x/checkpoints", []string{"branch", "checkpoints", "x"}},
+		{"DELETE", "/v1/branches/x/checkpoints/c1", []string{"branch", "checkpoint", "delete", "x", "c1"}},
+		{"POST", "/v1/branches/x/checkpoints/c1/restore", []string{"branch", "restore", "x", "c1"}},
+	} {
+		api := newFakeAPI()
+		api.errors[c.method+" "+c.path] = unavailable
+		code, _, errOut := runAPI(t, api, c.args...)
+		if code == 0 || !strings.Contains(errOut, "Checkpoints are not available on this storage") || strings.Count(strings.TrimSpace(errOut), "\n") != 0 {
+			t.Errorf("%v: exit %d, stderr %q", c.args, code, errOut)
+		}
+	}
+}
+
+func TestBranchCheckpoint_空き容量の警告は標準エラーに出す(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["POST /v1/branches/x/checkpoints"] = map[string]any{"name": "c1", "warning": "This branch uses more than half of the pool's free space."}
+	code, out, errOut := runAPI(t, api, "branch", "checkpoint", "x", "--name", "c1")
+	if code != 0 || !strings.Contains(out, "Saved checkpoint c1") || strings.Contains(out, "half") {
+		t.Errorf("exit %d out %q", code, out)
+	}
+	if !strings.Contains(errOut, "Warning: This branch uses more than half") {
+		t.Errorf("stderr = %q", errOut)
+	}
+}
+
+func TestBranchRestore_自動チェックポイントは新しい5件だけ残ると伝える(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["POST /v1/branches/x/checkpoints/c1/restore"] = accepted("op_7", "branch.restore")
+	api.answers["GET /v1/operations/op_7"] = map[string]any{"id": "op_7", "state": "succeeded"}
+	code, out, errOut := runAPI(t, api, "branch", "restore", "x", "c1")
+	if code != 0 || !strings.Contains(out, "newest five") {
+		t.Errorf("exit %d out %q err %q", code, out, errOut)
 	}
 }

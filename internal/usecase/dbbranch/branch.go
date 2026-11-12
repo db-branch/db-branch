@@ -40,6 +40,7 @@ func (s *Service) PlaceBranch(ctx context.Context, req CreateBranchRequest) (str
 		return "", err
 	}
 	p.Candidates = s.holders(base, snap.Name, p.Nodes)
+	p.Distro = s.originDistro(base, snap, p.Nodes)
 	if p.Branches, err = s.Store.ListBranches(ctx); err != nil {
 		return "", err
 	}
@@ -61,7 +62,7 @@ func replicaList(nodes []string) string {
 // budget on record).
 func (s *Service) nodes(ctx context.Context) ([]domain.Node, error) {
 	if s.Nodes == nil {
-		return []domain.Node{{Name: s.Node, LastSeen: s.Clock()}}, nil
+		return []domain.Node{{Name: s.Node, LastSeen: s.Clock(), System: domain.NodeSystem{Distro: s.Distro}}}, nil
 	}
 	return s.Nodes.ListNodes(ctx)
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/authfile"
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/infrastructure/execx"
+	"github.com/db-branch/db-branch/internal/infrastructure/nodesys"
 	"github.com/db-branch/db-branch/internal/infrastructure/raftstore"
 	"github.com/db-branch/db-branch/internal/infrastructure/sqlquery"
 	"github.com/db-branch/db-branch/internal/infrastructure/sysmetrics"
@@ -134,8 +135,11 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		Version:  opts.Version,
 		Console:  web.Handler(),
 	}
+	system := nodesys.Default(execx.Runner{}.Run)
+	srv.System = system.Get
 	if cl != nil {
 		defer cl.close()
+		cl.system = system.Get
 		node = cl.self.Node
 		srv.Node, ops.Node = node, node
 		// Every change, wherever it was made, reaches this node's subscribers
@@ -217,6 +221,7 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	startModules(ctx, a, cfg, node, mods, srv.BranchHost(), log)
 	if cl != nil {
 		cl.modules = srv.Modules
+		cl.checkpoints = svcCheckpoints(a)
 		cl.beatNow()
 	}
 	problems := &moduleProblems{m: map[string]string{}}

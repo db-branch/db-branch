@@ -357,5 +357,6 @@ function placeholder(j: Job, owner: string | null): Branch {
     owner,
     id: j.name,
     access: "private",
+    checkpoints: false,
   };
 }

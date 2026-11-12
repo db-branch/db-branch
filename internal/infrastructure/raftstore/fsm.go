@@ -45,6 +45,9 @@ type State struct {
 	// the current (or last) update of the cluster's packages.
 	Update  *domain.UpdateCheck `json:"update,omitempty"`
 	Rollout *domain.Rollout     `json:"rollout,omitempty"`
+	// ServiceIDs are the db-branch user and group ids every node uses (nil
+	// until the leader records its own; see init_service_ids).
+	ServiceIDs *domain.ServiceIDs `json:"service_ids,omitempty"`
 }
 
 func newState() State {
@@ -72,6 +75,8 @@ type Command struct {
 	Update    *domain.UpdateCheck  `json:"update,omitempty"`
 	Rollout   *domain.Rollout      `json:"rollout,omitempty"`
 	Event     *domain.RolloutEvent `json:"event,omitempty"`
+	// IDs is the payload of init_service_ids.
+	IDs *domain.ServiceIDs `json:"service_ids,omitempty"`
 	// Nodes is the replica list of set_base_replica_nodes; absent (null)
 	// means every node, [] means the base's own node only.
 	Nodes *[]string `json:"nodes"`
@@ -85,7 +90,7 @@ type Command struct {
 
 // Protocol is the cluster protocol this binary speaks. Raise it whenever a
 // command is added or changes meaning, and list the command in opProtocol.
-const Protocol = 14
+const Protocol = 15
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a
@@ -106,6 +111,7 @@ var opProtocol = map[string]int{
 	"put_update_check": 12, "start_rollout": 12, "record_rollout": 12,
 	"set_base_replica_nodes": 13, "remove_replica": 13,
 	"set_base_anonymous": 14,
+	"init_service_ids":   15,
 }
 
 // Needs returns the protocol the command requires (0 for unknown commands).
@@ -225,6 +231,10 @@ func PutModule(m domain.ModuleSpec) Command { return Command{Op: "put_module", M
 func PutRouteUser(u domain.RouteUser) Command { return Command{Op: "put_route_user", RouteUser: &u} }
 func DeleteRouteUser(name string) Command     { return Command{Op: "delete_route_user", Name: name} }
 
+// InitServiceIDs records the db-branch user and group ids of the cluster
+// unless some are recorded already.
+func InitServiceIDs(ids domain.ServiceIDs) Command { return Command{Op: "init_service_ids", IDs: &ids} }
+
 // InitAdmin sets the console password only if the cluster has none yet.
 func InitAdmin(c auth.Credentials) Command { return Command{Op: "init_admin", Admin: &c} }
 
@@ -306,6 +316,8 @@ func (c Command) complete() bool {
 		return c.Rollout != nil
 	case "record_rollout":
 		return c.Event != nil
+	case "init_service_ids":
+		return c.IDs != nil && c.IDs.Valid()
 	}
 	return true
 }
@@ -387,6 +399,11 @@ func (f *FSM) apply(c Command) error {
 		}
 		if domain.TrialStartedIn(s.Settings[domain.TrialScope]).IsZero() {
 			s.Settings[domain.TrialScope] = map[string]string{domain.TrialKey: c.Name}
+		}
+	case "init_service_ids":
+		if s.ServiceIDs == nil {
+			ids := *c.IDs
+			s.ServiceIDs = &ids
 		}
 	case "put_module":
 		if s.Modules == nil {
@@ -515,6 +532,10 @@ func (f *FSM) State() State {
 		out.Operations[k] = v
 	}
 	out.JoinSecretHash = f.state.JoinSecretHash
+	if f.state.ServiceIDs != nil {
+		ids := *f.state.ServiceIDs
+		out.ServiceIDs = &ids
+	}
 	for k, v := range f.state.Tokens {
 		if out.Tokens == nil {
 			out.Tokens = map[string]domain.APIToken{}

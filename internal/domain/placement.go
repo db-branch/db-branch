@@ -24,6 +24,31 @@ type Placement struct {
 	DownAfter time.Duration
 	// Want is a node the caller asked for; empty lets Choose decide.
 	Want string
+	// Distro is the distribution the base snapshot was made on, set for
+	// engines whose data depends on the OS (see CollationBound): only nodes
+	// of the same distribution qualify. Empty: any node.
+	Distro string
+}
+
+// CollationBound reports whether an engine's data files depend on the
+// operating system's collation libraries (glibc locale data, ICU). PostgreSQL
+// uses them for text ordering, so indexes built on one distribution release
+// can be wrong on another. MySQL ships its own collations in the runtime.
+func CollationBound(e Engine) bool { return e == Postgres }
+
+// SameDistro reports whether a node on have may run data made on want. A side
+// that is not known (nodes of older versions do not report it) does not
+// block: it cannot be shown to differ.
+func SameDistro(want, have string) bool { return want == "" || have == "" || want == have }
+
+// ErrDistroMismatch explains why a PostgreSQL base cannot be used on a node
+// of another distribution. It is a conflict (HTTP 409).
+func ErrDistroMismatch(node, have, want string) error {
+	return fmt.Errorf("%w: node %s runs %s but the PostgreSQL base was made on %s; "+
+		"its data depends on the operating system's collation libraries (glibc locale data, ICU), "+
+		"and a different release can leave text indexes corrupt or give wrong query results; "+
+		"use a node running %s, or dump and reload the data into a base made on %s",
+		ErrConflict, node, have, want, want, have)
 }
 
 // MemoryShare is the part of a node's memory branches may use; the rest is
@@ -67,6 +92,28 @@ func (p Placement) Choose() (string, error) {
 		if n, found := nodes[c]; found && p.fits(n, count[c]) && (p.Want == "" || p.Want == c) {
 			ok = append(ok, c)
 		}
+	}
+	var sound []string
+	for _, c := range ok {
+		if nodes[c].IDProblem == "" {
+			sound = append(sound, c)
+		}
+	}
+	if len(sound) == 0 && len(ok) > 0 {
+		return "", ErrNodeIDMismatch(ok[0], nodes[ok[0]].IDProblem)
+	}
+	ok = sound
+	if p.Distro != "" {
+		var same []string
+		for _, c := range ok {
+			if SameDistro(p.Distro, nodes[c].System.Distro) {
+				same = append(same, c)
+			}
+		}
+		if len(same) == 0 && len(ok) > 0 {
+			return "", ErrDistroMismatch(ok[0], nodes[ok[0]].System.Distro, p.Distro)
+		}
+		ok = same
 	}
 	if len(ok) == 0 {
 		if p.Want != "" {

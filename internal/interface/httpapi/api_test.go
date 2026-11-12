@@ -49,7 +49,11 @@ type fakeBranches struct {
 	graph domain.Graph
 	// lastCreate is the latest CreateBranch request.
 	lastCreate dbbranch.CreateBranchRequest
+	// noCheckpoints makes the node report no checkpoint support.
+	noCheckpoints bool
 }
+
+func (f *fakeBranches) CheckpointsAvailable() bool { return !f.noCheckpoints }
 
 func (f *fakeBranches) PlaceRecreate(_ context.Context, n domain.Name) (string, error) {
 	if f.placeErr != nil {

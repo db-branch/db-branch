@@ -42,3 +42,17 @@ func TestDistro_読めないか欠けているときはエラー(t *testing.T) {
 		t.Error("no ID: want error")
 	}
 }
+
+func TestRead_PRETTY_NAMEを大文字小文字のまま返し無ければ名前で代える(t *testing.T) {
+	r, err := osrelease.Read(write(t, "PRETTY_NAME=\"Ubuntu 26.04.1 LTS\"\nID=ubuntu\nVERSION_ID=\"26.04\"\n"))
+	if err != nil || r.Distro != "ubuntu-26.04" || r.Pretty != "Ubuntu 26.04.1 LTS" {
+		t.Errorf("got %+v, %v", r, err)
+	}
+	r, err = osrelease.Read(write(t, "ID=debian\nVERSION_ID=13\n"))
+	if err != nil || r.Pretty != "debian-13" {
+		t.Errorf("got %+v, %v", r, err)
+	}
+	if _, err := osrelease.Read(filepath.Join(t.TempDir(), "none")); err == nil {
+		t.Error("missing file: want error")
+	}
+}

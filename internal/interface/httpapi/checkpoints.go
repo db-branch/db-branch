@@ -23,6 +23,9 @@ type checkpointJSON struct {
 	Auto bool `json:"auto"`
 	// Current marks the checkpoint the branch's data descends from.
 	Current bool `json:"current"`
+	// Warning is set on a freshly saved checkpoint when the branch (data and
+	// history) uses more than half of the pool's free space.
+	Warning string `json:"warning,omitempty"`
 }
 
 func checkpointView(c domain.Checkpoint) checkpointJSON {
@@ -99,7 +102,22 @@ func (s *Server) createCheckpoint(w http.ResponseWriter, r *http.Request, svc Br
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, checkpointView(c))
+	v := checkpointView(c)
+	v.Warning = s.spaceWarning(r.Context(), svc, n)
+	writeJSON(w, http.StatusCreated, v)
+}
+
+// spaceWarning compares what branch n uses (live data and history) with the
+// free space of this node's pool, which the request has been forwarded to.
+func (s *Server) spaceWarning(ctx context.Context, svc Branches, n domain.Name) string {
+	if s.PoolFree == nil {
+		return ""
+	}
+	info, err := svc.BranchStorage(ctx, n)
+	if err != nil {
+		return ""
+	}
+	return domain.SpaceWarning(info.Used, s.PoolFree())
 }
 
 // restoreCheckpoint sets the branch back to a checkpoint in the background.

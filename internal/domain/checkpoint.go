@@ -32,6 +32,9 @@ const (
 	MaxCheckpointNameLength = 40
 	// DefaultMaxCheckpoints is the default of the branch.max_checkpoints setting.
 	DefaultMaxCheckpoints = 20
+	// MaxAutoCheckpoints is how many automatic (before-restore) checkpoints a
+	// branch keeps; a restore that adds another deletes the oldest one.
+	MaxAutoCheckpoints = 5
 )
 
 // ZFS user properties of the checkpoint feature. They are set on the snapshot
@@ -199,17 +202,59 @@ func NextLine(lines []Line) int {
 	return most + 1
 }
 
-// CheckLimit refuses a checkpoint when the branch holds max already. The
-// checkpoint taken automatically before a restore may exceed the limit by one.
-func CheckLimit(branch string, count, max int, auto bool) error {
-	if (!auto && count >= max) || (auto && count > max) {
-		hint := "delete one first or raise the branch.max_checkpoints setting"
-		if auto {
-			hint = "restoring needs room for one automatic checkpoint: " + hint
-		}
-		return fmt.Errorf("%w: branch %s has %d checkpoints (limit %d); %s", ErrConflict, branch, count, max, hint)
+// ErrCheckpointsUnavailable is the answer where the node's storage has no
+// lineage support (module or shared storage): checkpoints cannot work there.
+var ErrCheckpointsUnavailable = fmt.Errorf("%w: checkpoints are not available on this storage (they need this node's own ZFS, not module or shared storage)", ErrConflict)
+
+// CheckLimit refuses a manual checkpoint when the branch holds max of them
+// already. The automatic checkpoints taken before a restore are not counted.
+func CheckLimit(branch string, manual, max int) error {
+	if manual >= max {
+		return fmt.Errorf("%w: branch %s has %d checkpoints of its own (limit %d, automatic before-restore checkpoints not counted); delete one first or raise the branch.max_checkpoints setting", ErrConflict, branch, manual, max)
 	}
 	return nil
+}
+
+// CountManual counts the checkpoints people took (not the automatic ones).
+func CountManual(list []Checkpoint) int {
+	n := 0
+	for _, c := range list {
+		if !c.Auto {
+			n++
+		}
+	}
+	return n
+}
+
+// AutoToRotate returns the automatic checkpoints to delete so that only the
+// newest keep remain, oldest first. list may be in any order.
+func AutoToRotate(list []Checkpoint, keep int) []Checkpoint {
+	var autos []Checkpoint
+	for _, c := range list {
+		if c.Auto {
+			autos = append(autos, c)
+		}
+	}
+	sort.SliceStable(autos, func(i, j int) bool {
+		if !autos[i].CreatedAt.Equal(autos[j].CreatedAt) {
+			return autos[i].CreatedAt.Before(autos[j].CreatedAt)
+		}
+		return autos[i].Name < autos[j].Name
+	})
+	if len(autos) <= keep {
+		return nil
+	}
+	return autos[:len(autos)-keep]
+}
+
+// SpaceWarning says so when the space a branch uses (its data and its
+// history) is more than half of what the pool has free. A checkpoint is not
+// refused for it; free 0 means unknown.
+func SpaceWarning(used, free uint64) string {
+	if free == 0 || used <= free/2 {
+		return ""
+	}
+	return "This branch (with its checkpoints) uses more than half of the pool's free space; checkpoints keep the data they protect, so free space may run out. Delete checkpoints you no longer need."
 }
 
 // Collection is what garbage collection removes.

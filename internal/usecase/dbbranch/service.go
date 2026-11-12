@@ -51,6 +51,10 @@ type Service struct {
 	Pool string
 	// Node is this node's name; it is recorded on everything created here.
 	Node string
+	// Distro is the distribution this node runs ("ubuntu-26.04"; empty when
+	// unknown). Base snapshots record it: PostgreSQL data depends on the
+	// system's collation libraries.
+	Distro string
 	// Nodes lists the cluster members. Nil on a single node.
 	Nodes domain.NodeStore
 	// DownAfter is how long without a heartbeat marks a node down.

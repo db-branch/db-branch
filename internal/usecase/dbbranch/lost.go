@@ -71,6 +71,8 @@ func (s *Service) placeRecreate(ctx context.Context, name domain.Name, want stri
 	if p.Nodes, err = s.nodes(ctx); err != nil {
 		return "", err
 	}
+	snap, _ := base.Snapshot(br.Snapshot)
+	p.Distro = s.originDistro(base, snap, p.Nodes)
 	for _, n := range s.holders(base, br.Snapshot, p.Nodes) {
 		if n != br.Node {
 			p.Candidates = append(p.Candidates, n)

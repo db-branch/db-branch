@@ -29,6 +29,9 @@ type Node struct {
 	// Usage is the space each branch on the node uses, by branch name, so
 	// every node can show it.
 	Usage map[string]Usage `json:"usage,omitempty"`
+	// Checkpoints is whether the node's storage supports branch checkpoints
+	// (its own ZFS). Nodes from before checkpoints do not report it.
+	Checkpoints bool `json:"checkpoints,omitempty"`
 	// Protocol is the newest cluster protocol the node's binary speaks
 	// (0 for binaries from before protocols were reported, meaning 1).
 	Protocol int `json:"protocol,omitempty"`
@@ -40,6 +43,39 @@ type Node struct {
 	Metrics *Metrics `json:"metrics,omitempty"`
 	// ModuleProblems are modules' last configuration errors (e.g. licence).
 	ModuleProblems map[string]string `json:"module_problems,omitempty"`
+	// System describes the node's OS, kernel and ZFS (empty for nodes of
+	// versions that do not report it).
+	System NodeSystem `json:"system,omitzero"`
+	// ServiceIDs are the node's local db-branch uid/gid, and IDProblem how
+	// they differ from the cluster's (empty: they match, or the node is of a
+	// version that does not report it). Such a node takes no new branches.
+	ServiceIDs ServiceIDs `json:"service_ids,omitzero"`
+	IDProblem  string     `json:"id_problem,omitempty"`
+}
+
+// Unknown is what clients show for a system fact a node does not report.
+const Unknown = "unknown"
+
+// NodeSystem is what a node says about the system it runs on.
+type NodeSystem struct {
+	// Distro is the distribution key, "<ID>-<VERSION_ID>" (e.g. ubuntu-26.04).
+	Distro string `json:"distro,omitempty"`
+	// OS is the distribution's pretty name (e.g. "Ubuntu 26.04.1 LTS").
+	OS string `json:"os,omitempty"`
+	// Kernel is the running kernel release (uname -r).
+	Kernel string `json:"kernel,omitempty"`
+	// ZFS is the ZFS version, with the kernel module's when it differs.
+	ZFS string `json:"zfs,omitempty"`
+}
+
+// OrUnknown returns s with every fact the node did not report set to Unknown.
+func (s NodeSystem) OrUnknown() NodeSystem {
+	for _, f := range []*string{&s.Distro, &s.OS, &s.Kernel, &s.ZFS} {
+		if *f == "" {
+			*f = Unknown
+		}
+	}
+	return s
 }
 
 // Usage is a dataset's space use in bytes (see DatasetInfo).

@@ -68,6 +68,9 @@ type Route = { method: string; re: RegExp; access: Access; run: (c: Ctx) => Repl
 
 const ok = (body?: unknown, status = 200): Reply => ({ status, body });
 const fail = (status: number, code: string, message: string): Reply => ({ status, body: { error: { code, message } } });
+// Automatic (before-restore) checkpoints kept per branch (domain.MaxAutoCheckpoints).
+const MAX_AUTO_CHECKPOINTS = 5;
+
 const notFound = (what: string) => fail(404, "not_found", `${what} not found`);
 
 export class DemoBackend {
@@ -78,6 +81,7 @@ export class DemoBackend {
   constructor(state?: State) {
     this.state = state ?? seed(Date.now());
     this.state.checkpoints ??= {}; // saved by a version without checkpoints
+    for (const br of this.state.branches) br.checkpoints ??= true; // likewise: the demo always can
     this.build();
   }
 
@@ -463,7 +467,8 @@ export class DemoBackend {
     }
     if (st.list.some((x) => x.name === name)) return fail(409, "already_exists", `checkpoint ${name} of branch ${b.name}: already exists`);
     const max = this.maxCheckpoints();
-    if (st.list.length >= max) return fail(409, "conflict", `conflict: branch ${b.name} has ${st.list.length} checkpoints (limit ${max}); delete one first or raise the branch.max_checkpoints setting`);
+    const own = st.list.filter((x) => !x.auto).length;
+    if (own >= max) return fail(409, "conflict", `conflict: branch ${b.name} has ${own} checkpoints of its own (limit ${max}, automatic before-restore checkpoints not counted); delete one first or raise the branch.max_checkpoints setting`);
     const cp: Checkpoint = { name, created_at: new Date().toISOString(), size: 96 * 1024 + (this.state.seq++ % 9) * 64 * 1024, line: st.line, auto: false, current: true };
     st.list.forEach((x) => (x.current = false));
     st.list.push(cp);
@@ -478,8 +483,6 @@ export class DemoBackend {
     if (b.status !== "ready") return fail(409, "conflict", `branch ${b.name} is ${b.status}`);
     const st = this.checkpointsOf(b.name);
     if (!st.list.some((x) => x.name === name)) return notFound("checkpoint");
-    const max = this.maxCheckpoints();
-    if (st.list.length > max) return fail(409, "conflict", `conflict: branch ${b.name} has ${st.list.length} checkpoints (limit ${max}); restoring needs room for one automatic checkpoint: delete one first or raise the branch.max_checkpoints setting`);
     const ms = runtimeEngine(b.runtime) === "postgres" ? TIMING.restorePostgres : TIMING.restoreMysql;
     return this.branchAction(c, "branch.restore", "restoring", ms, { k: "branch.restore", name: b.name, checkpoint: name });
   }
@@ -497,6 +500,10 @@ export class DemoBackend {
     const from = st.list.find((x) => x.name === checkpoint);
     st.lines = [...lines, { line: st.line, parent: from ? from.line : 0, from: from ? checkpoint : "reset" }];
     if (from) from.current = true;
+    // Only the newest MAX_AUTO_CHECKPOINTS automatic ones are kept: the oldest goes.
+    const autos = st.list.filter((x) => x.auto).sort((a, c) => Date.parse(a.created_at) - Date.parse(c.created_at) || (a.name < c.name ? -1 : 1));
+    const drop = new Set(autos.slice(0, Math.max(0, autos.length - MAX_AUTO_CHECKPOINTS)).map((x) => x.name));
+    st.list = st.list.filter((x) => !drop.has(x.name));
     b.status = "ready";
     b.operation = null;
   }
@@ -660,6 +667,7 @@ export class DemoBackend {
       id: newId(this.state),
       access: !who || body.access === "open" ? "open" : "private",
       record: body.record === true && !!who && !pg && this.state.modules.history === "on" ? true : undefined,
+      checkpoints: true,
     };
     this.state.branches.push(b);
     this.schedule(op, TIMING.branchCreate, { k: "branch.ready", name });
@@ -834,6 +842,12 @@ export class DemoBackend {
           runtimes: s().installed,
           protocol: PROTOCOL,
           metrics: null,
+          system: {
+            distro: "ubuntu-24.04",
+            os: "Ubuntu 24.04.3 LTS",
+            kernel: ["6.8.0-87-generic", "6.8.0-87-generic", "6.8.0-85-generic"][i],
+            zfs: "2.2.2-0ubuntu9.4",
+          },
         })),
       });
     });

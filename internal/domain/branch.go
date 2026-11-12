@@ -46,6 +46,10 @@ type BaseSnapshot struct {
 	Public bool `json:"public,omitempty"`
 	// Mask is set when the snapshot holds a masked copy of another base.
 	Mask *MaskInfo `json:"mask,omitempty"`
+	// Distro is the distribution key of the node the snapshot was taken on
+	// (empty for snapshots from before it was recorded). PostgreSQL data
+	// depends on that system's collation libraries; see CollationDistro.
+	Distro string `json:"distro,omitempty"`
 }
 
 // Base is a dataset branches are cloned from.

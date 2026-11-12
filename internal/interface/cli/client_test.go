@@ -13,8 +13,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/interface/cli"
+	"github.com/db-branch/db-branch/internal/usecase/idalign"
 )
 
 // fakeAPI answers requests from a table keyed by "METHOD path".
@@ -395,14 +397,15 @@ func TestClusterコマンド(t *testing.T) {
 	api := newFakeAPI()
 	api.answers["POST /v1/cluster/token"] = map[string]any{"token": "dbb1.abc.def"}
 	api.answers["GET /v1/cluster"] = map[string]any{"mode": "cluster", "leader": "n1", "nodes": []any{
-		map[string]any{"name": "n1", "host": "192.0.2.10", "leader": true, "voter": true, "pool_size": 100 << 30, "pool_free": 60 << 30, "version": "v"},
+		map[string]any{"name": "n1", "host": "192.0.2.10", "leader": true, "voter": true, "pool_size": 100 << 30, "pool_free": 60 << 30, "version": "v",
+			"system": map[string]any{"distro": "ubuntu-26.04", "os": "Ubuntu 26.04.1 LTS", "kernel": "7.0.0-14-generic", "zfs": "2.4.0"}},
 		map[string]any{"name": "n2", "host": "192.0.2.11", "down": true},
 	}}
 	if _, out, _ := runAPI(t, api, "cluster", "token"); !strings.Contains(out, "dbb1.abc.def") || !strings.Contains(out, "cluster join") {
 		t.Errorf("token: %q", out)
 	}
 	_, out, _ := runAPI(t, api, "cluster", "status")
-	for _, want := range []string{"NODE", "n1", "leader", "n2", "down", "60.0 GiB", "ENGINES", "VOTING", "voter", "non-voter"} {
+	for _, want := range []string{"NODE", "n1", "leader", "n2", "down", "60.0 GiB", "ENGINES", "VOTING", "voter", "non-voter", "OS", "ubuntu-26.04", "unknown"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status lacks %q:\n%s", want, out)
 		}
@@ -1005,5 +1008,57 @@ func TestBranchCreate_recordで変更の記録を頼む(t *testing.T) {
 	}
 	if body := api.bodies["POST /v1/branches"].(map[string]any); body["record"] != nil {
 		t.Errorf("record must be left out by default: %v", body)
+	}
+}
+
+func TestClusterStatus_dbbranchのidが食い違うノードを問題として示す(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["GET /v1/cluster"] = map[string]any{"mode": "cluster", "leader": "n1", "service_ids": map[string]any{"uid": 109, "gid": 112}, "nodes": []any{
+		map[string]any{"name": "n1"},
+		map[string]any{"name": "n3", "id_problem": "the db-branch user and group are uid 103 / gid 109 here"},
+	}}
+	_, out, _ := runAPI(t, api, "cluster", "status")
+	for _, want := range []string{"runs db-branch as uid 109 / gid 112", "PROBLEM on n3", "uid 103 / gid 109 here", "no new branches or replicas"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "PROBLEM on n1") {
+		t.Errorf("n1 is fine:\n%s", out)
+	}
+}
+
+func TestClusterAlignIDs_クラスタのidを取得して差し込まれた処理に渡す(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["GET /v1/cluster"] = map[string]any{"mode": "cluster", "service_ids": map[string]any{"uid": 109, "gid": 112}}
+	var got domain.ServiceIDs
+	var res idalign.Result
+	var alignErr error
+	run := func() (int, string, string) {
+		var out, errOut bytes.Buffer
+		app := cli.App{Stdout: &out, Stderr: &errOut, Client: func(string) cli.Client { return api },
+			ClusterAlignIDs: func(_ context.Context, _ config.Config, ids domain.ServiceIDs) (idalign.Result, error) {
+				got = ids
+				return res, alignErr
+			}}
+		code := app.Run(context.Background(), []string{"--config", filepath.Join(t.TempDir(), "none.toml"), "cluster", "align-ids"})
+		return code, out.String(), errOut.String()
+	}
+	res = idalign.Result{Changed: true, From: domain.ServiceIDs{UID: 103, GID: 109}, To: domain.ServiceIDs{UID: 109, GID: 112}}
+	if code, out, _ := run(); code != 0 || got != res.To || !strings.Contains(out, "from uid 103 / gid 109 to uid 109 / gid 112") {
+		t.Errorf("changed: %d %q %v", code, out, got)
+	}
+	res = idalign.Result{To: domain.ServiceIDs{UID: 109, GID: 112}}
+	if code, out, _ := run(); code != 0 || !strings.Contains(out, "Already") {
+		t.Errorf("unchanged: %d %q", code, out)
+	}
+	alignErr = errors.New("uid 109 belongs to the user postgres")
+	if code, _, errOut := run(); code == 0 || !strings.Contains(errOut, "postgres") {
+		t.Errorf("refused: %d %q", code, errOut)
+	}
+	alignErr = nil
+	api.answers["GET /v1/cluster"] = map[string]any{"mode": "cluster"}
+	if code, _, errOut := run(); code == 0 || !strings.Contains(errOut, "not recorded") {
+		t.Errorf("no ids: %d %q", code, errOut)
 	}
 }

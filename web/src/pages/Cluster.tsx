@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, can, ClusterNode, Operation, Runtime } from "../api";
+import { api, can, ClusterNode, NodeSystem, Operation, Runtime } from "../api";
 import { Engine, Icon, Status } from "../components/marks";
 import { Sparkline } from "../components/sparkline";
 import { Dialog, Drawer, ErrorLine, Info } from "../components/ui";
@@ -34,6 +34,11 @@ export function Cluster() {
         )}
       </header>
       <ErrorLine error={error} />
+      {cluster?.nodes.some((n) => n.id_problem) && (
+        <p className="warn" role="alert">
+          {t("Some nodes use other db-branch user ids than the cluster and take no new branches or replicas until they are fixed (db-branch cluster align-ids).")}
+        </p>
+      )}
       <div className="nodes">
         {cluster?.nodes.map((n) => (
           <NodeColumn
@@ -91,6 +96,17 @@ function NodeColumn({ node, branches }: { node: ClusterNode; branches: { name: s
           )}
         </div>
       )}
+      {node.id_problem && (
+        <div className="node-section">
+          <h3>{t("db-branch ids")}</h3>
+          <span className="mono">{node.service_ids ? `uid ${node.service_ids.uid} / gid ${node.service_ids.gid}` : "—"}</span>
+          <span className="warn" role="alert">
+            {" "}
+            {node.id_problem}
+          </span>
+        </div>
+      )}
+      <NodeSystemInfo system={node.system} />
       {!node.down && <NodeMetrics node={node.name} />}
       <div className="node-section">
         <h3>{t("Branches")}</h3>
@@ -104,6 +120,28 @@ function NodeColumn({ node, branches }: { node: ClusterNode; branches: { name: s
         </div>
       </div>
     </article>
+  );
+}
+
+// NodeSystemInfo shows what the node runs on. Nodes of mixed distributions
+// matter for PostgreSQL (docs/mixed-os.md), so the key is shown with the name.
+function NodeSystemInfo({ system }: { system?: NodeSystem }) {
+  const v = (x?: string) => x || "unknown";
+  return (
+    <div className="node-section">
+      <h3>{t("System")}</h3>
+      <dl className="kv">
+        <dt>{t("OS")}</dt>
+        <dd className="mono" title={v(system?.distro)}>
+          {v(system?.os)}
+          {system?.distro && system.distro !== "unknown" && system.os !== system.distro && <span className="muted"> · {system.distro}</span>}
+        </dd>
+        <dt>{t("Kernel")}</dt>
+        <dd className="mono">{v(system?.kernel)}</dd>
+        <dt>{t("ZFS")}</dt>
+        <dd className="mono">{v(system?.zfs)}</dd>
+      </dl>
+    </div>
   );
 }
 

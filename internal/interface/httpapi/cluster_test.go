@@ -30,6 +30,8 @@ type fakeCluster struct {
 	added     []string
 	removed   []string
 	replyBody string
+	// n2NoCheckpoints makes n2 report no checkpoint support.
+	n2NoCheckpoints bool
 	// principals are the principal headers that reached the other node.
 	principals []string
 }
@@ -71,6 +73,8 @@ func (f *fakeCluster) BranchUsage(node, branch string) (domain.Usage, bool) {
 	}
 	return domain.Usage{}, false
 }
+
+func (f *fakeCluster) NodeCheckpoints(node string) bool { return node == "n2" && !f.n2NoCheckpoints }
 
 func (f *fakeCluster) NodeHost(node string) string {
 	if node == "n2" {
@@ -642,5 +646,72 @@ func TestStartMaskOn_クラスタでなければ使えない(t *testing.T) {
 	f := newFixture(t)
 	if err := f.srv.StartMaskOn(ctx, "n2", dbbranch.MaskRequest{Target: name("dev")}); err == nil {
 		t.Error("no cluster")
+	}
+}
+
+func TestBranch_他ノードのブランチはそのノードの報告でチェックポイント可否を返す(t *testing.T) {
+	f, c := remoteFixture(t)
+	// This node cannot do checkpoints, but n2 (which holds the branch) can.
+	f.branches.noCheckpoints = true
+	_, body := f.do(t, "GET", "/v1/branches/there", nil)
+	if body["checkpoints"] != true {
+		t.Errorf("checkpoints = %v, want true from n2", body["checkpoints"])
+	}
+	c.n2NoCheckpoints = true
+	_, body = f.do(t, "GET", "/v1/branches/there", nil)
+	if body["checkpoints"] != false {
+		t.Errorf("checkpoints = %v, want false from n2", body["checkpoints"])
+	}
+}
+
+func TestCluster_ノードのOSとカーネルとZFSを返し未報告はunknownにする(t *testing.T) {
+	f := newFixture(t)
+	f.srv.Cluster = &fakeCluster{status: httpapi.ClusterStatus{Mode: "cluster", Leader: "n1", Nodes: []httpapi.NodeStatus{
+		{Name: "n1", System: domain.NodeSystem{Distro: "ubuntu-26.04", OS: "Ubuntu 26.04.1 LTS", Kernel: "7.0.0-14-generic", ZFS: "2.4.0-1ubuntu1"}},
+		{Name: "n2"},
+	}}}
+	_, body := f.do(t, "GET", "/v1/cluster", nil)
+	nodes := body["nodes"].([]any)
+	n1 := nodes[0].(map[string]any)["system"].(map[string]any)
+	n2 := nodes[1].(map[string]any)["system"].(map[string]any)
+	if n1["distro"] != "ubuntu-26.04" || n1["os"] != "Ubuntu 26.04.1 LTS" || n1["kernel"] != "7.0.0-14-generic" || n1["zfs"] != "2.4.0-1ubuntu1" {
+		t.Errorf("n1 system = %v", n1)
+	}
+	for _, k := range []string{"distro", "os", "kernel", "zfs"} {
+		if n2[k] != "unknown" {
+			t.Errorf("n2 %s = %v, want unknown", k, n2[k])
+		}
+	}
+}
+
+func TestCluster_単一ノードでも自分のシステム情報を返す(t *testing.T) {
+	f := newFixture(t)
+	f.srv.System = func(context.Context) domain.NodeSystem {
+		return domain.NodeSystem{Distro: "ubuntu-24.04", Kernel: "6.8.0-48-generic"}
+	}
+	_, body := f.do(t, "GET", "/v1/cluster", nil)
+	sys := body["nodes"].([]any)[0].(map[string]any)["system"].(map[string]any)
+	if sys["distro"] != "ubuntu-24.04" || sys["kernel"] != "6.8.0-48-generic" || sys["zfs"] != "unknown" {
+		t.Errorf("system = %v", sys)
+	}
+}
+
+func TestCluster_クラスタのdbbranchのidと食い違うノードを理由つきで返す(t *testing.T) {
+	f := newFixture(t)
+	f.srv.Cluster = &fakeCluster{status: httpapi.ClusterStatus{Mode: "cluster", Leader: "n1", ServiceIDs: domain.ServiceIDs{UID: 109, GID: 112}, Nodes: []httpapi.NodeStatus{
+		{Name: "n1", ServiceIDs: domain.ServiceIDs{UID: 109, GID: 112}},
+		{Name: "n2", ServiceIDs: domain.ServiceIDs{UID: 103, GID: 109}, IDProblem: "ids differ"},
+	}}}
+	_, body := f.do(t, "GET", "/v1/cluster", nil)
+	if ids := body["service_ids"].(map[string]any); ids["uid"] != float64(109) || ids["gid"] != float64(112) {
+		t.Errorf("cluster ids = %v", ids)
+	}
+	nodes := body["nodes"].([]any)
+	if _, has := nodes[0].(map[string]any)["id_problem"]; has {
+		t.Errorf("n1 = %v", nodes[0])
+	}
+	n2 := nodes[1].(map[string]any)
+	if n2["id_problem"] != "ids differ" || n2["service_ids"].(map[string]any)["uid"] != float64(103) {
+		t.Errorf("n2 = %v", n2)
 	}
 }

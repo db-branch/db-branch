@@ -39,7 +39,16 @@ func (s *Server) status(ctx context.Context) (ClusterStatus, error) {
 	if s.Cluster != nil {
 		return s.Cluster.Status(ctx)
 	}
-	return ClusterStatus{Mode: "single", Leader: s.Node, Nodes: []NodeStatus{{Name: s.Node, Host: s.Host, Version: s.Version, Leader: true, Voter: true, Modules: s.Modules}}}, nil
+	return s.single(ctx), nil
+}
+
+// single is the cluster of one node.
+func (s *Server) single(ctx context.Context) ClusterStatus {
+	n := NodeStatus{Name: s.Node, Host: s.Host, Version: s.Version, Leader: true, Voter: true, Modules: s.Modules}
+	if s.System != nil {
+		n.System = s.System(ctx)
+	}
+	return ClusterStatus{Mode: "single", Leader: s.Node, Nodes: []NodeStatus{n}}
 }
 
 // promWriter writes the Prometheus text exposition format.

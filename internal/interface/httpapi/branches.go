@@ -55,6 +55,8 @@ type branchJSON struct {
 	Access string  `json:"access"`
 	// Record: recording was asked for at creation (the history module records).
 	Record bool `json:"record"`
+	// Checkpoints is whether the node holding the branch can take checkpoints.
+	Checkpoints bool `json:"checkpoints"`
 }
 
 func ts(t time.Time) string { return t.UTC().Format(time.RFC3339) }
@@ -94,11 +96,15 @@ func (s *Server) branchView(ctx context.Context, svc Branches, b domain.Branch) 
 		v.Proxy = &connectionJSON{Host: s.Host, Port: s.ProxyPorts[b.Runtime.Engine], User: b.User}
 	}
 	if s.remote(b.Node) {
+		v.Checkpoints = s.Cluster.NodeCheckpoints(b.Node)
 		if u, ok := s.Cluster.BranchUsage(b.Node, b.Name.String()); ok {
 			v.Storage = &storageJSON{Used: u.Used, Referenced: u.Referenced}
 		}
-	} else if info, err := svc.BranchStorage(ctx, b.Name); err == nil {
-		v.Storage = &storageJSON{Used: info.Used, Referenced: info.Referenced}
+	} else {
+		v.Checkpoints = svc.CheckpointsAvailable()
+		if info, err := svc.BranchStorage(ctx, b.Name); err == nil {
+			v.Storage = &storageJSON{Used: info.Used, Referenced: info.Referenced}
+		}
 	}
 	if op, ok := s.Ops.Active("branch", b.Name.String()); ok {
 		v.Operation = &opRef{ID: op.ID, Kind: op.Kind}

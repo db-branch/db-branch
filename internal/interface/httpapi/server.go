@@ -33,6 +33,8 @@ type Branches interface {
 	GetBranch(ctx context.Context, name domain.Name) (domain.Branch, error)
 	ListBranches(ctx context.Context) ([]domain.Branch, error)
 	BranchStorage(ctx context.Context, name domain.Name) (domain.DatasetInfo, error)
+	// CheckpointsAvailable reports whether this node's storage supports checkpoints.
+	CheckpointsAvailable() bool
 	ListCheckpoints(ctx context.Context, name domain.Name) ([]domain.Checkpoint, error)
 	CheckpointGraph(ctx context.Context, name domain.Name) (domain.Graph, error)
 	CreateCheckpoint(ctx context.Context, name domain.Name, checkpoint string) (domain.Checkpoint, error)
@@ -92,6 +94,9 @@ type Server struct {
 	// Node is this node's name.
 	Node    string
 	Version string
+	// System describes this node's OS, kernel and ZFS (single-node mode;
+	// in a cluster the nodes report it in their heartbeats). Optional.
+	System func(context.Context) domain.NodeSystem
 	// Console serves the web console's static files. Optional.
 	Console http.Handler
 	// Cluster is set in cluster mode. Optional.
@@ -419,6 +424,8 @@ func fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, "no_capacity", err.Error())
 	case errors.Is(err, domain.ErrRolloutRunning):
 		writeError(w, http.StatusConflict, "rollout_running", err.Error())
+	case errors.Is(err, domain.ErrCheckpointsUnavailable):
+		writeError(w, http.StatusConflict, "checkpoints_unavailable", err.Error())
 	case errors.Is(err, domain.ErrConflict):
 		writeError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, domain.ErrRuntimeNotInstalled):

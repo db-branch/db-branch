@@ -80,6 +80,8 @@ describe("seed", () => {
     const c = get("/v1/cluster");
     expect(c.nodes.map((n: any) => n.name)).toEqual(["node-1", "node-2", "node-3"]);
     expect(c.nodes[0].leader).toBe(true);
+    expect(c.nodes[0].system).toMatchObject({ distro: "ubuntu-24.04", os: "Ubuntu 24.04.3 LTS", zfs: "2.2.2-0ubuntu9.4" });
+    expect(c.nodes.every((n: any) => n.system.kernel.startsWith("6.8.0"))).toBe(true);
     expect(c.nodes.every((n: any) => n.runtimes.includes("postgres@18.6"))).toBe(true);
   });
   it("has the storefront and orders bases, one snapshot public", () => {
@@ -460,6 +462,18 @@ describe("checkpoints", () => {
   const names = (name: string) => list(name).map((c) => c.name);
   const settle = (ms = 2300) => vi.advanceTimersByTime(ms);
 
+  it("tells every branch it can take checkpoints, so the console shows them", () => {
+    expect(branches().length).toBeGreaterThan(0);
+    expect(branches().every((x) => x.checkpoints === true)).toBe(true);
+    call("POST", "/v1/branches", { name: "fresh", base: "orders" });
+    expect(branch("fresh")?.checkpoints).toBe(true);
+  });
+  it("marks branches saved before the flag existed as able to take checkpoints", () => {
+    const old = JSON.parse(b.dump());
+    for (const x of old.branches) delete x.checkpoints;
+    const again = DemoBackend.load(JSON.stringify(old));
+    expect((again.handle({ method: "GET", path: "/v1/branches" }).body as { items: Branch[] }).items.every((x) => x.checkpoints === true)).toBe(true);
+  });
   it("starts with a few so the demo has something to show", () => {
     expect(names("migration-test")).toEqual(["before-migration", "after-schema-change"]);
     expect(list("migration-test").map((c) => c.current)).toEqual([false, true]);
@@ -491,6 +505,7 @@ describe("checkpoints", () => {
     call("PUT", "/v1/settings/core", { values: { "branch.max_checkpoints": "2" } });
     expect(call("POST", "/v1/branches/migration-test/checkpoints", { name: "third" })).toMatchObject({ status: 409, body: { error: { code: "conflict" } } });
     expect(JSON.stringify(call("POST", "/v1/branches/migration-test/checkpoints", { name: "third" }).body)).toContain("limit 2");
+    expect(JSON.stringify(call("POST", "/v1/branches/migration-test/checkpoints", { name: "third" }).body)).toContain("not counted");
     call("PUT", "/v1/settings/core", { values: { "branch.max_checkpoints": "" } });
     expect(call("POST", "/v1/branches/migration-test/checkpoints", { name: "third" }).status).toBe(201);
   });
@@ -531,12 +546,33 @@ describe("checkpoints", () => {
     expect(names("report-fix")).toHaveLength(5);
     expect(list("report-fix").find((c) => c.current)!.name).toBe(auto[0].name);
   });
-  it("answers 404 for an unknown checkpoint, 400 for a bad name, and 409 when there is no room for the automatic one", () => {
+  it("answers 404 for an unknown checkpoint and 400 for a bad name", () => {
     expect(call("POST", "/v1/branches/migration-test/checkpoints/nope/restore").status).toBe(404);
     expect(call("POST", "/v1/branches/migration-test/checkpoints/Bad%20Name/restore").status).toBe(400);
-    call("PUT", "/v1/settings/core", { values: { "branch.max_checkpoints": "1" } });
-    expect(call("POST", "/v1/branches/migration-test/checkpoints/before-migration/restore")).toMatchObject({ status: 409, body: { error: { code: "conflict" } } });
+  });
+  it("never refuses a restore for the checkpoint limit, and the automatic ones do not count toward it", () => {
+    call("PUT", "/v1/settings/core", { values: { "branch.max_checkpoints": "2" } }); // migration-test holds two of its own
+    expect(call("POST", "/v1/branches/migration-test/checkpoints/before-migration/restore").status).toBe(202);
+    settle(800);
     expect(branch("migration-test")!.status).toBe("ready");
+    expect(names("migration-test")).toHaveLength(3);
+    expect(call("POST", "/v1/branches/migration-test/checkpoints", { name: "third" }).status).toBe(409); // two of its own
+    call("DELETE", "/v1/branches/migration-test/checkpoints/after-schema-change");
+    expect(call("POST", "/v1/branches/migration-test/checkpoints", { name: "third" }).status).toBe(201); // the automatic one is not counted
+  });
+  it("keeps the newest five automatic checkpoints, deleting the oldest when a restore adds a sixth", () => {
+    const autos = () => list("migration-test").filter((c) => c.auto).map((c) => c.name);
+    const seen: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      vi.setSystemTime(Date.now() + 5000);
+      expect(call("POST", `/v1/branches/migration-test/checkpoints/${i % 2 ? "after-schema-change" : "before-migration"}/restore`).status).toBe(202);
+      settle(800);
+      for (const n of autos()) if (!seen.includes(n)) seen.push(n);
+      expect(autos().length).toBeLessThanOrEqual(5);
+    }
+    expect(seen).toHaveLength(7);
+    expect(autos()).toEqual(seen.slice(2));
+    expect(names("migration-test")).toEqual(expect.arrayContaining(["before-migration", "after-schema-change"]));
   });
   it("deletes one without touching the others", () => {
     expect(call("DELETE", "/v1/branches/migration-test/checkpoints/before-migration").status).toBe(204);

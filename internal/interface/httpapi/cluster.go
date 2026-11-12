@@ -42,6 +42,14 @@ type NodeStatus struct {
 	ArcProblem string `json:"arc_problem,omitempty"`
 	// ModuleProblems are modules' configuration errors on the node.
 	ModuleProblems map[string]string `json:"-"`
+	// System is the node's OS, kernel and ZFS version; what an older node
+	// does not report reads "unknown".
+	System domain.NodeSystem `json:"system"`
+	// ServiceIDs are the node's db-branch uid/gid and IDProblem how they
+	// differ from the cluster's (empty: they match). Such a node takes no new
+	// branches or replicas until fixed.
+	ServiceIDs domain.ServiceIDs `json:"service_ids"`
+	IDProblem  string            `json:"id_problem,omitempty"`
 }
 
 // ClusterStatus is the membership seen from this node.
@@ -52,6 +60,9 @@ type ClusterStatus struct {
 	// Protocol is what every node speaks; features needing more wait for the
 	// remaining nodes to be upgraded.
 	Protocol int `json:"protocol"`
+	// ServiceIDs are the db-branch uid/gid every node should use (zero until
+	// the cluster has recorded them).
+	ServiceIDs domain.ServiceIDs `json:"service_ids"`
 }
 
 // Cluster is present when the node runs in cluster mode.
@@ -65,6 +76,8 @@ type Cluster interface {
 	NodeHost(node string) string
 	// BranchUsage is the space a branch on another node uses, as last reported.
 	BranchUsage(node, branch string) (domain.Usage, bool)
+	// NodeCheckpoints reports whether node, as last reported, supports checkpoints.
+	NodeCheckpoints(node string) bool
 	// AddRuntime asks every node to install ref; RemoveRuntime withdraws it.
 	AddRuntime(ctx context.Context, ref domain.RuntimeRef) error
 	RemoveRuntime(ctx context.Context, ref domain.RuntimeRef) error
@@ -180,7 +193,7 @@ type nodeJSON struct {
 }
 
 func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
-	st := ClusterStatus{Mode: "single", Leader: s.Node, Nodes: []NodeStatus{{Name: s.Node, Host: s.Host, Version: s.Version, Leader: true, Voter: true, Modules: s.Modules}}}
+	st := s.single(r.Context())
 	if s.Cluster == nil {
 		if s.Metrics != nil {
 			if h := s.Metrics(); len(h) > 0 {
@@ -206,6 +219,7 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
 	nodes := make([]nodeJSON, 0, len(st.Nodes))
 	for _, n := range st.Nodes {
 		v := nodeJSON{NodeStatus: n}
+		v.System = n.System.OrUnknown()
 		if v.Runtimes == nil {
 			v.Runtimes = []string{}
 		}
@@ -218,7 +232,7 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
 		}
 		nodes = append(nodes, v)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"mode": st.Mode, "leader": st.Leader, "protocol": st.Protocol, "nodes": nodes})
+	writeJSON(w, http.StatusOK, map[string]any{"mode": st.Mode, "leader": st.Leader, "protocol": st.Protocol, "service_ids": st.ServiceIDs, "nodes": nodes})
 }
 
 func (s *Server) clusterToken(local bool) http.HandlerFunc {

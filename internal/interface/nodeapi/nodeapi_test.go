@@ -107,11 +107,14 @@ func TestJoin_トークンでCAを受け取り投票者として加わり書き�
 
 	// The joiner has no certificate yet: it pins the CA from the token.
 	tok := clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: secret}
-	certPEM, keyPEM, err := nodeapi.Join(ctx, a.api, tok)
+	info, err := nodeapi.Join(ctx, a.api, tok)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := clusterpki.ParseCA(certPEM, keyPEM)
+	if info.ServiceIDs.Valid() {
+		t.Errorf("a server without ids told %v", info.ServiceIDs)
+	}
+	got, err := clusterpki.ParseCA(info.CACert, info.CAKey)
 	if err != nil || got.Fingerprint() != ca.Fingerprint() {
 		t.Fatalf("received CA: %v", err)
 	}
@@ -136,11 +139,11 @@ func TestJoin_秘密値や指紋が違えば参加できない(t *testing.T) {
 	eventually(t, a.store.IsLeader)
 	_ = a.store.SetJoinSecretHash(ctx, clusterpki.HashSecret("right"))
 
-	if _, _, err := nodeapi.Join(ctx, a.api, clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: "wrong"}); !errors.Is(err, nodeapi.ErrRejected) {
+	if _, err := nodeapi.Join(ctx, a.api, clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: "wrong"}); !errors.Is(err, nodeapi.ErrRejected) {
 		t.Errorf("wrong secret: %v", err)
 	}
 	other, _ := clusterpki.InitCA(t.TempDir())
-	if _, _, err := nodeapi.Join(ctx, a.api, clusterpki.Token{Fingerprint: other.Fingerprint(), Secret: "right"}); err == nil {
+	if _, err := nodeapi.Join(ctx, a.api, clusterpki.Token{Fingerprint: other.Fingerprint(), Secret: "right"}); err == nil {
 		t.Error("wrong fingerprint: want error")
 	}
 }
@@ -171,7 +174,7 @@ func Test届かない相手やリーダー不在はエラー(t *testing.T) {
 	if err := c.AddMember(ctx, dead, "x", "y"); err == nil {
 		t.Error("AddVoter to nowhere: want error")
 	}
-	if _, _, err := nodeapi.Join(ctx, dead, clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: "s"}); err == nil {
+	if _, err := nodeapi.Join(ctx, dead, clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: "s"}); err == nil {
 		t.Error("Join nowhere: want error")
 	}
 

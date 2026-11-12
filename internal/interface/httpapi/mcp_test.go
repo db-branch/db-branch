@@ -248,6 +248,28 @@ func TestMCP_危ない作業の前にチェックポイントを取り失敗し�
 	}
 }
 
+func TestMCP_チェックポイントに対応しないストレージでは分かりやすく断る(t *testing.T) {
+	httpapi.MCPPoll = time.Millisecond
+	f := checkpointFixture(t)
+	f.branches.noCheckpoints = true
+	f.branches.cpErr = domain.ErrCheckpointsUnavailable
+	f.srv.TokenAuth = &fakeTokens{}
+	s, err := mcpSession(t, f, "t-branches")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for tool, args := range map[string]map[string]any{
+		"create_checkpoint":  {"branch": "x"},
+		"list_checkpoints":   {"branch": "x"},
+		"restore_checkpoint": {"branch": "x", "checkpoint": "c1"},
+	} {
+		if out, isErr := callText(t, s, tool, args); !isErr || !strings.Contains(out, "not available on this storage") {
+			t.Errorf("%s: %v %q", tool, isErr, out)
+		}
+	}
+}
+
 func TestMCP_範囲外の操作や認証のない接続は断る(t *testing.T) {
 	f := newFixture(t)
 	f.srv.TokenAuth = &fakeTokens{}

@@ -38,6 +38,8 @@ type clusterRuntime struct {
 	replicate chan struct{}
 	// syncRuntimes asks for a runtime check now.
 	syncRuntimes chan struct{}
+	// checkpoints is whether this node's storage supports checkpoints, for the heartbeat.
+	checkpoints bool
 	// modules are the modules this agent runs, for the heartbeat.
 	modules []string
 	// moduleChanged is called when the recorded modules change. Optional.
@@ -49,6 +51,9 @@ type clusterRuntime struct {
 	arc func() (uint64, string)
 	// metrics returns the latest performance sample for the heartbeat. Optional.
 	metrics func() *domain.Metrics
+	// system returns the node's OS, kernel and ZFS version for the heartbeat.
+	// Optional.
+	system func(context.Context) domain.NodeSystem
 }
 
 // fetchArtifact gets a runtime archive from the leader; the leader itself
@@ -152,12 +157,12 @@ func (c *clusterRuntime) Status(ctx context.Context) (httpapi.ClusterStatus, err
 			voters[sv.ID] = sv.Voter
 		}
 	}
-	st := httpapi.ClusterStatus{Mode: "cluster", Leader: leader, Protocol: c.store.ClusterProtocol()}
+	st := httpapi.ClusterStatus{Mode: "cluster", Leader: leader, Protocol: c.store.ClusterProtocol(), ServiceIDs: c.store.ServiceIDs()}
 	now := time.Now()
 	for _, n := range nodes {
 		st.Nodes = append(st.Nodes, httpapi.NodeStatus{
 			Name: n.Name, Host: n.Host, Address: n.Address, Version: n.Version, Leader: n.Name == leader, Voter: voters[n.Name],
-			Down: n.Down(now, NodeDownAfter), LastSeen: n.LastSeen, PoolSize: n.PoolSize, PoolFree: n.PoolFree, Runtimes: n.Runtimes, Modules: n.Modules, Metrics: n.Metrics, ModuleProblems: n.ModuleProblems, ArcMaxMB: n.ArcMaxMB, ArcProblem: n.ArcProblem,
+			Down: n.Down(now, NodeDownAfter), LastSeen: n.LastSeen, PoolSize: n.PoolSize, PoolFree: n.PoolFree, Runtimes: n.Runtimes, Modules: n.Modules, Metrics: n.Metrics, ModuleProblems: n.ModuleProblems, ArcMaxMB: n.ArcMaxMB, ArcProblem: n.ArcProblem, System: n.System, ServiceIDs: n.ServiceIDs, IDProblem: n.IDProblem,
 			Protocol: max(n.Protocol, 1),
 		})
 	}
@@ -186,6 +191,11 @@ func (c *clusterRuntime) Forward(node string) (http.Handler, error) {
 func (c *clusterRuntime) BranchUsage(node, branch string) (domain.Usage, bool) {
 	u, ok := c.store.State().Nodes[node].Usage[branch]
 	return u, ok
+}
+
+// NodeCheckpoints implements httpapi.Cluster.
+func (c *clusterRuntime) NodeCheckpoints(node string) bool {
+	return c.store.State().Nodes[node].Checkpoints
 }
 
 // NodeHost implements httpapi.Cluster.
