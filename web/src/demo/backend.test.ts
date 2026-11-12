@@ -460,6 +460,18 @@ describe("checkpoints", () => {
   const names = (name: string) => list(name).map((c) => c.name);
   const settle = (ms = 2300) => vi.advanceTimersByTime(ms);
 
+  it("tells every branch it can take checkpoints, so the console shows them", () => {
+    expect(branches().length).toBeGreaterThan(0);
+    expect(branches().every((x) => x.checkpoints === true)).toBe(true);
+    call("POST", "/v1/branches", { name: "fresh", base: "orders" });
+    expect(branch("fresh")?.checkpoints).toBe(true);
+  });
+  it("marks branches saved before the flag existed as able to take checkpoints", () => {
+    const old = JSON.parse(b.dump());
+    for (const x of old.branches) delete x.checkpoints;
+    const again = DemoBackend.load(JSON.stringify(old));
+    expect((again.handle({ method: "GET", path: "/v1/branches" }).body as { items: Branch[] }).items.every((x) => x.checkpoints === true)).toBe(true);
+  });
   it("starts with a few so the demo has something to show", () => {
     expect(names("migration-test")).toEqual(["before-migration", "after-schema-change"]);
     expect(list("migration-test").map((c) => c.current)).toEqual([false, true]);

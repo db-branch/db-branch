@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"text/tabwriter"
@@ -35,7 +36,7 @@ func (a *App) checkpointCommand() *cobra.Command {
 		Use:   "checkpoint <name> [--name <checkpoint>]",
 		Short: "Save the branch's current state as a checkpoint (instant, the branch keeps running)",
 		Args:  cobra.ExactArgs(1),
-		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+		RunE: checkpointsOnly(a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
 			if name != "" {
 				if _, err := domain.ParseCheckpointName(name); err != nil {
 					return fmt.Errorf("--name: %w", err)
@@ -50,14 +51,14 @@ func (a *App) checkpointCommand() *cobra.Command {
 			}
 			fmt.Fprintf(a.Stdout, "Saved checkpoint %s of %s\n", cp.Name, n)
 			return nil
-		}),
+		})),
 	}
 	cmd.Flags().StringVar(&name, "name", "", "checkpoint name: lowercase letters, digits and hyphens (default: the time)")
 	del := &cobra.Command{
 		Use:   "delete <name> <checkpoint>",
 		Short: "Delete one checkpoint (the others are untouched)",
 		Args:  cobra.ExactArgs(2),
-		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+		RunE: checkpointsOnly(a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
 			cp, err := domain.ParseCheckpointName(cmd.Flags().Arg(1))
 			if err != nil {
 				return err
@@ -67,7 +68,7 @@ func (a *App) checkpointCommand() *cobra.Command {
 			}
 			fmt.Fprintf(a.Stdout, "Deleted checkpoint %s of %s\n", cp, n)
 			return nil
-		}),
+		})),
 	}
 	cmd.AddCommand(del)
 	return cmd
@@ -78,7 +79,7 @@ func (a *App) checkpointsCommand() *cobra.Command {
 		Use:   "checkpoints <name>",
 		Short: "List a branch's checkpoints",
 		Args:  cobra.ExactArgs(1),
-		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+		RunE: checkpointsOnly(a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
 			var out struct {
 				Items []checkpointView `json:"items"`
 			}
@@ -98,7 +99,7 @@ func (a *App) checkpointsCommand() *cobra.Command {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", cp.Name, localTime(cp.CreatedAt), HumanBytes(cp.Size), cp.Line, checkpointNotes(cp))
 			}
 			return tw.Flush()
-		}),
+		})),
 	}
 }
 
@@ -126,7 +127,7 @@ func localTime(s string) string {
 }
 
 func (a *App) restoreCheckpoint(noWait *bool) func(*cobra.Command, []string) error {
-	return a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+	return checkpointsOnly(a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
 		cp, err := domain.ParseCheckpointName(cmd.Flags().Arg(1))
 		if err != nil {
 			return err
@@ -136,5 +137,18 @@ func (a *App) restoreCheckpoint(noWait *bool) func(*cobra.Command, []string) err
 		}
 		fmt.Fprintf(a.Stdout, "Restored %s to %s. Nothing was lost: the state it left is kept as a before-restore checkpoint.\n", n, cp)
 		return nil
-	})
+	}))
+}
+
+// checkpointsOnly turns the agent's "checkpoints_unavailable" answer (module
+// or shared storage) into one plain line.
+func checkpointsOnly(run func(*cobra.Command, []string) error) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		err := run(cmd, args)
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Code == "checkpoints_unavailable" {
+			return errors.New("Checkpoints are not available on this storage: they need the node's own ZFS (not module or shared storage)")
+		}
+		return err
+	}
 }

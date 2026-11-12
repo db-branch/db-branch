@@ -19,6 +19,8 @@ export type Branch = {
   owner: string | null;
   id: string;
   access: "private" | "open";
+  // checkpoints: the node holding the branch can take checkpoints (own ZFS).
+  checkpoints: boolean;
 };
 
 // Checkpoint is a saved state of a branch. line is the line of history it was

@@ -179,7 +179,9 @@ paths:
       summary: Save the running branch's state as a checkpoint (a ZFS snapshot; instant, the server keeps running).
       description: |
         409 when the branch is not ready, the name is taken, or the branch holds
-        `branch.max_checkpoints` checkpoints already (default 20).
+        `branch.max_checkpoints` checkpoints already (default 20). 409 with the error code
+        `checkpoints_unavailable` when the node's storage does not support checkpoints (see
+        `checkpoints` of the branch); this goes for every checkpoint endpoint.
       x-dbb-action: branch.checkpoint
       parameters:
         - $ref: '#/components/parameters/CSRF'
@@ -898,6 +900,14 @@ components:
         reset_at:
           oneOf: [{ $ref: '#/components/schemas/Timestamp' }, { type: 'null' }]
         storage: { $ref: '#/components/schemas/Storage' }
+        checkpoints:
+          type: boolean
+          description: |
+            Whether the node holding the branch supports checkpoints (its own ZFS storage; false on
+            module or shared storage, where the checkpoint endpoints answer 409
+            `checkpoints_unavailable`). In a cluster this is the branch's node's own report, so it is
+            false for a node that has not reported it (older versions). Clients hide checkpoint
+            controls when it is false.
         connection:
           type: [object, 'null']
           properties:

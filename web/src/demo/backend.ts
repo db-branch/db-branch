@@ -77,6 +77,7 @@ export class DemoBackend {
   constructor(state?: State) {
     this.state = state ?? seed(Date.now());
     this.state.checkpoints ??= {}; // saved by a version without checkpoints
+    for (const br of this.state.branches) br.checkpoints ??= true; // likewise: the demo always can
     this.build();
   }
 
@@ -553,6 +554,7 @@ export class DemoBackend {
       owner: who ? (who.admin && body.owner ? String(body.owner) : who.id) : null,
       id: newId(this.state),
       access: !who || body.access === "open" ? "open" : "private",
+      checkpoints: true,
     };
     this.state.branches.push(b);
     this.schedule(op, TIMING.branchCreate, { k: "branch.ready", name });

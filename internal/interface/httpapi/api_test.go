@@ -45,7 +45,11 @@ type fakeBranches struct {
 	// cps are the checkpoints every branch has; cpErr fails checkpoint calls.
 	cps   []domain.Checkpoint
 	cpErr error
+	// noCheckpoints makes the node report no checkpoint support.
+	noCheckpoints bool
 }
+
+func (f *fakeBranches) CheckpointsAvailable() bool { return !f.noCheckpoints }
 
 func (f *fakeBranches) PlaceRecreate(_ context.Context, n domain.Name) (string, error) {
 	if f.placeErr != nil {

@@ -35,7 +35,7 @@ func TestFSM_コマンドを適用した結果を読める(t *testing.T) {
 	f := raftstore.NewFSM()
 	b := domain.Base{Name: name("prod"), Status: domain.BaseReady}
 	br := domain.Branch{Name: name("x"), Base: name("prod"), Status: domain.BranchReady, Password: "pw"}
-	n := domain.Node{Name: "node1", Address: "192.0.2.10:7070", LastSeen: time.Unix(100, 0).UTC()}
+	n := domain.Node{Name: "node1", Address: "192.0.2.10:7070", Checkpoints: true, LastSeen: time.Unix(100, 0).UTC()}
 	apply(t, f, raftstore.PutBase(b))
 	apply(t, f, raftstore.PutBranch(br))
 	apply(t, f, raftstore.PutNode(n))

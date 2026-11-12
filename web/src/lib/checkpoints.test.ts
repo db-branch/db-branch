@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Checkpoint } from "../api";
-import { checkpointNameProblem, hasHistory, MAX_CHECKPOINT_NAME, newestFirst, notes, savedLabel } from "./checkpoints";
+import { checkpointNameProblem, hasHistory, MAX_CHECKPOINT_NAME, newestFirst, notes, savedLabel, showCheckpoints } from "./checkpoints";
 
 const cp = (name: string, at: string, over: Partial<Checkpoint> = {}): Checkpoint => ({ name, created_at: at, size: 0, line: 0, auto: false, current: false, ...over });
 
@@ -48,5 +48,21 @@ describe("notes", () => {
 describe("savedLabel", () => {
   it("名前を付けて保存した結果を短く言う", () => {
     expect(savedLabel("before-migration")).toBe("Saved checkpoint before-migration");
+  });
+});
+
+describe("showCheckpoints", () => {
+  const all = () => true;
+  const none = () => false;
+  it("ブランチのノードが対応していて、操作の権限が一つでもあるときだけ出す", () => {
+    expect(showCheckpoints({ checkpoints: true }, all)).toBe(true);
+    expect(showCheckpoints({ checkpoints: true }, (a) => a === "branch.restore")).toBe(true);
+  });
+  it("ストレージが対応しない(false)・知らない古いサーバー(未定義)なら出さない", () => {
+    expect(showCheckpoints({ checkpoints: false }, all)).toBe(false);
+    expect(showCheckpoints({}, all)).toBe(false);
+  });
+  it("権限が全く無ければ出さない", () => {
+    expect(showCheckpoints({ checkpoints: true }, none)).toBe(false);
   });
 });

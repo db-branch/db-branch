@@ -98,7 +98,7 @@ func (c *clusterRuntime) heartbeat(ctx context.Context, log *slog.Logger) {
 		n := domain.Node{
 			Name: c.self.Node, Address: c.self.APIAddr, RaftAddress: c.self.RaftAddr, Host: AdvertiseHost(c.cfg),
 			Version: version, LastSeen: time.Now().UTC().Truncate(time.Second), PoolSize: size, PoolFree: free,
-			Protocol: raftstore.Protocol,
+			Protocol: raftstore.Protocol, Checkpoints: c.checkpoints,
 		}
 		if total, err := zfsarc.System.MemTotal(); err == nil {
 			n.MemoryMB = total >> 20
@@ -293,4 +293,11 @@ func branchUsage(ctx context.Context, pool string) map[string]domain.Usage {
 		}
 	}
 	return usage
+}
+
+// svcCheckpoints is whether this node's branch service supports checkpoints
+// (false before the node is initialized).
+func svcCheckpoints(a *App) bool {
+	svc, err := a.Branches()
+	return err == nil && svc.CheckpointsAvailable()
 }

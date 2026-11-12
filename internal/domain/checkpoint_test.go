@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,4 +204,13 @@ func mustName(s string) domain.Name {
 		panic(err)
 	}
 	return n
+}
+
+func TestErrCheckpointsUnavailable_競合の一種で理由を伝える(t *testing.T) {
+	if !errors.Is(domain.ErrCheckpointsUnavailable, domain.ErrConflict) {
+		t.Error("must be a conflict")
+	}
+	if !strings.Contains(domain.ErrCheckpointsUnavailable.Error(), "not available on this storage") {
+		t.Errorf("message = %q", domain.ErrCheckpointsUnavailable)
+	}
 }

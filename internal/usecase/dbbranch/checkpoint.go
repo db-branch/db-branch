@@ -36,9 +36,13 @@ func (s *Service) maxCheckpoints() int {
 	return domain.DefaultMaxCheckpoints
 }
 
+// CheckpointsAvailable reports whether this node's storage supports
+// checkpoints (its own ZFS, not module or shared storage).
+func (s *Service) CheckpointsAvailable() bool { return s.Lineage != nil }
+
 func (s *Service) requireLineage() error {
 	if s.Lineage == nil {
-		return fmt.Errorf("%w: checkpoints need this node's own ZFS storage", domain.ErrConflict)
+		return domain.ErrCheckpointsUnavailable
 	}
 	return nil
 }

@@ -314,6 +314,7 @@ POST /v1/branches
   "expires_at": "2026-11-12T12:00:00Z",
   "reset_at": "2026-11-09T12:00:08Z",
   "storage": { "used": 1048576, "referenced": 524288000 },
+  "checkpoints": true,
   "connection": {
     "host": "node2",
     "port": 33061,
@@ -332,6 +333,7 @@ POST /v1/branches
 - `status_reason`: `failed`・`lost` のときに短い英文
 - `expires_at`: 期限なしなら `null`。コンソールは `created_at` から `expires_at` までの残りで TTL バーを描く
 - `storage.used` はこのブランチ固有の差分、`storage.referenced` はベースと共有している分を含む全体（ZFS の値そのまま）
+- `checkpoints`: ブランチを持つノードのストレージがチェックポイントに対応しているか（そのノード自身の ZFS なら `true`。モジュール／共有ストレージでは `false`。クラスタではブランチのノードが報告した値で、未報告の古いノードも `false`）。`false` のとき、チェックポイントの API は `409`（エラーコード `checkpoints_unavailable`）を返し、コンソールはチェックポイントの操作を出さない
 - `connection`: 直接つなぐ場合。ProxySQL を使う場合は `routing` を見る（フェーズ 3 以降。それまでは `null`）
 - `operation`: 進行中のオペレーションがあればその ID とkind。なければ `null`
 - `GET /v1/branches/{name}/dsn` は `{"dsn": "mysql://app.feature-x:<password>@node2:33061/app"}` を返す。パスワードは一覧・単体取得には含めない。この呼び出しは読み取りだが監査イベントを出す

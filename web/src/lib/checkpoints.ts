@@ -32,6 +32,13 @@ export function notes(c: Checkpoint): ("current" | "auto")[] {
   return out;
 }
 
+// showCheckpoints: whether a branch gets checkpoint controls at all. They are
+// left out (not disabled) where the node's storage cannot take checkpoints,
+// and for people who may do none of the checkpoint actions.
+export function showCheckpoints(b: { checkpoints?: boolean }, allow: (action: string) => boolean): boolean {
+  return b.checkpoints === true && ["branch.checkpoint", "branch.restore", "branch.checkpoint_delete"].some(allow);
+}
+
 export function savedLabel(name: string): string {
   return `Saved checkpoint ${name}`;
 }

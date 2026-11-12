@@ -33,6 +33,8 @@ type Branches interface {
 	GetBranch(ctx context.Context, name domain.Name) (domain.Branch, error)
 	ListBranches(ctx context.Context) ([]domain.Branch, error)
 	BranchStorage(ctx context.Context, name domain.Name) (domain.DatasetInfo, error)
+	// CheckpointsAvailable reports whether this node's storage supports checkpoints.
+	CheckpointsAvailable() bool
 	ListCheckpoints(ctx context.Context, name domain.Name) ([]domain.Checkpoint, error)
 	CreateCheckpoint(ctx context.Context, name domain.Name, checkpoint string) (domain.Checkpoint, error)
 	RestoreCheckpoint(ctx context.Context, name domain.Name, checkpoint string, report dbbranch.Reporter) (domain.Branch, error)
@@ -418,6 +420,8 @@ func fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, "no_capacity", err.Error())
 	case errors.Is(err, domain.ErrRolloutRunning):
 		writeError(w, http.StatusConflict, "rollout_running", err.Error())
+	case errors.Is(err, domain.ErrCheckpointsUnavailable):
+		writeError(w, http.StatusConflict, "checkpoints_unavailable", err.Error())
 	case errors.Is(err, domain.ErrConflict):
 		writeError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, domain.ErrRuntimeNotInstalled):

@@ -30,6 +30,8 @@ type fakeCluster struct {
 	added     []string
 	removed   []string
 	replyBody string
+	// n2NoCheckpoints makes n2 report no checkpoint support.
+	n2NoCheckpoints bool
 	// principals are the principal headers that reached the other node.
 	principals []string
 }
@@ -71,6 +73,8 @@ func (f *fakeCluster) BranchUsage(node, branch string) (domain.Usage, bool) {
 	}
 	return domain.Usage{}, false
 }
+
+func (f *fakeCluster) NodeCheckpoints(node string) bool { return node == "n2" && !f.n2NoCheckpoints }
 
 func (f *fakeCluster) NodeHost(node string) string {
 	if node == "n2" {
@@ -642,5 +646,20 @@ func TestStartMaskOn_クラスタでなければ使えない(t *testing.T) {
 	f := newFixture(t)
 	if err := f.srv.StartMaskOn(ctx, "n2", dbbranch.MaskRequest{Target: name("dev")}); err == nil {
 		t.Error("no cluster")
+	}
+}
+
+func TestBranch_他ノードのブランチはそのノードの報告でチェックポイント可否を返す(t *testing.T) {
+	f, c := remoteFixture(t)
+	// This node cannot do checkpoints, but n2 (which holds the branch) can.
+	f.branches.noCheckpoints = true
+	_, body := f.do(t, "GET", "/v1/branches/there", nil)
+	if body["checkpoints"] != true {
+		t.Errorf("checkpoints = %v, want true from n2", body["checkpoints"])
+	}
+	c.n2NoCheckpoints = true
+	_, body = f.do(t, "GET", "/v1/branches/there", nil)
+	if body["checkpoints"] != false {
+		t.Errorf("checkpoints = %v, want false from n2", body["checkpoints"])
 	}
 }

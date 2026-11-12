@@ -3,6 +3,7 @@ package dbbranch_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -220,10 +221,23 @@ func TestCreateCheckpoint_受け付けない状態や場所を断る(t *testing.
 	}
 }
 
+func TestCheckpointsAvailable_自前のZFSがあるときだけ真(t *testing.T) {
+	if newEnv(t).svc.CheckpointsAvailable() {
+		t.Error("no lineage storage: checkpoints must be unavailable")
+	}
+	if !newZEnv(t).svc.CheckpointsAvailable() {
+		t.Error("lineage storage: checkpoints must be available")
+	}
+}
+
 func TestCheckpoints_ZFS以外のストレージでは使えないと伝える(t *testing.T) {
 	e := newEnv(t)
 	e.withBase(t)
 	e.withBranch(t, "x")
+	_, err := e.svc.ListCheckpoints(ctx, name("x"))
+	if !errors.Is(err, domain.ErrCheckpointsUnavailable) || !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "not available on this storage") {
+		t.Errorf("error = %v, want ErrCheckpointsUnavailable (a conflict) saying so", err)
+	}
 	if _, err := e.svc.CreateCheckpoint(ctx, name("x"), "a"); !errors.Is(err, domain.ErrConflict) {
 		t.Errorf("create: %v", err)
 	}

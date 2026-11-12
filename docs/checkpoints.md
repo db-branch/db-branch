@@ -91,6 +91,6 @@ DB のデータディレクトリと WAL / redo ログは同じデータセッ�
 
 ## 9. 制限
 
-- ノード自身の ZFS で動くブランチだけが対象。モジュールのストレージ（共有ストレージなど）では `409`（`checkpoints need this node's own ZFS storage`）
+- ノード自身の ZFS で動くブランチだけが対象。モジュールのストレージ（共有ストレージなど）では `409`（エラーコード `checkpoints_unavailable`、`checkpoints are not available on this storage ...`）。ブランチの JSON の `checkpoints` が `false` になり、コンソールはチェックポイントの欄と操作を出さず、CLI は一行で伝え、MCP はこのエラーを返す
 - チェックポイントはクラッシュコンシステント。アプリケーションの整合性（複数テーブルをまたぐ処理の途中など）を保証するものではないが、DB の通常のクラッシュ回復と同じ範囲に収まる
 - 復元の間（MySQL で約 2 秒、PostgreSQL で約 0.7 秒）はブランチに接続できない

@@ -127,6 +127,7 @@ function branch(s: State, now: number, name: string, b: BaseRec, owner: string, 
     owner,
     id: newId(s),
     access,
+    checkpoints: true,
   };
 }
 

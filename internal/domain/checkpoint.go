@@ -188,6 +188,10 @@ func NextLine(lines []Line) int {
 	return most + 1
 }
 
+// ErrCheckpointsUnavailable is the answer where the node's storage has no
+// lineage support (module or shared storage): checkpoints cannot work there.
+var ErrCheckpointsUnavailable = fmt.Errorf("%w: checkpoints are not available on this storage (they need this node's own ZFS, not module or shared storage)", ErrConflict)
+
 // CheckLimit refuses a checkpoint when the branch holds max already. The
 // checkpoint taken automatically before a restore may exceed the limit by one.
 func CheckLimit(branch string, count, max int, auto bool) error {
