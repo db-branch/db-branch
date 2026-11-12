@@ -93,6 +93,9 @@ type Server struct {
 	// Node is this node's name.
 	Node    string
 	Version string
+	// System describes this node's OS, kernel and ZFS (single-node mode;
+	// in a cluster the nodes report it in their heartbeats). Optional.
+	System func(context.Context) domain.NodeSystem
 	// Console serves the web console's static files. Optional.
 	Console http.Handler
 	// Cluster is set in cluster mode. Optional.

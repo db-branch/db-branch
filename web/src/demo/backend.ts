@@ -735,6 +735,12 @@ export class DemoBackend {
           runtimes: s().installed,
           protocol: PROTOCOL,
           metrics: null,
+          system: {
+            distro: "ubuntu-24.04",
+            os: "Ubuntu 24.04.3 LTS",
+            kernel: ["6.8.0-87-generic", "6.8.0-87-generic", "6.8.0-85-generic"][i],
+            zfs: "2.2.2-0ubuntu9.4",
+          },
         })),
       });
     });

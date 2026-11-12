@@ -663,3 +663,35 @@ func TestBranch_他ノードのブランチはそのノードの報告でチェ�
 		t.Errorf("checkpoints = %v, want false from n2", body["checkpoints"])
 	}
 }
+
+func TestCluster_ノードのOSとカーネルとZFSを返し未報告はunknownにする(t *testing.T) {
+	f := newFixture(t)
+	f.srv.Cluster = &fakeCluster{status: httpapi.ClusterStatus{Mode: "cluster", Leader: "n1", Nodes: []httpapi.NodeStatus{
+		{Name: "n1", System: domain.NodeSystem{Distro: "ubuntu-26.04", OS: "Ubuntu 26.04.1 LTS", Kernel: "7.0.0-14-generic", ZFS: "2.4.0-1ubuntu1"}},
+		{Name: "n2"},
+	}}}
+	_, body := f.do(t, "GET", "/v1/cluster", nil)
+	nodes := body["nodes"].([]any)
+	n1 := nodes[0].(map[string]any)["system"].(map[string]any)
+	n2 := nodes[1].(map[string]any)["system"].(map[string]any)
+	if n1["distro"] != "ubuntu-26.04" || n1["os"] != "Ubuntu 26.04.1 LTS" || n1["kernel"] != "7.0.0-14-generic" || n1["zfs"] != "2.4.0-1ubuntu1" {
+		t.Errorf("n1 system = %v", n1)
+	}
+	for _, k := range []string{"distro", "os", "kernel", "zfs"} {
+		if n2[k] != "unknown" {
+			t.Errorf("n2 %s = %v, want unknown", k, n2[k])
+		}
+	}
+}
+
+func TestCluster_単一ノードでも自分のシステム情報を返す(t *testing.T) {
+	f := newFixture(t)
+	f.srv.System = func(context.Context) domain.NodeSystem {
+		return domain.NodeSystem{Distro: "ubuntu-24.04", Kernel: "6.8.0-48-generic"}
+	}
+	_, body := f.do(t, "GET", "/v1/cluster", nil)
+	sys := body["nodes"].([]any)[0].(map[string]any)["system"].(map[string]any)
+	if sys["distro"] != "ubuntu-24.04" || sys["kernel"] != "6.8.0-48-generic" || sys["zfs"] != "unknown" {
+		t.Errorf("system = %v", sys)
+	}
+}

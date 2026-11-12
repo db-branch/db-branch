@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -130,5 +131,69 @@ func TestBranchBudgetMB_ARCが小さくてもOSの取り分は削らない(t *te
 	n.ArcMaxMB = 9000
 	if got := n.BranchBudgetMB(); got != 0 {
 		t.Errorf("ARC larger than memory: %v", got)
+	}
+}
+
+func withDistro(n domain.Node, d string) domain.Node {
+	n.System.Distro = d
+	return n
+}
+
+func TestPlacement_PostgreSQLは元と同じディストリビューションのノードだけに置く(t *testing.T) {
+	p := domain.Placement{
+		Nodes:      []domain.Node{withDistro(up("a", 0), "ubuntu-26.04"), withDistro(up("b", 0), "ubuntu-24.04"), up("c", 0)},
+		Branches:   on("b", 2),
+		Candidates: []string{"a", "b", "c"},
+		Distro:     "ubuntu-24.04", Now: now, DownAfter: 30 * time.Second,
+	}
+	if got := place(t, p); got != "c" {
+		t.Errorf("chose %s, want c (a differs; c does not report its distro, b is busier)", got)
+	}
+	p.Candidates = []string{"a", "b"}
+	if got := place(t, p); got != "b" {
+		t.Errorf("chose %s, want b", got)
+	}
+}
+
+func TestPlacement_別ディストリビューションしか無いときはcollationの理由つきの409になる(t *testing.T) {
+	p := domain.Placement{
+		Nodes:      []domain.Node{withDistro(up("a", 0), "ubuntu-26.04")},
+		Candidates: []string{"a"}, Distro: "ubuntu-24.04", Want: "a", Now: now, DownAfter: 30 * time.Second,
+	}
+	_, err := p.Choose()
+	if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "collation") || !strings.Contains(err.Error(), "ubuntu-24.04") {
+		t.Errorf("err = %v", err)
+	}
+	p.Want = ""
+	if _, err := p.Choose(); !errors.Is(err, domain.ErrConflict) {
+		t.Errorf("auto: err = %v", err)
+	}
+	p.Nodes[0].LastSeen = now.Add(-time.Hour)
+	if _, err := p.Choose(); !errors.Is(err, domain.ErrNoCapacity) {
+		t.Errorf("down: err = %v", err)
+	}
+}
+
+func TestSameDistro_どちらかが不明なら妨げない(t *testing.T) {
+	for _, c := range []struct {
+		want, have string
+		ok         bool
+	}{{"", "x", true}, {"x", "", true}, {"x", "x", true}, {"x", "y", false}} {
+		if got := domain.SameDistro(c.want, c.have); got != c.ok {
+			t.Errorf("SameDistro(%q,%q) = %v", c.want, c.have, got)
+		}
+	}
+}
+
+func TestCollationBound_PostgreSQLだけが依存する(t *testing.T) {
+	if !domain.CollationBound(domain.Postgres) || domain.CollationBound(domain.MySQL) {
+		t.Error("only postgres depends on OS collations")
+	}
+}
+
+func TestNodeSystem_OrUnknown_報告のない項目をunknownにする(t *testing.T) {
+	got := domain.NodeSystem{Kernel: "6.8.0"}.OrUnknown()
+	if got.Kernel != "6.8.0" || got.Distro != "unknown" || got.OS != "unknown" || got.ZFS != "unknown" {
+		t.Errorf("got %+v", got)
 	}
 }

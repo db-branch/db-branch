@@ -51,6 +51,9 @@ type clusterRuntime struct {
 	arc func() (uint64, string)
 	// metrics returns the latest performance sample for the heartbeat. Optional.
 	metrics func() *domain.Metrics
+	// system returns the node's OS, kernel and ZFS version for the heartbeat.
+	// Optional.
+	system func(context.Context) domain.NodeSystem
 }
 
 // fetchArtifact gets a runtime archive from the leader; the leader itself
@@ -159,7 +162,7 @@ func (c *clusterRuntime) Status(ctx context.Context) (httpapi.ClusterStatus, err
 	for _, n := range nodes {
 		st.Nodes = append(st.Nodes, httpapi.NodeStatus{
 			Name: n.Name, Host: n.Host, Address: n.Address, Version: n.Version, Leader: n.Name == leader, Voter: voters[n.Name],
-			Down: n.Down(now, NodeDownAfter), LastSeen: n.LastSeen, PoolSize: n.PoolSize, PoolFree: n.PoolFree, Runtimes: n.Runtimes, Modules: n.Modules, Metrics: n.Metrics, ModuleProblems: n.ModuleProblems, ArcMaxMB: n.ArcMaxMB, ArcProblem: n.ArcProblem,
+			Down: n.Down(now, NodeDownAfter), LastSeen: n.LastSeen, PoolSize: n.PoolSize, PoolFree: n.PoolFree, Runtimes: n.Runtimes, Modules: n.Modules, Metrics: n.Metrics, ModuleProblems: n.ModuleProblems, ArcMaxMB: n.ArcMaxMB, ArcProblem: n.ArcProblem, System: n.System,
 			Protocol: max(n.Protocol, 1),
 		})
 	}

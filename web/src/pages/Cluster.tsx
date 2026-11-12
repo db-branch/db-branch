@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, can, ClusterNode, Operation, Runtime } from "../api";
+import { api, can, ClusterNode, NodeSystem, Operation, Runtime } from "../api";
 import { Engine, Icon, Status } from "../components/marks";
 import { Sparkline } from "../components/sparkline";
 import { Dialog, Drawer, ErrorLine, Info } from "../components/ui";
@@ -91,6 +91,7 @@ function NodeColumn({ node, branches }: { node: ClusterNode; branches: { name: s
           )}
         </div>
       )}
+      <NodeSystemInfo system={node.system} />
       {!node.down && <NodeMetrics node={node.name} />}
       <div className="node-section">
         <h3>{t("Branches")}</h3>
@@ -104,6 +105,28 @@ function NodeColumn({ node, branches }: { node: ClusterNode; branches: { name: s
         </div>
       </div>
     </article>
+  );
+}
+
+// NodeSystemInfo shows what the node runs on. Nodes of mixed distributions
+// matter for PostgreSQL (docs/mixed-os.md), so the key is shown with the name.
+function NodeSystemInfo({ system }: { system?: NodeSystem }) {
+  const v = (x?: string) => x || "unknown";
+  return (
+    <div className="node-section">
+      <h3>{t("System")}</h3>
+      <dl className="kv">
+        <dt>{t("OS")}</dt>
+        <dd className="mono" title={v(system?.distro)}>
+          {v(system?.os)}
+          {system?.distro && system.distro !== "unknown" && system.os !== system.distro && <span className="muted"> · {system.distro}</span>}
+        </dd>
+        <dt>{t("Kernel")}</dt>
+        <dd className="mono">{v(system?.kernel)}</dd>
+        <dt>{t("ZFS")}</dt>
+        <dd className="mono">{v(system?.zfs)}</dd>
+      </dl>
+    </div>
   );
 }
 

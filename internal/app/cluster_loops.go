@@ -103,6 +103,9 @@ func (c *clusterRuntime) heartbeat(ctx context.Context, log *slog.Logger) {
 		if total, err := zfsarc.System.MemTotal(); err == nil {
 			n.MemoryMB = total >> 20
 		}
+		if c.system != nil {
+			n.System = c.system(ctx)
+		}
 		if c.runtimes != nil {
 			n.Runtimes = c.runtimes(ctx)
 		}

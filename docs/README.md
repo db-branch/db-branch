@@ -8,6 +8,7 @@ The documents in this directory are written in **Japanese**. English user docume
 | [api.md](api.md) | REST API design: conventions, resources, operations and events, with examples (machine-readable definition: [../api/openapi.yaml](../api/openapi.yaml)) |
 | [checkpoints.md](checkpoints.md) | Branch checkpoints: saving a branch's state and restoring it without losing the others (dataset layout, restore steps, crash safety, limits) |
 | [cluster-plan.md](cluster-plan.md) | Implementation plan for clustering: ports, steps and the verification done at each step |
+| [mixed-os.md](mixed-os.md) | Running nodes of different distributions in one cluster: what each node reports and why PostgreSQL branches stay on the distribution their base was made on |
 | [base-refresh.md](base-refresh.md) | Reloading a base from a source database on a schedule |
 | [masking.md](masking.md) | Creating masked bases with masker modules and what is recorded about them |
 | [modules.md](modules.md) | Writing and deploying extension modules: ports, plugin protocol, settings, module APIs and pages, cluster-wide install |

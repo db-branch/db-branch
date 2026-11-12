@@ -134,7 +134,11 @@ export type ClusterNode = {
   runtimes: string[];
   protocol: number;
   metrics: Metrics | null;
+  /** OS facts of the node; "unknown" for what an older node does not report. */
+  system?: NodeSystem;
 };
+
+export type NodeSystem = { distro: string; os: string; kernel: string; zfs: string };
 
 export type Metrics = { time: string; cpu: number; load1: number; mem_total: number; mem_used: number; net_rx: number; net_tx: number; arc: number };
 

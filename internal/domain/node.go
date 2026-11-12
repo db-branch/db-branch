@@ -43,6 +43,34 @@ type Node struct {
 	Metrics *Metrics `json:"metrics,omitempty"`
 	// ModuleProblems are modules' last configuration errors (e.g. licence).
 	ModuleProblems map[string]string `json:"module_problems,omitempty"`
+	// System describes the node's OS, kernel and ZFS (empty for nodes of
+	// versions that do not report it).
+	System NodeSystem `json:"system,omitzero"`
+}
+
+// Unknown is what clients show for a system fact a node does not report.
+const Unknown = "unknown"
+
+// NodeSystem is what a node says about the system it runs on.
+type NodeSystem struct {
+	// Distro is the distribution key, "<ID>-<VERSION_ID>" (e.g. ubuntu-26.04).
+	Distro string `json:"distro,omitempty"`
+	// OS is the distribution's pretty name (e.g. "Ubuntu 26.04.1 LTS").
+	OS string `json:"os,omitempty"`
+	// Kernel is the running kernel release (uname -r).
+	Kernel string `json:"kernel,omitempty"`
+	// ZFS is the ZFS version, with the kernel module's when it differs.
+	ZFS string `json:"zfs,omitempty"`
+}
+
+// OrUnknown returns s with every fact the node did not report set to Unknown.
+func (s NodeSystem) OrUnknown() NodeSystem {
+	for _, f := range []*string{&s.Distro, &s.OS, &s.Kernel, &s.ZFS} {
+		if *f == "" {
+			*f = Unknown
+		}
+	}
+	return s
 }
 
 // Usage is a dataset's space use in bytes (see DatasetInfo).
