@@ -147,12 +147,12 @@ func TestPlan_プランごとに使える機能が増える(t *testing.T) {
 	}{
 		{license.Lite, []string{license.FeatureHistory, license.FeatureDiff}, []string{license.FeatureUsers, license.FeatureAudit, license.FeatureSSO, license.FeatureMasking}},
 		{license.Team, []string{license.FeatureUsers, license.FeatureHistory, license.FeatureDiff}, []string{license.FeatureAudit, license.FeatureSSO, license.FeatureMasking}},
-		{license.Business, []string{license.FeatureUsers, license.FeatureAudit, license.FeatureSSO, license.FeatureMasking, license.FeatureHistory, license.FeatureDiff}, nil},
+		{license.Business, []string{license.FeatureUsers, license.FeatureAudit, license.FeatureSSO, license.FeatureHistory, license.FeatureDiff}, []string{license.FeatureMasking}},
 		// Keys issued under the earlier plans read as the plan that replaced them.
 		{"startup", []string{license.FeatureUsers, license.FeatureHistory, license.FeatureDiff}, []string{license.FeatureAudit}},
 		{"growth", []string{license.FeatureUsers}, []string{license.FeatureSSO}},
-		{"enterprise", []string{license.FeatureAudit, license.FeatureSSO, license.FeatureMasking}, nil},
-		{"", []string{license.FeatureAudit, license.FeatureSSO, license.FeatureMasking}, nil},
+		{"enterprise", []string{license.FeatureAudit, license.FeatureSSO}, []string{license.FeatureMasking}},
+		{"", []string{license.FeatureAudit, license.FeatureSSO}, []string{license.FeatureMasking}},
 	} {
 		l := license.License{Plan: c.plan}
 		for _, f := range c.has {
@@ -194,8 +194,8 @@ func TestVerify_以前のプランのキーは今のプランとして読む(t *
 
 func TestTrial_キーなしで30日間すべての機能を試せる(t *testing.T) {
 	l := license.Trial(t0)
-	if !l.Covers("auth") || !l.Covers("masking") || !l.Has(license.FeatureSSO) || !l.Has(license.FeatureMasking) {
-		t.Errorf("a trial covers everything: %+v", l)
+	if !l.Covers("auth") || !l.Covers("masking") || !l.Has(license.FeatureSSO) || l.Has(license.FeatureMasking) {
+		t.Errorf("a trial covers every module and the plan's features, but not the opt-in masking governance: %+v", l)
 	}
 	if s := l.State(t0.AddDate(0, 0, 29), 50); s != license.Valid {
 		t.Errorf("day 29, any cluster size: %s", s)
@@ -222,5 +222,18 @@ func TestVerify_サブスクリプションの項目は署名されて戻り古�
 	}
 	if license.Yearly != "yearly" {
 		t.Error(license.Yearly)
+	}
+}
+
+func TestHas_マスク管理はどのプランにも入らずモジュールを名指ししたときだけ使える(t *testing.T) {
+	for _, plan := range []string{license.Lite, license.Team, license.Business} {
+		l := license.License{Plan: plan, Modules: []string{"*"}}
+		if l.Has(license.FeatureMasking) {
+			t.Errorf("a plain %s key must not enable masking governance", plan)
+		}
+		l.Modules = []string{"auth", "masking"}
+		if !l.Has(license.FeatureMasking) {
+			t.Errorf("a %s key naming the masking module enables it", plan)
+		}
 	}
 }

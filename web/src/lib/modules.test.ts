@@ -7,6 +7,7 @@ describe("planLabel", () => {
     expect(planLabel("team")).toContain("Team");
     expect(planLabel("team")).toContain("diff");
     expect(planLabel("business")).toContain("SSO");
+    expect(planLabel("business")).not.toContain("masking");
   });
   it("reads a licence without a plan as business and keeps an unknown one", () => {
     expect(planLabel(undefined)).toContain("Business");

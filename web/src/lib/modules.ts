@@ -5,7 +5,7 @@
 const plans: Record<string, [string, string]> = {
   lite: ["Lite", "history, diff"],
   team: ["Team", "users, roles, teams, history, diff"],
-  business: ["Business", "users, roles, teams, SSO, audit, masking"],
+  business: ["Business", "users, roles, teams, SSO, audit"],
 };
 
 export function planLabel(plan?: string): string {
