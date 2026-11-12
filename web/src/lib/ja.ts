@@ -189,6 +189,7 @@ export const ja: Record<string, string> = {
   // Replicas
   "Fewer copies save disk, but branches can only run on the nodes that hold the base.":
     "コピーを持つノードを減らすとディスクを節約できます。ただし、ブランチを動かせるのは、ベースのコピーを持つノードだけです。",
+  "PostgreSQL data depends on the operating system, so these nodes get no copy and cannot run branches of this base.": "PostgreSQL のデータは OS に依存するため、これらのノードにはコピーが置かれず、このベースのブランチも動かせません。",
   "These nodes give up their copy once no branch on them uses the base.": "これらのノードは、そのノードのブランチがこのベースを使わなくなった時点で、ベースのコピーを削除します。",
   // Scheduled refresh
   "Not scheduled. The base is refreshed by hand.": "定期更新は設定されていません。ベースは手作業で更新します。",

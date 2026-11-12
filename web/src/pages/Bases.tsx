@@ -2,6 +2,7 @@ import { FormEvent, useState } from "react";
 import { api, Base, Branch, canBase } from "../api";
 import { Engine, Icon, Status } from "../components/marks";
 import { Dialog, Drawer, Empty, ErrorLine, Field, Info } from "../components/ui";
+import { skippedReasons } from "../lib/bases";
 import { relative } from "../lib/format";
 import { useLive, useNow } from "../lib/live";
 import { t } from "../lib/i18n";
@@ -107,7 +108,7 @@ function BaseLine({ base, branches, nodes, onOpen }: { base: Base; branches: Bra
                 {s.public && <span className="badge on">public</span>}
               </span>
               <span className="muted snap-age">{relative(s.created_at)}</span>
-              {clustered && <Holders nodes={nodes} holders={[base.node, ...(base.replicas[s.name] ?? [])]} />}
+              {clustered && <Holders nodes={nodes} holders={[base.node, ...(base.replicas[s.name] ?? [])]} skipped={skippedReasons(base.holders)} />}
               {kids.length > 0 && (
                 <ul className="sprouts">
                   {kids.map((k) => (
@@ -128,12 +129,15 @@ function BaseLine({ base, branches, nodes, onOpen }: { base: Base; branches: Bra
 
 // One square per node, filled where the snapshot is held: branches from it
 // can start on those nodes.
-function Holders({ nodes, holders }: { nodes: string[]; holders: string[] }) {
+// A node the base is never copied to (other OS) is drawn greyed, with the reason on hover.
+function Holders({ nodes, holders, skipped = {} }: { nodes: string[]; holders: string[]; skipped?: Record<string, string> }) {
   const held = new Set(holders);
+  const off = nodes.filter((n) => !held.has(n) && n in skipped);
+  const title = `On ${nodes.filter((n) => held.has(n)).join(", ")}` + off.map((n) => `\n${n}: skipped (${skipped[n]})`).join("");
   return (
-    <span className="holders" title={`On ${nodes.filter((n) => held.has(n)).join(", ")}`}>
+    <span className="holders" title={title}>
       {nodes.map((n) => (
-        <span key={n} className={held.has(n) ? "held" : ""} />
+        <span key={n} className={held.has(n) ? "held" : n in skipped ? "skipped" : ""} />
       ))}
     </span>
   );
@@ -253,7 +257,7 @@ function BaseDetail({
                   </td>
                   {clustered && (
                     <td>
-                      <Holders nodes={nodes} holders={[base.node, ...(base.replicas[s.name] ?? [])]} />
+                      <Holders nodes={nodes} holders={[base.node, ...(base.replicas[s.name] ?? [])]} skipped={skippedReasons(base.holders)} />
                     </td>
                   )}
                   <td className="col-actions">

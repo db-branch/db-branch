@@ -54,6 +54,8 @@ export type HistoryTx = {
 };
 export type HistoryEvents = { line: number; recorded: boolean; items: HistoryTx[]; next_before: string | null; retention: string };
 
+export type Holder = { node: string; state: "held" | "pulling" | "draining" | "skipped"; origin: boolean; reason?: string; distro?: string };
+
 export type Base = {
   name: string;
   runtime: string;
@@ -67,7 +69,8 @@ export type Base = {
   replicas: Record<string, string[]>;
   // replica_nodes: null keeps a copy on every node; a list names the other nodes that do (the base's own node is implied).
   replica_nodes?: string[] | null;
-  holders?: { node: string; state: "held" | "pulling" | "draining"; origin: boolean }[];
+  // state "skipped": wanted but never copied there (PostgreSQL on another OS); reason says why, distro is the node's.
+  holders?: Holder[];
   operation: { id: string; kind: string } | null;
   description: string;
   // anonymous: what people without an account may do with the base besides the cluster-wide limits; null inherits those.

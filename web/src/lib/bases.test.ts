@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, Choice, initialBase, matches, moveSelection, pushRecent } from "./bases";
+import { arrange, Choice, initialBase, matches, moveSelection, pushRecent, skippedReasons } from "./bases";
 
 const c = (name: string, runtime: string, description = ""): Choice => ({ name, runtime, description, snapshot: "s1", snapshotAt: null, public: false, masked: false });
 const shop = c("shop", "mysql@8.4.13", "Orders and customers of the web shop");
@@ -49,5 +49,19 @@ describe("moveSelection", () => {
     expect(moveSelection(["a", "b", "c"], "a", -1)).toBe("a");
     expect(moveSelection(["a", "b"], "x", 1)).toBe("b");
     expect(moveSelection([], "x", 1)).toBe("x");
+  });
+});
+
+describe("skippedReasons", () => {
+  it("別OSで対象外のノードだけを理由つきで返す", () => {
+    expect(
+      skippedReasons([
+        { node: "a", state: "held", origin: true },
+        { node: "b", state: "pulling", origin: false },
+        { node: "c", state: "skipped", origin: false, reason: "other OS: ubuntu-26.04" },
+        { node: "d", state: "skipped", origin: false },
+      ]),
+    ).toEqual({ c: "other OS: ubuntu-26.04", d: "" });
+    expect(skippedReasons(undefined)).toEqual({});
   });
 });

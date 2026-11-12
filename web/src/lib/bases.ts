@@ -1,6 +1,8 @@
 // Choosing a base among many: search, engine filter, order, and the
 // bases this person used last. Pure so it can be tested without a browser.
 
+import type { Holder } from "../api";
+
 export type Choice = {
   name: string;
   runtime: string;
@@ -81,4 +83,12 @@ export function moveSelection(names: string[], current: string, delta: number): 
   const i = names.indexOf(current);
   const next = Math.min(names.length - 1, Math.max(0, (i < 0 ? 0 : i) + delta));
   return names[next];
+}
+
+// skippedReasons maps each node a base is not copied to (PostgreSQL on another
+// operating system) to the reason the server gave; such nodes are not wanted.
+export function skippedReasons(holders: Holder[] | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const h of holders ?? []) if (h.state === "skipped") out[h.node] = h.reason ?? "";
+  return out;
 }

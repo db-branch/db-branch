@@ -24,6 +24,7 @@ export function ReplicasCard({ base }: { base: Base }) {
   const others = (cluster?.nodes ?? []).map((n) => n.name).filter((n) => n !== base.node);
   if (!cluster || cluster.nodes.length < 2) return null;
   const draining = (base.holders ?? []).filter((h) => h.state === "draining");
+  const skipped = (base.holders ?? []).some((h) => h.state === "skipped");
   const dirty = all !== (current === null) || (!all && [...chosen].sort().join(",") !== [...(current ?? [])].sort().join(","));
   const toggle = (n: string) => setChosen((c) => (c.includes(n) ? c.filter((x) => x !== n) : [...c, n]));
   const save = async () => {
@@ -44,14 +45,16 @@ export function ReplicasCard({ base }: { base: Base }) {
       <dl className="kv">
         {(base.holders ?? []).map((h) => (
           <div key={h.node} style={{ display: "contents" }}>
-            <dt className="mono">{h.node}</dt>
-            <dd>
+            <dt className={`mono ${h.state === "skipped" ? "muted" : ""}`}>{h.node}</dt>
+            <dd className={h.state === "skipped" ? "muted" : ""}>
               <span className={`state-badge ${h.state === "held" ? "ok" : ""}`}>{h.origin ? t("origin") : t(h.state)}</span>
+              {h.state === "skipped" && h.reason && <span className="mono"> {h.reason}</span>}
             </dd>
           </div>
         ))}
       </dl>
       {draining.length > 0 && <p className="muted">{t("These nodes give up their copy once no branch on them uses the base.")}</p>}
+      {skipped && <p className="muted">{t("PostgreSQL data depends on the operating system, so these nodes get no copy and cannot run branches of this base.")}</p>}
       {manage && (
         <>
           <div className="form">
