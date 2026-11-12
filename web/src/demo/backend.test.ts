@@ -80,6 +80,8 @@ describe("seed", () => {
     const c = get("/v1/cluster");
     expect(c.nodes.map((n: any) => n.name)).toEqual(["node-1", "node-2", "node-3"]);
     expect(c.nodes[0].leader).toBe(true);
+    expect(c.nodes[0].system).toMatchObject({ distro: "ubuntu-24.04", os: "Ubuntu 24.04.3 LTS", zfs: "2.2.2-0ubuntu9.4" });
+    expect(c.nodes.every((n: any) => n.system.kernel.startsWith("6.8.0"))).toBe(true);
     expect(c.nodes.every((n: any) => n.runtimes.includes("postgres@18.6"))).toBe(true);
   });
   it("has the storefront and orders bases, one snapshot public", () => {

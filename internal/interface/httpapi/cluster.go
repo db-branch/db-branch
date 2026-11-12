@@ -42,6 +42,9 @@ type NodeStatus struct {
 	ArcProblem string `json:"arc_problem,omitempty"`
 	// ModuleProblems are modules' configuration errors on the node.
 	ModuleProblems map[string]string `json:"-"`
+	// System is the node's OS, kernel and ZFS version; what an older node
+	// does not report reads "unknown".
+	System domain.NodeSystem `json:"system"`
 }
 
 // ClusterStatus is the membership seen from this node.
@@ -180,7 +183,7 @@ type nodeJSON struct {
 }
 
 func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
-	st := ClusterStatus{Mode: "single", Leader: s.Node, Nodes: []NodeStatus{{Name: s.Node, Host: s.Host, Version: s.Version, Leader: true, Voter: true, Modules: s.Modules}}}
+	st := s.single(r.Context())
 	if s.Cluster == nil {
 		if s.Metrics != nil {
 			if h := s.Metrics(); len(h) > 0 {
@@ -206,6 +209,7 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
 	nodes := make([]nodeJSON, 0, len(st.Nodes))
 	for _, n := range st.Nodes {
 		v := nodeJSON{NodeStatus: n}
+		v.System = n.System.OrUnknown()
 		if v.Runtimes == nil {
 			v.Runtimes = []string{}
 		}

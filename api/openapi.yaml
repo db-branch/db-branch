@@ -1022,6 +1022,17 @@ components:
             free: { type: integer, format: int64 }
         branch_count: { type: integer }
         branches: { type: array, items: { $ref: '#/components/schemas/Name' } }
+        system:
+          description: >-
+            What the node runs on. Each field reads "unknown" when the node
+            (an older version) does not report it.
+          type: object
+          required: [distro, os, kernel, zfs]
+          properties:
+            distro: { type: string, examples: [ubuntu-26.04], description: 'Distribution key, <ID>-<VERSION_ID>.' }
+            os: { type: string, examples: [Ubuntu 26.04.1 LTS] }
+            kernel: { type: string, examples: [7.0.0-14-generic], description: 'Running kernel release (uname -r).' }
+            zfs: { type: string, examples: [2.4.0-1ubuntu1], description: 'ZFS userland version, with the kernel module version in parentheses when it differs.' }
 
     OperationKind:
       type: string

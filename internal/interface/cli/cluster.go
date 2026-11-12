@@ -26,6 +26,12 @@ type clusterView struct {
 		PoolFree uint64   `json:"pool_free"`
 		Runtimes []string `json:"runtimes"`
 		Protocol int      `json:"protocol"`
+		System   struct {
+			Distro string `json:"distro"`
+			OS     string `json:"os"`
+			Kernel string `json:"kernel"`
+			ZFS    string `json:"zfs"`
+		} `json:"system"`
 	} `json:"nodes"`
 }
 
@@ -107,7 +113,7 @@ func (a *App) clusterCommand() *cobra.Command {
 					return a.printJSON(v)
 				}
 				tw := tabwriter.NewWriter(a.Stdout, 0, 4, 2, ' ', 0)
-				fmt.Fprintln(tw, "NODE\tHOST\tROLE\tVOTING\tSTATE\tPOOL FREE\tENGINES\tVERSION")
+				fmt.Fprintln(tw, "NODE\tHOST\tROLE\tVOTING\tSTATE\tPOOL FREE\tENGINES\tOS\tVERSION")
 				for _, n := range v.Nodes {
 					role, state, voting := "follower", "up", "non-voter"
 					if n.Leader {
@@ -123,7 +129,11 @@ func (a *App) clusterCommand() *cobra.Command {
 					if engines == "" {
 						engines = "-"
 					}
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", n.Name, n.Host, role, voting, state, HumanBytes(n.PoolFree), engines, n.Version)
+					distro := n.System.Distro
+					if distro == "" {
+						distro = "unknown"
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", n.Name, n.Host, role, voting, state, HumanBytes(n.PoolFree), engines, distro, n.Version)
 				}
 				if err := tw.Flush(); err != nil {
 					return err

@@ -395,14 +395,15 @@ func TestClusterコマンド(t *testing.T) {
 	api := newFakeAPI()
 	api.answers["POST /v1/cluster/token"] = map[string]any{"token": "dbb1.abc.def"}
 	api.answers["GET /v1/cluster"] = map[string]any{"mode": "cluster", "leader": "n1", "nodes": []any{
-		map[string]any{"name": "n1", "host": "192.0.2.10", "leader": true, "voter": true, "pool_size": 100 << 30, "pool_free": 60 << 30, "version": "v"},
+		map[string]any{"name": "n1", "host": "192.0.2.10", "leader": true, "voter": true, "pool_size": 100 << 30, "pool_free": 60 << 30, "version": "v",
+			"system": map[string]any{"distro": "ubuntu-26.04", "os": "Ubuntu 26.04.1 LTS", "kernel": "7.0.0-14-generic", "zfs": "2.4.0"}},
 		map[string]any{"name": "n2", "host": "192.0.2.11", "down": true},
 	}}
 	if _, out, _ := runAPI(t, api, "cluster", "token"); !strings.Contains(out, "dbb1.abc.def") || !strings.Contains(out, "cluster join") {
 		t.Errorf("token: %q", out)
 	}
 	_, out, _ := runAPI(t, api, "cluster", "status")
-	for _, want := range []string{"NODE", "n1", "leader", "n2", "down", "60.0 GiB", "ENGINES", "VOTING", "voter", "non-voter"} {
+	for _, want := range []string{"NODE", "n1", "leader", "n2", "down", "60.0 GiB", "ENGINES", "VOTING", "voter", "non-voter", "OS", "ubuntu-26.04", "unknown"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status lacks %q:\n%s", want, out)
 		}
