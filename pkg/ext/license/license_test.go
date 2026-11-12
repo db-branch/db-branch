@@ -145,6 +145,7 @@ func TestPlan_プランごとに使える機能が増える(t *testing.T) {
 		has  []string
 		not  []string
 	}{
+		{license.Lite, []string{license.FeatureHistory, license.FeatureDiff}, []string{license.FeatureUsers, license.FeatureAudit, license.FeatureSSO, license.FeatureMasking}},
 		{license.Team, []string{license.FeatureUsers, license.FeatureHistory, license.FeatureDiff}, []string{license.FeatureAudit, license.FeatureSSO, license.FeatureMasking}},
 		{license.Business, []string{license.FeatureUsers, license.FeatureAudit, license.FeatureSSO, license.FeatureMasking, license.FeatureHistory, license.FeatureDiff}, nil},
 		// Keys issued under the earlier plans read as the plan that replaced them.
@@ -168,13 +169,13 @@ func TestPlan_プランごとに使える機能が増える(t *testing.T) {
 	if (license.License{Plan: "bogus"}).Has(license.FeatureUsers) {
 		t.Error("an unknown plan has nothing")
 	}
-	if !license.ValidPlan(license.Team) || !license.ValidPlan(license.Business) || license.ValidPlan("growth") || license.ValidPlan("bogus") {
-		t.Error("ValidPlan: keys are issued for team or business only")
+	if !license.ValidPlan(license.Lite) || !license.ValidPlan(license.Team) || !license.ValidPlan(license.Business) || license.ValidPlan("growth") || license.ValidPlan("bogus") {
+		t.Error("ValidPlan: keys are issued for lite, team or business only")
 	}
 }
 
 func TestPlan_プランがノード数の上限を決める(t *testing.T) {
-	if license.PlanNodes(license.Team) != 5 || license.PlanNodes(license.Business) != 10 || license.PlanNodes("bogus") != 0 {
+	if license.PlanNodes(license.Lite) != 3 || license.PlanNodes(license.Team) != 5 || license.PlanNodes(license.Business) != 10 || license.PlanNodes("bogus") != 0 {
 		t.Error("nodes a plan allows")
 	}
 }

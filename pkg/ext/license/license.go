@@ -68,9 +68,11 @@ const (
 	Yearly  = "yearly"
 )
 
-// Plans. Team: accounts with roles and teams, on up to 5 nodes. Business
-// adds single sign-on, the audit log and masking governance, on up to 10.
+// Plans. Lite: history and diff, on up to 3 nodes. Team adds accounts with
+// roles and teams, on up to 5. Business adds single sign-on, the audit log
+// and masking governance, on up to 10.
 const (
+	Lite     = "lite"
 	Team     = "team"
 	Business = "business"
 )
@@ -86,13 +88,14 @@ const (
 )
 
 // planFeatures is the one place that says which plan includes which feature.
-// History and diff are in both plans for now: to move one, change only these lists.
+// History and diff are in every plan for now: to move one, change only these lists.
 var planFeatures = map[string][]string{
+	Lite:     {FeatureHistory, FeatureDiff},
 	Team:     {FeatureUsers, FeatureHistory, FeatureDiff},
 	Business: {FeatureUsers, FeatureAudit, FeatureSSO, FeatureMasking, FeatureHistory, FeatureDiff},
 }
 
-var planNodes = map[string]int{Team: 5, Business: 10}
+var planNodes = map[string]int{Lite: 3, Team: 5, Business: 10}
 
 // Plans keys were issued with before Team and Business ("" before plans
 // existed), read as the plan that replaced them.
