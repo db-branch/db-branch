@@ -4,6 +4,10 @@
 
 対応する機械可読な定義: [`api/openapi.yaml`](../api/openapi.yaml)（OpenAPI 3.1）。全体設計は [design.md](design.md) を参照。
 
+`api/openapi.yaml` は、エージェントが実際に返すコア API の全ルート（メソッド・パス・スキーマ・エラーコード・認証・`x-dbb-action`・トークンのスコープ）を記述する公開 API リファレンスで、Redoc で表示できる（`npx @redocly/cli lint api/openapi.yaml` で検証）。`internal/interface/httpapi/openapi_test.go` が、サーバーが登録したルートとこのファイルのオペレーションが過不足なく一致すること、`operationId` が一意でタグとエラー応答があること、`$ref` がすべて解決できることを検査する。ルートを足したら同じ変更で `openapi.yaml` も更新する（さもないと `make test` が失敗する）。有償モジュールの `/v1/ext/<module>/...` はモジュールが自分で文書化し、`openapi.yaml` には載せない。
+
+この文書は設計の記録で、実装と食い違う箇所がある（`Idempotency-Key`、`ETag` / `If-Match`、カーソル式ページング、`X-DB-Branch-Index`、`?min_index` は未実装）。実際に返すものは `openapi.yaml` を正とする。
+
 ## 1. 方針
 
 - CLI・Web コンソール・外部連携のすべてが同じ API を使う。CLI だけの裏口は作らない（ノード上でしかできない操作は §3.2 のソケット限定エンドポイントにする）
