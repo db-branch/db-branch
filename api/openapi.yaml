@@ -4158,7 +4158,7 @@ components:
         nodes:
           - name: node1
             host: node1
-            address: 10.0.0.1:7070
+            address: 192.0.2.1:7070
             version: 0.2.0
             leader: true
             voter: true
