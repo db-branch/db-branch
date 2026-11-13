@@ -370,6 +370,17 @@ type Server struct {
 }
 
 // DBServer runs database server instances for one engine.
+// StatsUpdater is a DBServer that can refresh the optimizer statistics of
+// every database (and, where the engine has them, mark rows as visible to
+// all), so a base snapshot carries them. Without it, a snapshot taken right
+// after a load carries the statistics of the empty tables (InnoDB computes
+// them in the background, PostgreSQL's autovacuum comes later): every
+// branch then plans range queries as full scans, and on PostgreSQL the first
+// read of each page in every branch rewrites it to set hint bits.
+type StatsUpdater interface {
+	UpdateStats(ctx context.Context, s Server) error
+}
+
 type DBServer interface {
 	// Initialize creates an empty data directory with a passwordless local admin.
 	Initialize(ctx context.Context, s Server) error

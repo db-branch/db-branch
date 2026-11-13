@@ -303,3 +303,8 @@ func (e *env) withBranch(t *testing.T, n string) domain.Branch {
 	e.j.entries = nil
 	return b
 }
+
+func (f *fakeServer) UpdateStats(_ context.Context, s domain.Server) error {
+	f.j.add("analyze %s", s.ID)
+	return f.fail("analyze")
+}

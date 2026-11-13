@@ -388,3 +388,19 @@ func TestStart_データディレクトリの所有者が違えば起動せず�
 		t.Error("started anyway")
 	}
 }
+
+func TestUpdateStats_全データベースをVACUUM_FREEZE_ANALYZEする(t *testing.T) {
+	f := newFixture(t)
+	var _ domain.StatsUpdater = f.srv
+	if err := f.srv.UpdateStats(ctx, f.spec); err != nil {
+		t.Fatal(err)
+	}
+	last := f.sys.calls[len(f.sys.calls)-1]
+	if !strings.Contains(last, " vacuumdb ") || !strings.Contains(last, "--all --freeze --analyze") || !strings.Contains(last, "LD_LIBRARY_PATH=") {
+		t.Errorf("call = %q", last)
+	}
+	f.sys.failOn = "vacuumdb"
+	if err := f.srv.UpdateStats(ctx, f.spec); err == nil {
+		t.Error("failing vacuumdb: want error")
+	}
+}
