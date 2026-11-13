@@ -29,6 +29,7 @@ var (
 	_ domain.ModuleStore      = (*Store)(nil)
 	_ domain.SettingsStore    = (*Store)(nil)
 	_ domain.TrialStore       = (*Store)(nil)
+	_ domain.ClusterIDStore   = (*Store)(nil)
 	_ domain.TokenStore       = (*Store)(nil)
 	_ domain.ModuleDataStore  = (*Store)(nil)
 	_ domain.BaseRefreshStore = (*Store)(nil)
@@ -47,6 +48,8 @@ type state struct {
 	BaseRefreshes map[string]domain.BaseRefresh `json:"base_refreshes,omitempty"`
 	Update        *domain.UpdateCheck           `json:"update,omitempty"`
 	Rollout       *domain.Rollout               `json:"rollout,omitempty"`
+	// ClusterID is the anonymous cluster identifier (domain.ClusterIDStore).
+	ClusterID string `json:"cluster_id,omitempty"`
 }
 
 func (s *Store) load() (state, error) {
@@ -385,6 +388,33 @@ func (s *Store) StartTrial(_ context.Context, at time.Time) (time.Time, error) {
 		return nil
 	})
 	return started, err
+}
+
+// ClusterID is the recorded cluster id ("" before one is, or when the file
+// cannot be read).
+func (s *Store) ClusterID(context.Context) string {
+	st, err := s.read()
+	if err != nil {
+		return ""
+	}
+	return st.ClusterID
+}
+
+// InitClusterID records id unless one is recorded, and returns the recorded
+// one.
+func (s *Store) InitClusterID(_ context.Context, id string) (string, error) {
+	if !domain.ValidClusterID(id) {
+		return "", fmt.Errorf("cluster id %q is not 32 lowercase hex characters", id)
+	}
+	var recorded string
+	err := s.update(func(st *state) error {
+		if st.ClusterID == "" {
+			st.ClusterID = id
+		}
+		recorded = st.ClusterID
+		return nil
+	})
+	return recorded, err
 }
 
 // ListTokens returns the API tokens, oldest first.

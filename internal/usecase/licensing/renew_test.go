@@ -1,9 +1,11 @@
 package licensing_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -120,14 +122,17 @@ func TestAccept_同じライセンスで期限が延び有効なモジュール�
 type fakeClient struct {
 	mu    sync.Mutex
 	calls []string // "url key"
-	key   string
-	err   error
-	block chan struct{}
+	// clusters is the cluster id of each call ("" when none was sent).
+	clusters []string
+	key      string
+	err      error
+	block    chan struct{}
 }
 
-func (f *fakeClient) Renew(_ context.Context, u, key string) (string, error) {
+func (f *fakeClient) Renew(_ context.Context, u, key, clusterID string) (string, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, u+" "+key)
+	f.clusters = append(f.clusters, clusterID)
 	f.mu.Unlock()
 	if f.block != nil {
 		<-f.block
@@ -241,6 +246,87 @@ func TestRenewer_期限が近い鍵は更新された鍵に差し替え現在の
 		t.Errorf("%q %v", st.Message, g.told)
 	}
 }
+
+// memClusterID is a ClusterIDStore in memory.
+type memClusterID struct {
+	id      string
+	initErr error
+	inits   int
+}
+
+func (m *memClusterID) ClusterID(context.Context) string { return m.id }
+
+func (m *memClusterID) InitClusterID(_ context.Context, id string) (string, error) {
+	m.inits++
+	if m.initErr != nil {
+		return "", m.initErr
+	}
+	if m.id == "" {
+		m.id = id
+	}
+	return m.id, nil
+}
+
+func TestRenewer_クラスタidがまだなければ乱数で作って記録し毎回同じidを送る(t *testing.T) {
+	g := dueRig(t)
+	store := &memClusterID{}
+	g.r.Cluster = store
+	g.r.Random = bytes.NewReader(append(bytes.Repeat([]byte{0x0a}, 16), bytes.Repeat([]byte{0x0b}, 16)...))
+	g.client.err = licensing.ErrNoNewerKey
+	for i := 0; i < 2; i++ {
+		g.now = g.now.Add(time.Minute)
+		if _, err := g.r.CheckNow(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := strings.Repeat("0a", 16)
+	if store.id != want || len(g.client.clusters) != 2 || g.client.clusters[0] != want || g.client.clusters[1] != want {
+		t.Errorf("記録 %q 送ったid %q", store.id, g.client.clusters)
+	}
+}
+
+func TestRenewer_記録済みのクラスタidはそのまま送り作り直さない(t *testing.T) {
+	g := dueRig(t)
+	existing := strings.Repeat("c3", 16)
+	store := &memClusterID{id: existing}
+	g.r.Cluster = store
+	g.r.Random = errReader{}
+	g.client.err = licensing.ErrNoNewerKey
+	if _, err := g.r.CheckNow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if store.inits != 0 || len(g.client.clusters) != 1 || g.client.clusters[0] != existing {
+		t.Errorf("記録の試み %d 送ったid %q", store.inits, g.client.clusters)
+	}
+}
+
+func TestRenewer_クラスタidを用意できなくてもidなしで更新する(t *testing.T) {
+	cases := []struct {
+		name   string
+		store  *memClusterID
+		random io.Reader
+	}{
+		{"クラスタが記録を受け付けない", &memClusterID{initErr: domain.ErrClusterUpgrading}, nil},
+		{"乱数が読めない", &memClusterID{}, errReader{}},
+		{"保管先がない", nil, nil},
+	}
+	for _, tc := range cases {
+		g := dueRig(t)
+		if tc.store != nil {
+			g.r.Cluster = tc.store
+		}
+		g.r.Random = tc.random
+		g.client.err = licensing.ErrNoNewerKey
+		st, err := g.r.CheckNow(ctx)
+		if err != nil || st.LastResult != licensing.ResultNotYet || len(g.client.clusters) != 1 || g.client.clusters[0] != "" {
+			t.Errorf("%s: %+v %v 送ったid %q", tc.name, st, err, g.client.clusters)
+		}
+	}
+}
+
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("no entropy") }
 
 func TestRenewer_期限まで余裕があれば通信しない(t *testing.T) {
 	g := newRig(t, subLicense(t0.AddDate(0, 0, 20)))

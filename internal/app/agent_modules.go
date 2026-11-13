@@ -222,6 +222,10 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 					log.Warn("sending a licence notice", "err", err)
 				}
 			}}
+		// The cluster's anonymous id travels with the renewal request.
+		if ids, ok := svc.Store.(domain.ClusterIDStore); ok {
+			renewer.Cluster = ids
+		}
 		srv.Renewal = renewer
 		go renewer.Run(ctx)
 	}

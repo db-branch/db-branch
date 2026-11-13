@@ -493,6 +493,21 @@ func (s *Store) InitServiceIDs(ctx context.Context, ids domain.ServiceIDs) error
 	return s.Apply(ctx, InitServiceIDs(ids))
 }
 
+var _ domain.ClusterIDStore = (*Store)(nil)
+
+// ClusterID is the cluster's anonymous identifier ("" before one is recorded).
+func (s *Store) ClusterID(context.Context) string { return s.fsm.State().ClusterID }
+
+// InitClusterID records id unless the cluster has one, and returns the
+// recorded one: the state machine keeps the first, so two leaders that race
+// end up with the same id.
+func (s *Store) InitClusterID(ctx context.Context, id string) (string, error) {
+	if err := s.Apply(ctx, InitClusterID(id)); err != nil {
+		return "", err
+	}
+	return s.ClusterID(ctx), nil
+}
+
 // TrialStarted is when the cluster's trial began (zero before it did).
 func (s *Store) TrialStarted(context.Context) (time.Time, error) {
 	return domain.TrialStartedIn(s.fsm.State().Settings[domain.TrialScope]), nil

@@ -2,8 +2,10 @@ package licensing
 
 import (
 	"context"
+	crand "crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net/url"
@@ -12,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/pkg/ext/license"
 )
 
@@ -79,11 +82,12 @@ func (e *TooSoonError) Error() string {
 	return fmt.Sprintf("checked a moment ago; try again in %ds", int(e.RetryAfter.Seconds())+1)
 }
 
-// RenewClient asks the licence service for the renewed key. It returns
+// RenewClient asks the licence service for the renewed key. clusterID is the
+// cluster's anonymous id, or "" when there is none yet. It returns
 // ErrNoNewerKey, ErrSubscriptionInactive or ErrKeyNotRecognised (wrapped,
 // with the service's message) for the answers that mean those.
 type RenewClient interface {
-	Renew(ctx context.Context, renewURL, key string) (string, error)
+	Renew(ctx context.Context, renewURL, key, clusterID string) (string, error)
 }
 
 // CheckRenewURL refuses a renew URL that is not https. http is allowed only
@@ -173,6 +177,12 @@ type Renewer struct {
 	// Notify tells admins (notify webhook / Slack). Optional.
 	Notify func(ctx context.Context, event, level, subject, text string)
 	Log    *slog.Logger
+	// Cluster keeps the cluster's anonymous id, sent with every request so
+	// that the licence service can notice a key used by several clusters.
+	// Optional: without it no id is sent.
+	Cluster domain.ClusterIDStore
+	// Random is where a new cluster id comes from; nil: crypto/rand.
+	Random io.Reader
 	// Jitter returns the random part (±CheckJitter) added to the 12 hours.
 	Jitter func() time.Duration
 
@@ -373,7 +383,7 @@ func (r *Renewer) renewOnce(ctx context.Context, cur license.License, key string
 	if err := CheckRenewURL(cur.RenewURL); err != nil {
 		return ResultError, err.Error(), 0
 	}
-	next, err := r.Client.Renew(ctx, cur.RenewURL, key)
+	next, err := r.Client.Renew(ctx, cur.RenewURL, key, r.clusterID(ctx))
 	var later *RetryLaterError
 	switch {
 	case errors.Is(err, ErrNoNewerKey):
@@ -412,6 +422,33 @@ func (r *Renewer) renewOnce(ctx context.Context, cur license.License, key string
 		msg += fmt.Sprintf("; the new key allows %d nodes but the cluster has %d", nl.MaxNodes, n)
 	}
 	return ResultRenewed, msg, 0
+}
+
+// clusterID is the cluster's anonymous id. A cluster that has none gets one
+// now, drawn at random and recorded set-if-empty, so a renewal on two nodes
+// at once (a leader change) ends with one id. When it cannot be had (no
+// store, the cluster is not fully upgraded yet, no randomness) it is "" and
+// the request goes without it.
+func (r *Renewer) clusterID(ctx context.Context) string {
+	if r.Cluster == nil {
+		return ""
+	}
+	if id := r.Cluster.ClusterID(ctx); id != "" {
+		return id
+	}
+	random := r.Random
+	if random == nil {
+		random = crand.Reader
+	}
+	fresh, err := domain.NewClusterID(random)
+	if err == nil {
+		fresh, err = r.Cluster.InitClusterID(ctx, fresh)
+	}
+	if err != nil {
+		r.logger().Debug("no cluster id for the renewal request", "err", err)
+		return ""
+	}
+	return fresh
 }
 
 // tell notifies admins, once per licence expiry, that a subscription is

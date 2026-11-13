@@ -241,6 +241,13 @@ func (c *clusterRuntime) importSingleNodeState(ctx context.Context, log *slog.Lo
 			log.Error("import branch", "branch", b.Name.String(), "err", err)
 		}
 	}
+	// Keep the single node's anonymous cluster id (sent with licence
+	// renewals), so that becoming a cluster does not look like a new one.
+	if id := old.ClusterID(ctx); id != "" {
+		if _, err := c.store.InitClusterID(ctx, id); err != nil {
+			log.Debug("import the cluster id", "err", err)
+		}
+	}
 	log.Info("imported single-node state into the cluster", "bases", len(bases), "branches", len(branches))
 }
 

@@ -192,7 +192,7 @@ func TestProtocol_すべてのコマンドに必要な版があり最新の版�
 	for _, op := range []string{"put_base", "delete_base", "put_branch", "delete_branch", "put_node", "delete_node",
 		"set_join_secret", "insert_base", "insert_branch", "put_operation", "set_admin", "init_admin", "add_replica",
 		"add_runtime", "remove_runtime", "put_route_user", "delete_route_user", "put_module", "put_settings", "put_token", "delete_token",
-		"put_module_data", "delete_module_data", "start_trial", "set_base_refresh", "record_base_refresh_run", "clear_base_refresh", "set_base_replica_nodes", "remove_replica", "set_base_anonymous", "init_service_ids"} {
+		"put_module_data", "delete_module_data", "start_trial", "set_base_refresh", "record_base_refresh_run", "clear_base_refresh", "set_base_replica_nodes", "remove_replica", "set_base_anonymous", "init_service_ids", "init_cluster_id"} {
 		n := raftstore.Command{Op: op}.Needs()
 		if n < 1 || n > raftstore.Protocol {
 			t.Errorf("%s needs %d", op, n)
@@ -450,6 +450,40 @@ func TestFSM_ユーザーidは最初の記録だけが残り不完全なコマ�
 		if r := g.Apply(&raft.Log{Data: mustEncode(c)}); r == nil {
 			t.Errorf("%+v: want error", c)
 		}
+	}
+}
+
+func TestFSM_クラスタidは最初の記録だけが残りスナップショットで復元され不正なコマンドは拒否される(t *testing.T) {
+	first, second := strings.Repeat("a1", 16), strings.Repeat("b2", 16)
+	f := raftstore.NewFSM()
+	if f.State().ClusterID != "" {
+		t.Fatal("最初は空")
+	}
+	apply(t, f, raftstore.InitClusterID(first))
+	apply(t, f, raftstore.InitClusterID(second))
+	if got := f.State().ClusterID; got != first {
+		t.Errorf("recorded %q", got)
+	}
+	if raftstore.InitClusterID(first).Needs() != 17 {
+		t.Error("init_cluster_id needs protocol 17")
+	}
+	snap, _ := f.Snapshot()
+	var buf bytes.Buffer
+	if err := snap.Persist(&sink{Buffer: &buf}); err != nil {
+		t.Fatal(err)
+	}
+	g := raftstore.NewFSM()
+	if err := g.Restore(io.NopCloser(&buf)); err != nil || g.State().ClusterID != first {
+		t.Errorf("restored %q %v", g.State().ClusterID, err)
+	}
+	h := raftstore.NewFSM()
+	for _, id := range []string{"", "short", strings.ToUpper(first), first + "0"} {
+		if r := h.Apply(&raft.Log{Data: mustEncode(raftstore.InitClusterID(id))}); r == nil {
+			t.Errorf("%q: want error", id)
+		}
+	}
+	if h.State().ClusterID != "" {
+		t.Error("不正な id は残らない")
 	}
 }
 

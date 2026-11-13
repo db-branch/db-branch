@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -741,6 +742,34 @@ func TestStore_クラスタのユーザーidは最初の記録が残り全メン
 	_ = l2.PutNode(ctx, domain.Node{Name: "old", Protocol: 14})
 	if err := l2.InitServiceIDs(ctx, first); !errors.Is(err, domain.ErrClusterUpgrading) {
 		t.Errorf("an older member: %v", err)
+	}
+}
+
+func TestStore_クラスタidは最初の記録が残り全メンバーが新版になるまで書かれない(t *testing.T) {
+	c := newCluster(t, 1)
+	l := c.leader(t)
+	if id := l.ClusterID(ctx); id != "" {
+		t.Fatalf("before: %q", id)
+	}
+	first, second := strings.Repeat("0a", 16), strings.Repeat("1b", 16)
+	if got, err := l.InitClusterID(ctx, first); err != nil || got != first {
+		t.Fatalf("first: %q %v", got, err)
+	}
+	if got, err := l.InitClusterID(ctx, second); err != nil || got != first {
+		t.Errorf("second must return the recorded id: %q %v", got, err)
+	}
+	if id := l.ClusterID(ctx); id != first {
+		t.Errorf("recorded %q", id)
+	}
+	var _ domain.ClusterIDStore = l
+	c2 := newCluster(t, 1)
+	l2 := c2.leader(t)
+	_ = l2.PutNode(ctx, domain.Node{Name: "old", Protocol: 16})
+	if _, err := l2.InitClusterID(ctx, first); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Errorf("an older member: %v", err)
+	}
+	if id := l2.ClusterID(ctx); id != "" {
+		t.Errorf("nothing written: %q", id)
 	}
 }
 
