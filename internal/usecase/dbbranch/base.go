@@ -198,12 +198,17 @@ func (s *Service) buildBase(ctx context.Context, srv domain.DBServer, base *doma
 // cloned from such a snapshot start without crash recovery.
 func (s *Service) cleanSnapshot(ctx context.Context, srv domain.DBServer, spec domain.Server, ds string, report Reporter) (domain.BaseSnapshot, error) {
 	// Statistics first, so branches of the snapshot plan their queries well.
+	// A stopped server is started for it (and stopped again below).
 	if u, ok := srv.(domain.StatsUpdater); ok {
-		if running, _ := srv.Running(ctx, spec); running {
-			report.report("analyzing")
-			if err := u.UpdateStats(ctx, spec); err != nil {
-				return domain.BaseSnapshot{}, fmt.Errorf("updating the statistics of %s: %w", spec.ID, err)
+		if running, _ := srv.Running(ctx, spec); !running {
+			report.report("starting")
+			if err := srv.Start(ctx, spec); err != nil {
+				return domain.BaseSnapshot{}, err
 			}
+		}
+		report.report("analyzing")
+		if err := u.UpdateStats(ctx, spec); err != nil {
+			return domain.BaseSnapshot{}, fmt.Errorf("updating the statistics of %s: %w", spec.ID, err)
 		}
 	}
 	report.report("stopping")

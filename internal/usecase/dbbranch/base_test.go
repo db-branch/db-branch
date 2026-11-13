@@ -124,14 +124,30 @@ func TestSnapshotBase_動いていたベースは止めて取ってから再開�
 	}
 }
 
-func TestSnapshotBase_止まっていたベースは止めたままにする(t *testing.T) {
+func TestSnapshotBase_止まっていたベースは統計を更新するため一度起こして止めたままにする(t *testing.T) {
 	e := newEnv(t)
 	e.withBase(t)
 
 	if _, err := e.svc.SnapshotBase(ctx, name("prod"), nil); err != nil {
 		t.Fatal(err)
 	}
-	if e.j.has("start base-prod") {
+	want := []string{"start base-prod", "analyze base-prod", "stop base-prod clean", "zfs snapshot tank/db-branch/bases/prod@s20261109120000"}
+	if !reflect.DeepEqual(e.j.entries, want) {
+		t.Errorf("journal %q", e.j.entries)
+	}
+	if e.server.running["base-prod"] {
+		t.Error("the base must be stopped again")
+	}
+}
+
+func TestSnapshotBase_止まっていたベースが起動できなければ取らない(t *testing.T) {
+	e := newEnv(t)
+	e.withBase(t)
+	e.server.failOn = "start"
+	if _, err := e.svc.SnapshotBase(ctx, name("prod"), nil); err == nil {
+		t.Fatal("want error")
+	}
+	if e.j.has("zfs snapshot tank/db-branch/bases/prod@s20261109120000") {
 		t.Errorf("journal %q", e.j.entries)
 	}
 }
