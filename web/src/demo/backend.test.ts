@@ -720,3 +720,35 @@ describe("history graph and module", () => {
     expect(g.lines.find((l) => l.line === g.live)).toMatchObject({ parent: 0, from: "reset" });
   });
 });
+
+describe("branch upgrade", () => {
+  const list = (name: string) => get<{ items: Checkpoint[] }>(`/v1/branches/${name}/checkpoints`).items;
+  const settle = (ms = 2300) => vi.advanceTimersByTime(ms);
+  const upgrade = (name: string, body: unknown) => call("POST", `/v1/branches/${name}/upgrade`, body);
+  it("refuses what the server refuses, at once", () => {
+    expect(upgrade("report-fix", { runtime: "bad" }).status).toBe(400);
+    expect(upgrade("report-fix", { runtime: "mysql@8.4.13" })).toMatchObject({ status: 422, body: { error: { code: "upgrade_not_allowed" } } });
+    expect(upgrade("report-fix", { runtime: "mysql@9.4.0" })).toMatchObject({ status: 404, body: { error: { code: "runtime_not_installed" } } });
+    expect(upgrade("nope", { runtime: "mysql@9.4.0" }).status).toBe(404);
+  });
+  it("checks without changing anything, then upgrades with an automatic Checkpoint that records the old runtime", () => {
+    call("POST", "/v1/runtimes", { runtime: "mysql@9.4.0" });
+    settle(4000);
+    const before = branch("report-fix")!.runtime;
+    expect(before).toBe("mysql@8.4.13");
+    const c = upgrade("report-fix", { runtime: "mysql@9.4.0", check_only: true });
+    expect(c.status).toBe(202);
+    settle(800);
+    expect(op((c.body as Operation).id).result).toMatchObject({ status: "checked", check_only: true });
+    expect(branch("report-fix")).toMatchObject({ runtime: before, status: "ready" });
+    const r = upgrade("report-fix", { runtime: "mysql@9.4.0" });
+    expect((r.body as Operation).kind).toBe("branch.upgrade");
+    expect(branch("report-fix")!.status).toBe("upgrading");
+    expect(upgrade("report-fix", { runtime: "mysql@9.4.0" }).status).toBe(409);
+    settle(2300);
+    expect(branch("report-fix")).toMatchObject({ runtime: "mysql@9.4.0", base_runtime: before, status: "ready" });
+    const res = op((r.body as Operation).id).result!;
+    expect(res).toMatchObject({ status: "upgraded", from: before, to: "mysql@9.4.0" });
+    expect(list("report-fix").find((x) => x.name === res.checkpoint)).toMatchObject({ auto: true, runtime: before });
+  });
+});

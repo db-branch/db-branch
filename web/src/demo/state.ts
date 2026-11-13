@@ -1,5 +1,6 @@
 // The fake cluster's state: plain data (JSON-safe), so a tab can keep it across
 // page loads. Nothing here talks to a network; see backend.ts for the API.
+import type { UpgradeResult } from "../lib/upgrade";
 import type { APIToken, Base, BaseRefresh, BackupFile, Branch, Checkpoint, Operation, Runtime, SettingScope, Upload } from "../api";
 
 export const MIB = 1024 * 1024;
@@ -24,6 +25,8 @@ export type Effect =
   | { k: "branch.ready"; name: string; reset?: boolean }
   | { k: "branch.delete"; name: string }
   | { k: "branch.restore"; name: string; checkpoint: string }
+  | { k: "branch.upgrade"; name: string; to: string; op: string; result: UpgradeResult }
+  | { k: "op.result"; op: string; result: UpgradeResult }
   | { k: "base.ready"; name: string; snapshot: boolean; grow?: number }
   | { k: "base.delete"; name: string }
   | { k: "refresh.run"; name: string }

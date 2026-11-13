@@ -191,6 +191,7 @@ export function CheckpointPanel({ branch: b, ready, allow, onChange }: { branch:
                 <span className="muted small" title={t("Space only this checkpoint holds")}>
                   {bytes(c.size)}
                 </span>
+                {c.runtime && <span className="muted small mono" title={t("The runtime the Branch ran when this Checkpoint was taken")}>{c.runtime}</span>}
                 {lines && <span className="muted small">line {c.line}</span>}
               </div>
               {asking?.name === c.name && asking.from === "list" ? (
