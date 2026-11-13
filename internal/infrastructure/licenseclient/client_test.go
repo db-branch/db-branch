@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ func TestRenew_新しい鍵を受け取り送るのは鍵とUser_Agentだけ(t *
 		w.Write([]byte(`{"key":"dbbl1.new"}`))
 	}))
 	defer srv.Close()
-	key, err := (&licenseclient.Client{Version: "1.4.2"}).Renew(ctx, srv.URL+"/renew", "dbbl1.old")
+	key, err := (&licenseclient.Client{Version: "1.4.2"}).Renew(ctx, srv.URL+"/renew", "dbbl1.old", "")
 	if err != nil || key != "dbbl1.new" {
 		t.Fatalf("%q %v", key, err)
 	}
@@ -37,6 +38,30 @@ func TestRenew_新しい鍵を受け取り送るのは鍵とUser_Agentだけ(t *
 	}
 	if got.method != "POST" || got.ua != "db-branch/1.4.2" || got.ct != "application/json" {
 		t.Errorf("%+v", got)
+	}
+}
+
+func TestRenew_クラスタidがあれば鍵と一緒に送りなければclusterの項目ごと省く(t *testing.T) {
+	id := "0123456789abcdef0123456789abcdef"
+	for _, tc := range []struct {
+		name, cluster string
+		want          map[string]string
+	}{
+		{"idあり", id, map[string]string{"key": "dbbl1.old", "cluster": id}},
+		{"idなし", "", map[string]string{"key": "dbbl1.old"}},
+	} {
+		var body string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			body = string(b)
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		_, err := (&licenseclient.Client{}).Renew(ctx, srv.URL, "dbbl1.old", tc.cluster)
+		srv.Close()
+		var in map[string]string
+		if !errors.Is(err, licensing.ErrNoNewerKey) || json.Unmarshal([]byte(body), &in) != nil || !reflect.DeepEqual(in, tc.want) {
+			t.Errorf("%s: %v 本文: %s", tc.name, err, body)
+		}
 	}
 }
 
@@ -66,7 +91,7 @@ func TestRenew_応答ごとに意味のあるエラーを返す(t *testing.T) {
 			w.WriteHeader(c.status)
 			w.Write([]byte(c.body))
 		}))
-		_, err := (&licenseclient.Client{}).Renew(ctx, srv.URL, "k")
+		_, err := (&licenseclient.Client{}).Renew(ctx, srv.URL, "k", "")
 		srv.Close()
 		if err == nil || c.is != nil && !errors.Is(err, c.is) || !strings.Contains(err.Error(), c.text) {
 			t.Errorf("%s: %v", c.name, err)
@@ -81,7 +106,7 @@ func TestRenew_応答がないときは時間切れで失敗する(t *testing.T)
 	defer close(release)
 	c := &licenseclient.Client{HTTP: &http.Client{Timeout: 50 * time.Millisecond}}
 	start := time.Now()
-	if _, err := c.Renew(ctx, srv.URL, "k"); err == nil || !strings.Contains(err.Error(), "contacting") {
+	if _, err := c.Renew(ctx, srv.URL, "k", ""); err == nil || !strings.Contains(err.Error(), "contacting") {
 		t.Errorf("%v", err)
 	}
 	if time.Since(start) > 5*time.Second {
@@ -97,7 +122,7 @@ func TestRenew_httpの更新URLは通信せずに断る(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
 	defer srv.Close()
 	other := strings.Replace(srv.URL, "127.0.0.1", "licenses.example.com", 1)
-	if _, err := (&licenseclient.Client{}).Renew(ctx, other, "k"); !errors.Is(err, licensing.ErrInsecureURL) || called {
+	if _, err := (&licenseclient.Client{}).Renew(ctx, other, "k", ""); !errors.Is(err, licensing.ErrInsecureURL) || called {
 		t.Errorf("%v %v", err, called)
 	}
 }
@@ -106,10 +131,10 @@ func TestRenew_つながらないときや不正な要求はエラーにする(t
 	srv := httptest.NewServer(http.NotFoundHandler())
 	url := srv.URL
 	srv.Close()
-	if _, err := (&licenseclient.Client{}).Renew(ctx, url, "k"); err == nil || !strings.Contains(err.Error(), "contacting") {
+	if _, err := (&licenseclient.Client{}).Renew(ctx, url, "k", ""); err == nil || !strings.Contains(err.Error(), "contacting") {
 		t.Errorf("%v", err)
 	}
-	if _, err := (&licenseclient.Client{}).Renew(ctx, "http://127.0.0.1:1/\x7f", "k"); err == nil {
+	if _, err := (&licenseclient.Client{}).Renew(ctx, "http://127.0.0.1:1/\x7f", "k", ""); err == nil {
 		t.Error("不正な URL")
 	}
 	// 本文の途中で切れる。
@@ -119,7 +144,7 @@ func TestRenew_つながらないときや不正な要求はエラーにする(t
 		w.Write([]byte("{"))
 	}))
 	defer cut.Close()
-	if _, err := (&licenseclient.Client{}).Renew(ctx, cut.URL, "k"); err == nil {
+	if _, err := (&licenseclient.Client{}).Renew(ctx, cut.URL, "k", ""); err == nil {
 		t.Error("途中で切れた応答")
 	}
 }
@@ -133,7 +158,7 @@ func TestRenew_429はRetry_Afterの秒数を持つ待ちのエラーになる(t 
 			w.WriteHeader(429)
 			w.Write([]byte(`{"error":{"code":"rate_limited","message":"slow down"}}`))
 		}))
-		_, err := (&licenseclient.Client{}).Renew(ctx, srv.URL, "k")
+		_, err := (&licenseclient.Client{}).Renew(ctx, srv.URL, "k", "")
 		srv.Close()
 		var later *licensing.RetryLaterError
 		if !errors.As(err, &later) || later.After != want {

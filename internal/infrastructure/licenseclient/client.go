@@ -1,5 +1,6 @@
 // Package licenseclient asks the licence service for the renewed key of a
-// subscription. It sends the current key and nothing else.
+// subscription. It sends the current key and the cluster's anonymous id, and
+// nothing else.
 package licenseclient
 
 import (
@@ -40,14 +41,19 @@ func (c *Client) client() *http.Client {
 	return &http.Client{Timeout: Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-// Renew posts {"key": key} to renewURL. A new key comes back as is; the
+// Renew posts {"key": key, "cluster": clusterID} to renewURL; without a
+// clusterID (not drawn yet) the "cluster" field is left out. A new key comes back as is; the
 // other answers are the errors of the licensing package, wrapped with the
 // service's message.
-func (c *Client) Renew(ctx context.Context, renewURL, key string) (string, error) {
+func (c *Client) Renew(ctx context.Context, renewURL, key, clusterID string) (string, error) {
 	if err := licensing.CheckRenewURL(renewURL); err != nil {
 		return "", err
 	}
-	body, _ := json.Marshal(map[string]string{"key": key})
+	fields := map[string]string{"key": key}
+	if clusterID != "" {
+		fields["cluster"] = clusterID
+	}
+	body, _ := json.Marshal(fields)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, renewURL, bytes.NewReader(body))
 	if err != nil {
 		return "", err

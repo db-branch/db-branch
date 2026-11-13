@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -265,6 +266,36 @@ func TestTrial_試用の開始は最初の記録が残る(t *testing.T) {
 		t.Error("broken: want error")
 	}
 	if _, err := b.StartTrial(ctx, first); err == nil {
+		t.Error("broken: want error")
+	}
+}
+
+func TestClusterID_クラスタidは最初の記録が残り再起動後も同じ(t *testing.T) {
+	s, path := newStore(t)
+	if id := s.ClusterID(ctx); id != "" {
+		t.Errorf("not recorded: %q", id)
+	}
+	first, second := strings.Repeat("0a", 16), strings.Repeat("1b", 16)
+	if id, err := s.InitClusterID(ctx, first); err != nil || id != first {
+		t.Fatalf("first: %q %v", id, err)
+	}
+	again := &filestore.Store{Path: path}
+	if id, err := again.InitClusterID(ctx, second); err != nil || id != first {
+		t.Errorf("a later id: %q %v", id, err)
+	}
+	if id := again.ClusterID(ctx); id != first {
+		t.Errorf("recorded: %q", id)
+	}
+	if _, err := s.InitClusterID(ctx, "not-an-id"); err == nil {
+		t.Error("an invalid id is refused")
+	}
+	broken := filepath.Join(t.TempDir(), "x.json")
+	_ = os.WriteFile(broken, []byte("{"), 0o600)
+	b := &filestore.Store{Path: broken}
+	if id := b.ClusterID(ctx); id != "" {
+		t.Errorf("broken: %q", id)
+	}
+	if _, err := b.InitClusterID(ctx, first); err == nil {
 		t.Error("broken: want error")
 	}
 }

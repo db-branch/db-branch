@@ -48,6 +48,9 @@ type State struct {
 	// ServiceIDs are the db-branch user and group ids every node uses (nil
 	// until the leader records its own; see init_service_ids).
 	ServiceIDs *domain.ServiceIDs `json:"service_ids,omitempty"`
+	// ClusterID is the cluster's anonymous identifier (see
+	// domain.ClusterIDStore); empty until the leader draws one.
+	ClusterID string `json:"cluster_id,omitempty"`
 }
 
 func newState() State {
@@ -77,6 +80,8 @@ type Command struct {
 	Event     *domain.RolloutEvent `json:"event,omitempty"`
 	// IDs is the payload of init_service_ids.
 	IDs *domain.ServiceIDs `json:"service_ids,omitempty"`
+	// ClusterID is the payload of init_cluster_id.
+	ClusterID string `json:"cluster_id,omitempty"`
 	// Nodes is the replica list of set_base_replica_nodes; absent (null)
 	// means every node, [] means the base's own node only.
 	Nodes *[]string `json:"nodes"`
@@ -91,12 +96,16 @@ type Command struct {
 // Protocol is the cluster protocol this binary speaks. Raise it whenever a
 // command is added or changes meaning, and list the command in opProtocol.
 //
+// 17: init_cluster_id records the cluster's anonymous identifier (sent to the
+// licence service with a key renewal). The id is drawn when it is first
+// needed, so an existing cluster gets it lazily once every node is at 17.
+//
 // 16: a branch may run another runtime than its base (branch upgrade) and an
 // operation carries a result. Both travel inside put_branch and put_operation,
 // so there is no new command; nodes at 15 would reset or recreate such a
 // branch on the base's runtime, so the feature waits for protocol 16
 // everywhere (domain.ProtocolBranchRuntime, checked by the use case).
-const Protocol = 16
+const Protocol = 17
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a
@@ -118,6 +127,7 @@ var opProtocol = map[string]int{
 	"set_base_replica_nodes": 13, "remove_replica": 13,
 	"set_base_anonymous": 14,
 	"init_service_ids":   15,
+	"init_cluster_id":    17,
 }
 
 // Needs returns the protocol the command requires (0 for unknown commands).
@@ -241,6 +251,10 @@ func DeleteRouteUser(name string) Command     { return Command{Op: "delete_route
 // unless some are recorded already.
 func InitServiceIDs(ids domain.ServiceIDs) Command { return Command{Op: "init_service_ids", IDs: &ids} }
 
+// InitClusterID records id as the cluster's identifier unless one is recorded
+// already.
+func InitClusterID(id string) Command { return Command{Op: "init_cluster_id", ClusterID: id} }
+
 // InitAdmin sets the console password only if the cluster has none yet.
 func InitAdmin(c auth.Credentials) Command { return Command{Op: "init_admin", Admin: &c} }
 
@@ -324,6 +338,8 @@ func (c Command) complete() bool {
 		return c.Event != nil
 	case "init_service_ids":
 		return c.IDs != nil && c.IDs.Valid()
+	case "init_cluster_id":
+		return domain.ValidClusterID(c.ClusterID)
 	}
 	return true
 }
@@ -410,6 +426,10 @@ func (f *FSM) apply(c Command) error {
 		if s.ServiceIDs == nil {
 			ids := *c.IDs
 			s.ServiceIDs = &ids
+		}
+	case "init_cluster_id":
+		if s.ClusterID == "" {
+			s.ClusterID = c.ClusterID
 		}
 	case "put_module":
 		if s.Modules == nil {
@@ -542,6 +562,7 @@ func (f *FSM) State() State {
 		ids := *f.state.ServiceIDs
 		out.ServiceIDs = &ids
 	}
+	out.ClusterID = f.state.ClusterID
 	for k, v := range f.state.Tokens {
 		if out.Tokens == nil {
 			out.Tokens = map[string]domain.APIToken{}
