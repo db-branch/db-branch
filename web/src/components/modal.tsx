@@ -15,11 +15,17 @@ export function Modal({ title, onClose, returnFocus, children }: { title: string
   const closing = useRef(onClose);
   closing.current = onClose;
   const backdrop = useMemo(() => backdropClose(() => closing.current()), []);
+  const keys = (e: { key: string; shiftKey: boolean; preventDefault: () => void }) => modalKey(e, () => closing.current(), [...(box.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])], document.activeElement);
 
   useEffect(() => {
     const unlock = lockScroll(document.documentElement);
     box.current?.focus();
+    // Focus can fall to the page when the control that had it goes away (a
+    // confirmation that was answered): keys must still reach the dialog.
+    const outside = (e: KeyboardEvent) => box.current && !box.current.contains(e.target as Node) && keys(e);
+    document.addEventListener("keydown", outside);
     return () => {
+      document.removeEventListener("keydown", outside);
       unlock();
       returnFocus?.current?.focus();
     };
@@ -41,7 +47,7 @@ export function Modal({ title, onClose, returnFocus, children }: { title: string
         ref={box}
         onKeyDown={(e) => {
           e.stopPropagation();
-          modalKey(e, onClose, [...(box.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])], document.activeElement);
+          keys(e);
         }}
       >
         <header className="gm-head">

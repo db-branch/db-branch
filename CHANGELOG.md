@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Web console: an Expand button on the Checkpoints graph opens the whole Checkpoints panel (graph, selected node and its actions, save, list, confirmations, messages) in a modal. It shares its state with the panel on the page, locks page scroll, traps focus, closes with Esc, Close or a click outside, and is full screen on a phone.
+
+### Changed
+
+- Web console: restoring the tip of a line of history no longer adds a new lane to the graph. The restored state continues on the same lane, with no fork and no new "line N" label. Restoring a point in the middle of a line still forks a new lane. Display only: the API and the server are unchanged.
+
 ## [0.2.1] - 2026-11-13
 
 ### Changed
