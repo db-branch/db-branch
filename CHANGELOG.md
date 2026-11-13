@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-13
+
+### Changed
+
+- No functional change from 0.2.0. This is the first release built and published from the recreated repository, which checks the release pipeline (signing, publishing to the APT repository, and the check that the published version can be downloaded).
+
 ## [0.2.0] - 2026-11-13 - first public release (Beta)
 
 ### Added
