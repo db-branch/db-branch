@@ -14,21 +14,23 @@ import (
 )
 
 type branchView struct {
-	Name       string  `json:"name"`
-	Status     string  `json:"status"`
-	Reason     *string `json:"status_reason"`
-	Base       string  `json:"base"`
-	Snapshot   string  `json:"snapshot"`
-	Runtime    string  `json:"runtime"`
-	Node       string  `json:"node"`
-	CreatedAt  string  `json:"created_at"`
-	ExpiresAt  *string `json:"expires_at"`
-	ResetAt    *string `json:"reset_at"`
-	Owner      *string `json:"owner"`
-	ID         string  `json:"id"`
-	Access     string  `json:"access"`
-	Record     bool    `json:"record"`
-	Connection struct {
+	Name     string  `json:"name"`
+	Status   string  `json:"status"`
+	Reason   *string `json:"status_reason"`
+	Base     string  `json:"base"`
+	Snapshot string  `json:"snapshot"`
+	Runtime  string  `json:"runtime"`
+	// BaseRuntime is the base's; it differs once the branch is upgraded.
+	BaseRuntime string  `json:"base_runtime"`
+	Node        string  `json:"node"`
+	CreatedAt   string  `json:"created_at"`
+	ExpiresAt   *string `json:"expires_at"`
+	ResetAt     *string `json:"reset_at"`
+	Owner       *string `json:"owner"`
+	ID          string  `json:"id"`
+	Access      string  `json:"access"`
+	Record      bool    `json:"record"`
+	Connection  struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
 		User string `json:"user"`
@@ -91,6 +93,7 @@ func (a *App) branchCommand() *cobra.Command {
 
 	var base, snapshot, initSQL, initFile, ttl, node, owner, access string
 	var record bool
+	var runtime string
 	create := &cobra.Command{
 		Use:   "create <name> --base <base>",
 		Short: "Clone a base into a new branch",
@@ -126,6 +129,13 @@ func (a *App) branchCommand() *cobra.Command {
 			if record {
 				body["record"] = true
 			}
+			if runtime != "" {
+				if _, err := domain.ParseRuntimeRef(runtime); err != nil {
+					return fmt.Errorf("--runtime: %w", err)
+				}
+				body["runtime"] = runtime
+				return a.createUpgraded(cmd, c, n, body, noWait)
+			}
 			if err := a.start(cmd.Context(), c, "POST", "/v1/branches", body, noWait); err != nil || noWait {
 				return err
 			}
@@ -140,6 +150,7 @@ func (a *App) branchCommand() *cobra.Command {
 	create.Flags().StringVar(&node, "node", "", "cluster node to create it on (default: chosen by load)")
 	create.Flags().StringVar(&owner, "owner", "", "who manages the branch (admins only; default: you)")
 	create.Flags().BoolVar(&record, "record", false, "record the branch's changes so it can be restored to any point (needs the history module); decided now, it cannot be turned on or off later")
+	create.Flags().StringVar(&runtime, "runtime", "", "create the branch, then upgrade it to this newer runtime of the base's engine (engine@version), e.g. mysql@8.4.13: an old/new pair from one base")
 	create.Flags().StringVar(&access, "access", "", "private (own password, owner and admins only) or open (anyone, shared password)")
 
 	list := &cobra.Command{
@@ -247,8 +258,24 @@ func (a *App) branchCommand() *cobra.Command {
 	for _, c := range []*cobra.Command{create, reset, recreate, del, restore} {
 		c.Flags().BoolVar(&noWait, "no-wait", false, "print the operation ID and return immediately")
 	}
-	cmd.AddCommand(create, list, show, dsn, reset, recreate, del, extend, a.checkpointCommand(), a.checkpointsCommand(), restore)
+	upgrade := a.upgradeCommand(&noWait)
+	upgrade.Flags().BoolVar(&noWait, "no-wait", false, "print the operation ID and return immediately")
+	cmd.AddCommand(create, list, show, dsn, reset, recreate, del, extend, a.checkpointCommand(), a.checkpointsCommand(), restore, upgrade)
 	return cmd
+}
+
+// createUpgraded creates a branch on another runtime: the operation creates it
+// and upgrades it, and carries the upgrade's result.
+func (a *App) createUpgraded(cmd *cobra.Command, c Client, n domain.Name, body map[string]any, noWait bool) error {
+	op, err := a.startOp(cmd.Context(), c, "POST", "/v1/branches", body, noWait)
+	if err != nil || noWait {
+		return err
+	}
+	a.reportUpgrade(n.String(), op)
+	if op.State == "failed" {
+		return fmt.Errorf("%s failed: %s", op.Kind, op.Error)
+	}
+	return a.showBranch(cmd, c, n)
 }
 
 func (a *App) showBranch(cmd *cobra.Command, c Client, n domain.Name) error {
@@ -270,7 +297,11 @@ func (a *App) showBranch(cmd *cobra.Command, c Client, n domain.Name) error {
 	}
 	fmt.Fprintf(tw, "Recording:\t%s\n", map[bool]string{true: "on (since creation)", false: "off"}[b.Record])
 	fmt.Fprintf(tw, "Base:\t%s @ %s\n", b.Base, b.Snapshot)
-	fmt.Fprintf(tw, "Runtime:\t%s\n", b.Runtime)
+	if b.BaseRuntime != "" && b.BaseRuntime != b.Runtime {
+		fmt.Fprintf(tw, "Runtime:\t%s (upgraded; the base runs %s)\n", b.Runtime, b.BaseRuntime)
+	} else {
+		fmt.Fprintf(tw, "Runtime:\t%s\n", b.Runtime)
+	}
 	fmt.Fprintf(tw, "Connect:\t%s:%d  user %s  (password: db-branch branch dsn %s)\n", b.Connection.Host, b.Connection.Port, b.Connection.User, b.Name)
 	fmt.Fprintf(tw, "Expires:\t%s\n", orDash(b.ExpiresAt))
 	if b.Storage != nil {

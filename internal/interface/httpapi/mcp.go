@@ -23,7 +23,9 @@ reset it to start over, and delete it when done. Branches are isolated: nothing
 you do reaches the base or other branches. Prefer a short ttl (e.g. "4h").
 Before risky work (a migration, a bulk update) take a checkpoint with
 create_checkpoint; if it goes wrong, restore_checkpoint puts the branch back.
-Restoring loses nothing: the state you leave is kept as another checkpoint.`
+Restoring loses nothing: the state you leave is kept as another checkpoint.
+A branch can be moved to a newer database version (upgrade_branch; check_upgrade
+only checks). A checkpoint is saved first and a failed upgrade rolls back by itself.`
 
 // internalMux serves tool calls through the same routes (and so the same
 // authorization and audit) as HTTP clients.
@@ -104,6 +106,60 @@ func (s *Server) startAndWait(ctx context.Context, from *http.Request, method, p
 	}
 }
 
+// finished is a finished operation as the tools report it.
+type finished struct {
+	State  string          `json:"state"`
+	Error  string          `json:"error,omitempty"`
+	Result json.RawMessage `json:"result,omitempty"`
+}
+
+// startAndCollect is startAndWait that also returns the operation's result,
+// failed or not. The error is for requests the API refused.
+func (s *Server) startAndCollect(ctx context.Context, from *http.Request, method, path string, body any) (finished, error) {
+	status, out := s.call(ctx, from, method, path, body)
+	if status >= 300 {
+		return finished{}, apiError(status, out)
+	}
+	var op struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(out, &op)
+	for {
+		var cur finished
+		if err := s.get(ctx, from, "/v1/operations/"+op.ID, &cur); err != nil {
+			return cur, err
+		}
+		if cur.State == "succeeded" || cur.State == "failed" {
+			return cur, nil
+		}
+		select {
+		case <-ctx.Done():
+			return cur, ctx.Err()
+		case <-time.After(MCPPoll):
+		}
+	}
+}
+
+// operationResult is the tool answer for a finished operation: the result
+// either way, and an error flag when the operation failed.
+func operationResult(f finished) *mcp.CallToolResult {
+	res := text(f)
+	res.IsError = f.State == "failed"
+	return res
+}
+
+type upgradeIn struct {
+	Branch     string `json:"branch" jsonschema:"the branch to upgrade"`
+	Runtime    string `json:"runtime" jsonschema:"the target, engine@version, e.g. mysql@8.4.13 (see list_runtimes on the CLI; it must be installed)"`
+	NoRollback bool   `json:"no_rollback,omitempty" jsonschema:"keep a failed upgrade as it is instead of rolling back"`
+	Force      bool   `json:"force,omitempty" jsonschema:"upgrade although the pre-check found errors"`
+}
+
+type checkUpgradeIn struct {
+	Branch  string `json:"branch" jsonschema:"the branch to check"`
+	Runtime string `json:"runtime" jsonschema:"the target, engine@version, e.g. mysql@8.4.13"`
+}
+
 // MCPPoll is how often tools check a running operation.
 var MCPPoll = 500 * time.Millisecond
 
@@ -124,6 +180,7 @@ type createIn struct {
 	InitSQL  string `json:"init_sql,omitempty" jsonschema:"SQL run once after copying, e.g. to mask data; reset returns here"`
 	Access   string `json:"access,omitempty" jsonschema:"private (default: a password of its own, only you may connect) or open (anyone may connect, shared password)"`
 	Record   bool   `json:"record,omitempty" jsonschema:"record the branch's changes so it can be restored to any point (needs the history module)"`
+	Runtime  string `json:"runtime,omitempty" jsonschema:"create the branch on a newer version of the base's engine, e.g. mysql@8.4.13 (upgraded right after creation)"`
 }
 
 type extendIn struct {
@@ -193,6 +250,9 @@ func (s *Server) mcpServer(r *http.Request) *mcp.Server {
 			if in.Snapshot != "" {
 				body["snapshot"] = in.Snapshot
 			}
+			if in.Runtime != "" {
+				body["runtime"] = in.Runtime
+			}
 			if err := s.startAndWait(ctx, r, http.MethodPost, "/v1/branches", body); err != nil {
 				return nil, nil, err
 			}
@@ -255,6 +315,22 @@ func (s *Server) mcpServer(r *http.Request) *mcp.Server {
 				return nil, nil, err
 			}
 			return text(map[string]string{"branch": in.Branch, "checkpoint": in.Checkpoint, "result": "restored"}), nil, nil
+		})
+	mcp.AddTool(srv, &mcp.Tool{Name: "check_upgrade", Description: "Check what upgrading a branch to another version of its database engine would run into (accounts, configuration, free space), without changing anything. Returns findings with level error, warning or info."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in checkUpgradeIn) (*mcp.CallToolResult, any, error) {
+			f, err := s.startAndCollect(ctx, r, http.MethodPost, "/v1/branches/"+url.PathEscape(in.Branch)+"/upgrade", map[string]any{"runtime": in.Runtime, "check_only": true})
+			if err != nil {
+				return nil, nil, err
+			}
+			return operationResult(f), nil, nil
+		})
+	mcp.AddTool(srv, &mcp.Tool{Name: "upgrade_branch", Description: "Move one branch to a newer version of its database engine (MySQL 8.0 to 8.4 and so on); its base and other branches are untouched. A checkpoint is saved first and a failed upgrade rolls back by itself. The result lists the pre-check findings and the server log's warnings. Upgrades only; to go back, restore the before-upgrade checkpoint."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in upgradeIn) (*mcp.CallToolResult, any, error) {
+			f, err := s.startAndCollect(ctx, r, http.MethodPost, "/v1/branches/"+url.PathEscape(in.Branch)+"/upgrade", map[string]any{"runtime": in.Runtime, "no_rollback": in.NoRollback, "force": in.Force})
+			if err != nil {
+				return nil, nil, err
+			}
+			return operationResult(f), nil, nil
 		})
 	mcp.AddTool(srv, &mcp.Tool{Name: "query", Description: "Run one SQL statement in a branch and return its rows (as text) or the number of affected rows. Changes stay in the branch."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryIn) (*mcp.CallToolResult, any, error) {

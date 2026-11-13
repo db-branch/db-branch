@@ -247,6 +247,50 @@ paths:
         '202': { $ref: '#/components/responses/Accepted' }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/branches/{name}/upgrade:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+    post:
+      tags: [branches]
+      operationId: upgradeBranch
+      summary: Move one branch to a newer runtime of its engine (or only check that it could).
+      description: |
+        The branch's runtime is its own: the base and every other branch stay as they are. Allowed:
+        the same engine, upgrades only, MySQL 8.0 to 8.4, 8.4 to 9.x and patch upgrades within a
+        series (jumping over a long-term-support series, such as 8.0 to 9.x, is refused with
+        `422 upgrade_not_allowed`), PostgreSQL minor upgrades within one major (a major upgrade is
+        refused: not supported yet). The target must be installed on the branch's node
+        (`404 runtime_not_installed`, saying how to install it); in a cluster the request is
+        forwarded to that node, and answers `503 cluster_upgrading` until every node runs a version
+        that knows branch runtimes. There is no downgrade: restore a checkpoint taken on the older
+        version instead, which switches the runtime back.
+
+        The pre-check lists findings (`error`, `warning`, `info`; MySQL: accounts using
+        `mysql_native_password`, the generated configuration checked by the target `mysqld`, free
+        space). Errors stop the upgrade unless `force` is set. Then the server is stopped cleanly,
+        the automatic checkpoint `before-upgrade-<time>` is saved (it records the old runtime, is
+        kept like `before-restore` checkpoints and does not count toward `branch.max_checkpoints`),
+        and the server starts on the new runtime, which upgrades its data dictionary itself. If that
+        fails the checkpoint is restored and the old runtime started again, unless `no_rollback`
+        keeps the failed state for investigation (status `failed`; restore the checkpoint or delete
+        the branch). An agent restart during the upgrade rolls it back.
+
+        Operation kind `branch.upgrade`; phases `checking`, `stopping`, `checkpointing`,
+        `upgrading`, and on failure `rolling_back` and the restore's own. The operation's `result`
+        (also when it failed) is an `UpgradeResult`. With `check_only` nothing changes and the
+        result holds the findings.
+      x-dbb-action: branch.upgrade
+      parameters:
+        - $ref: '#/components/parameters/CSRF'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpgradeBranch' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/branches/{name}/checkpoints/{checkpoint}:
     parameters:
       - $ref: '#/components/parameters/NamePath'
@@ -895,7 +939,7 @@ components:
 
     BranchStatus:
       type: string
-      enum: [provisioning, ready, resetting, restoring, failed, lost, deleting]
+      enum: [provisioning, ready, resetting, restoring, upgrading, failed, lost, deleting]
     Checkpoint:
       type: object
       required: [name, created_at, size, line, auto, current]
@@ -904,8 +948,9 @@ components:
         created_at: { $ref: '#/components/schemas/Timestamp' }
         size: { type: integer, format: int64, description: Space only this checkpoint holds (freed when it is deleted). }
         line: { type: integer, description: The line of history it was taken on; a restore starts a new one. 0 is the branch's first. }
-        auto: { type: boolean, description: Taken by the system before a restore. }
+        auto: { type: boolean, description: Taken by the system before a restore or an upgrade. }
         current: { type: boolean, description: The branch's data descends from this checkpoint. }
+        runtime: { type: string, description: 'The runtime the branch ran when it was taken (absent for checkpoints from before this was recorded); restoring the checkpoint switches the branch back to it.', examples: ['mysql@8.0.46'] }
         warning: { type: string, description: Only on the answer to a save, when the branch (data and history) uses more than half of the pool's free space. }
     Branch:
       type: object
@@ -917,6 +962,7 @@ components:
         base: { $ref: '#/components/schemas/Name' }
         snapshot: { $ref: '#/components/schemas/Name' }
         runtime: { $ref: '#/components/schemas/RuntimeRef' }
+        base_runtime: { $ref: '#/components/schemas/RuntimeRef', description: The base's runtime. It differs from `runtime` once the branch is upgraded; reset returns to it. }
         node: { type: string }
         created_at: { $ref: '#/components/schemas/Timestamp' }
         expires_at:
@@ -981,6 +1027,54 @@ components:
             See getCapabilities `record`. This is decided only here: no call turns recording
             on or off for a branch that exists. With the module's `record_all` setting on, a
             branch is recorded whether or not this is set.
+        runtime:
+          $ref: '#/components/schemas/RuntimeRef'
+          description: |
+            Create the branch on a newer runtime of the base's engine: it is created from the base
+            as usual and upgraded right away (see upgradeBranch for the rules; a refused path or a
+            target that is not installed answers at once). The operation's `result` is an
+            `UpgradeResult`. If the upgrade fails the branch stays, rolled back to the base's runtime.
+        # Needs a login and the owner's or an admin's right to upgrade.
+
+    UpgradeBranch:
+      type: object
+      additionalProperties: false
+      required: [runtime]
+      properties:
+        runtime: { $ref: '#/components/schemas/RuntimeRef' }
+        check_only: { type: boolean, description: Run the pre-check and change nothing. }
+        no_rollback: { type: boolean, description: Keep a failed upgrade as it is (status failed) instead of rolling back. }
+        force: { type: boolean, description: Upgrade although the pre-check found errors. }
+    Finding:
+      type: object
+      required: [level, code, message]
+      properties:
+        level: { type: string, enum: [error, warning, info] }
+        code: { type: string, examples: [native_password_users] }
+        message: { type: string }
+    UpgradeResult:
+      type: object
+      required: [branch, from, to, status, check_only, pre_check, log]
+      properties:
+        branch: { $ref: '#/components/schemas/Name' }
+        from: { $ref: '#/components/schemas/RuntimeRef' }
+        to: { $ref: '#/components/schemas/RuntimeRef' }
+        status:
+          type: string
+          enum: [checked, upgraded, rolled_back, failed, refused, aborted]
+          description: |
+            checked: nothing changed (check only). upgraded. rolled_back: it failed and the branch is
+            back on `from`. failed: it failed and the branch was left (no_rollback, or the rollback
+            failed too). refused: the pre-check found errors. aborted: it failed before anything changed.
+        check_only: { type: boolean }
+        checkpoint: { type: string, description: The automatic checkpoint saved before the server was changed. }
+        pre_check: { type: array, items: { $ref: '#/components/schemas/Finding' } }
+        log:
+          type: array
+          items: { $ref: '#/components/schemas/Finding' }
+          description: Warnings, errors and upgrade progress the server logged while starting on the new runtime.
+        error: { type: string }
+        log_excerpt: { type: string, description: The end of the server's error log, when the start failed. }
 
     Base:
       type: object
@@ -1100,7 +1194,7 @@ components:
 
     OperationKind:
       type: string
-      enum: [runtime.install, base.create, base.snapshot, branch.create, branch.reset, branch.restore, branch.delete]
+      enum: [runtime.install, base.create, base.snapshot, branch.create, branch.reset, branch.restore, branch.upgrade, branch.delete]
     OperationState:
       type: string
       enum: [pending, running, succeeded, failed]
@@ -1117,6 +1211,11 @@ components:
             resource: { type: string, enum: [branch, base, runtime] }
             name: { type: string }
             snapshot: { type: string }
+        result:
+          description: >-
+            What the task reports besides success or failure, once it finished (also when it failed):
+            an `UpgradeResult` for `branch.upgrade`, and for `branch.create` with a `runtime`.
+          oneOf: [{ $ref: '#/components/schemas/UpgradeResult' }, { type: 'null' }]
         phase:
           type: [string, 'null']
           description: >-

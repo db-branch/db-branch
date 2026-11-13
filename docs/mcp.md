@@ -22,6 +22,8 @@
 | `create_checkpoint` | 稼働中のブランチの今の状態をチェックポイントとして保存する（一瞬。`name` は省略可）。危ない作業の前に取る |
 | `list_checkpoints` | ブランチのチェックポイント（時刻・容量・`current`・`auto`） |
 | `restore_checkpoint` | チェックポイントの状態に戻す（完了まで待つ）。何も失われない：今の状態は自動のチェックポイントに残り、他のチェックポイントも残る |
+| `check_upgrade` | ブランチを新しいバージョンのランタイムに上げると何に当たるかを調べる（何も変えない）。指摘は `error` `warning` `info` |
+| `upgrade_branch` | そのブランチだけを新しいバージョンに上げる（完了まで待つ）。先に Checkpoint を取り、失敗したら自動で戻る。結果に事前確認の指摘とサーバーログの警告が付く。`create_branch` の `runtime` で、作ってすぐ上げることもできる。[upgrade.md](upgrade.md) |
 | `reset_branch` | 作成直後（init SQL の後）に戻す。チェックポイントは残る |
 | `extend_branch` | 期限を延ばす |
 | `delete_branch` | 削除する |

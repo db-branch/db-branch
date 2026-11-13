@@ -51,6 +51,9 @@ type fakeBranches struct {
 	lastCreate dbbranch.CreateBranchRequest
 	// noCheckpoints makes the node report no checkpoint support.
 	noCheckpoints bool
+	// upErr fails the upgrade validations; upResultErr makes the upgrade
+	// (and a create with a runtime) fail after producing a result.
+	upErr, upResultErr error
 }
 
 func (f *fakeBranches) CheckpointsAvailable() bool { return !f.noCheckpoints }

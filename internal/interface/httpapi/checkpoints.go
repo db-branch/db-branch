@@ -23,13 +23,15 @@ type checkpointJSON struct {
 	Auto bool `json:"auto"`
 	// Current marks the checkpoint the branch's data descends from.
 	Current bool `json:"current"`
+	// Runtime is what the branch ran when it was taken; restoring switches back to it.
+	Runtime string `json:"runtime,omitempty"`
 	// Warning is set on a freshly saved checkpoint when the branch (data and
 	// history) uses more than half of the pool's free space.
 	Warning string `json:"warning,omitempty"`
 }
 
 func checkpointView(c domain.Checkpoint) checkpointJSON {
-	return checkpointJSON{Name: c.Name, CreatedAt: ts(c.CreatedAt), Size: c.Size, Line: c.Line, Auto: c.Auto, Current: c.Current}
+	return checkpointJSON{Name: c.Name, CreatedAt: ts(c.CreatedAt), Size: c.Size, Line: c.Line, Auto: c.Auto, Current: c.Current, Runtime: c.Runtime}
 }
 
 // checkpointBranch finds the branch and forwards the request to the node
@@ -131,7 +133,7 @@ func (s *Server) restoreCheckpoint(w http.ResponseWriter, r *http.Request, svc B
 	if !ok {
 		return
 	}
-	if err := b.CanCheckpoint(); err != nil {
+	if err := b.CanRestore(); err != nil {
 		fail(w, err)
 		return
 	}
@@ -144,7 +146,7 @@ func (s *Server) restoreCheckpoint(w http.ResponseWriter, r *http.Request, svc B
 		fail(w, fmt.Errorf("checkpoint %s of branch %s: %w", cp, n, domain.ErrNotFound))
 		return
 	}
-	s.branchAction(w, r, svc, n, "branch.restore", domain.Branch.CanCheckpoint,
+	s.branchAction(w, r, svc, n, "branch.restore", domain.Branch.CanRestore,
 		func(ctx context.Context, svc Branches, n domain.Name, report func(string)) error {
 			_, err := svc.RestoreCheckpoint(ctx, n, cp, report)
 			return err

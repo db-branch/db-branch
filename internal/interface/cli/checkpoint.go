@@ -19,6 +19,8 @@ type checkpointView struct {
 	Line      int    `json:"line"`
 	Auto      bool   `json:"auto"`
 	Current   bool   `json:"current"`
+	// Runtime is what the branch ran when it was taken.
+	Runtime string `json:"runtime"`
 	// Warning is set when the branch uses more than half of the pool's free space.
 	Warning string `json:"warning,omitempty"`
 }
@@ -99,9 +101,9 @@ func (a *App) checkpointsCommand() *cobra.Command {
 				return nil
 			}
 			tw := tabwriter.NewWriter(a.Stdout, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tCREATED\tSIZE\tLINE\t")
+			fmt.Fprintln(tw, "NAME\tCREATED\tSIZE\tLINE\tRUNTIME\t")
 			for _, cp := range out.Items {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", cp.Name, localTime(cp.CreatedAt), HumanBytes(cp.Size), cp.Line, checkpointNotes(cp))
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\n", cp.Name, localTime(cp.CreatedAt), HumanBytes(cp.Size), cp.Line, orDash(&cp.Runtime), checkpointNotes(cp))
 			}
 			return tw.Flush()
 		})),

@@ -250,3 +250,26 @@ func TestList_同じ時刻に始めても開始順が保たれる(t *testing.T) 
 		}
 	}
 }
+
+func TestStartResult_結果は成功しても失敗してもJSONで残る(t *testing.T) {
+	m, _ := newManager()
+	ok, err := m.StartResult("branch.upgrade", operation.Target{Resource: "branch", Name: "x"}, func(context.Context, func(string)) (any, error) {
+		return map[string]string{"status": "upgraded"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wait(t, m, ok.ID); string(got.Result) != `{"status":"upgraded"}` || got.State != operation.Succeeded {
+		t.Errorf("op = %+v", got)
+	}
+	bad, _ := m.StartResult("branch.upgrade", operation.Target{Resource: "branch", Name: "y"}, func(context.Context, func(string)) (any, error) {
+		return map[string]string{"status": "rolled_back"}, errors.New("boom")
+	})
+	if got := wait(t, m, bad.ID); string(got.Result) != `{"status":"rolled_back"}` || got.State != operation.Failed || got.Error != "boom" {
+		t.Errorf("op = %+v", got)
+	}
+	plain := start(t, m, "branch.reset", operation.Target{Resource: "branch", Name: "z"}, func(context.Context, func(string)) error { return nil })
+	if got := wait(t, m, plain.ID); got.Result != nil {
+		t.Errorf("a task without a result has %s", got.Result)
+	}
+}

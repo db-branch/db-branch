@@ -2,6 +2,7 @@ package raftstore_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"reflect"
@@ -449,5 +450,20 @@ func TestFSM_ユーザーidは最初の記録だけが残り不完全なコマ�
 		if r := g.Apply(&raft.Log{Data: mustEncode(c)}); r == nil {
 			t.Errorf("%+v: want error", c)
 		}
+	}
+}
+
+func TestFSM_ブランチのランタイムと操作の結果をそのまま保持する(t *testing.T) {
+	// Both travel inside put_branch and put_operation; protocol 16 gates the feature.
+	if raftstore.Protocol < domain.ProtocolBranchRuntime {
+		t.Fatalf("Protocol %d is below the one branch upgrades need (%d)", raftstore.Protocol, domain.ProtocolBranchRuntime)
+	}
+	f := raftstore.NewFSM()
+	b := domain.Branch{Name: name("x"), Base: name("prod"), Runtime: domain.RuntimeRef{Engine: domain.MySQL, Version: "8.4.13"}, Status: domain.BranchUpgrading, LegacyAuth: true}
+	apply(t, f, raftstore.PutBranch(b))
+	apply(t, f, raftstore.PutOperation(operation.Operation{ID: "op_1", Kind: "branch.upgrade", State: operation.Failed, Result: json.RawMessage(`{"status":"rolled_back"}`)}))
+	st := f.State()
+	if st.Branches["x"] != b || string(st.Operations["op_1"].Result) != `{"status":"rolled_back"}` {
+		t.Errorf("state = %+v", st)
 	}
 }

@@ -34,18 +34,20 @@ type opRef struct {
 }
 
 type branchJSON struct {
-	Name         string         `json:"name"`
-	Status       string         `json:"status"`
-	StatusReason *string        `json:"status_reason"`
-	Base         string         `json:"base"`
-	Snapshot     string         `json:"snapshot"`
-	Runtime      string         `json:"runtime"`
-	Node         string         `json:"node"`
-	CreatedAt    string         `json:"created_at"`
-	ExpiresAt    *string        `json:"expires_at"`
-	ResetAt      *string        `json:"reset_at"`
-	Storage      *storageJSON   `json:"storage"`
-	Connection   connectionJSON `json:"connection"`
+	Name         string  `json:"name"`
+	Status       string  `json:"status"`
+	StatusReason *string `json:"status_reason"`
+	Base         string  `json:"base"`
+	Snapshot     string  `json:"snapshot"`
+	Runtime      string  `json:"runtime"`
+	// BaseRuntime is the runtime of the base; Runtime differs once the branch is upgraded.
+	BaseRuntime string         `json:"base_runtime"`
+	Node        string         `json:"node"`
+	CreatedAt   string         `json:"created_at"`
+	ExpiresAt   *string        `json:"expires_at"`
+	ResetAt     *string        `json:"reset_at"`
+	Storage     *storageJSON   `json:"storage"`
+	Connection  connectionJSON `json:"connection"`
 	// Proxy is how to reach the branch through this node's proxy, by user name.
 	Proxy     *connectionJSON `json:"proxy"`
 	Operation *opRef          `json:"operation"`
@@ -94,6 +96,10 @@ func (s *Server) branchView(ctx context.Context, svc Branches, b domain.Branch) 
 	}
 	if b.Open() {
 		v.Access = domain.AccessOpen
+	}
+	v.BaseRuntime = v.Runtime
+	if base, err := svc.GetBase(ctx, b.Base); err == nil {
+		v.BaseRuntime = base.Runtime.String()
 	}
 	if s.routable(b) {
 		v.Proxy = &connectionJSON{Host: s.Host, Port: s.ProxyPorts[b.Runtime.Engine], User: b.User}
@@ -169,6 +175,8 @@ type createBranchJSON struct {
 	// Record asks for the branch's changes to be recorded (needs the history
 	// module, a login, and a MySQL base).
 	Record bool `json:"record,omitempty"`
+	// Runtime upgrades the new branch to it right away ("engine@version").
+	Runtime string `json:"runtime,omitempty"`
 }
 
 func parseTTL(s string) (time.Duration, error) {
@@ -239,6 +247,16 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 		fail(w, err)
 		return
 	}
+	var target, baseRuntime domain.RuntimeRef
+	if in.Runtime != "" {
+		var err error
+		if target, baseRuntime, err = s.createRuntime(r, svc, in, req.Base); err != nil {
+			refund()
+			fail(w, err)
+			return
+		}
+		req.Runtime, req.PoolFree = target, s.poolFree()
+	}
 	// Report the obvious mistakes now instead of in a failed operation.
 	if _, err := svc.GetBranch(r.Context(), req.Name); err == nil {
 		refund()
@@ -259,6 +277,20 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 		return
 	}
 	req.Node = node
+	if target != (domain.RuntimeRef{}) {
+		if err := svc.ValidateTarget(r.Context(), baseRuntime, target); err != nil {
+			refund()
+			fail(w, err)
+			return
+		}
+		s.acceptedResult(w, "branch.create", operation.Target{Resource: "branch", Name: req.Name.String()},
+			func(ctx context.Context, report func(string)) (any, error) {
+				b, res, err := svc.CreateBranchUpgraded(ctx, req, report)
+				s.publishBranch(ctx, svc, b.Name)
+				return res, err
+			})
+		return
+	}
 	s.accepted(w, "branch.create", operation.Target{Resource: "branch", Name: req.Name.String()},
 		func(ctx context.Context, report func(string)) error {
 			b, err := svc.CreateBranch(ctx, req, report)
