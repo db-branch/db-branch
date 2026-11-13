@@ -237,6 +237,9 @@ func (m *Server) StartUpgraded(ctx context.Context, s domain.Server, own domain.
 	err := m.start(ctx, s, max(timeout, m.StartTimeout))
 	logged := m.tailLogN(s, offset, 1<<20)
 	res := domain.UpgradeLog{Findings: upgradeFindings(logged), Excerpt: lastBytes(logged, 4096)}
+	if err != nil && logged == "" {
+		res.Excerpt = m.startOutput(ctx, s, offset, 4096)
+	}
 	if err != nil {
 		return res, err
 	}

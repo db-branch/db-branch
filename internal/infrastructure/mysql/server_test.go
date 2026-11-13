@@ -235,7 +235,7 @@ func TestStart_時間内に応答しなければエラーログを添えて失�
 	f.sys.pingFails = 1 << 30
 	f.srv.StartTimeout = 20 * time.Millisecond
 	_ = os.MkdirAll(filepath.Dir(f.sys.errorLog), 0o755)
-	appendFile(f.sys.errorLog, "[ERROR] [MY-010119] Aborting\n")
+	f.sys.onStart = "[ERROR] [MY-010119] Aborting\n"
 
 	err := f.srv.Start(ctx, f.spec)
 	if err == nil || !strings.Contains(err.Error(), "Aborting") {
@@ -485,7 +485,7 @@ func TestStart_失敗時のエラーログは末尾だけを添える(t *testing
 	f.sys.pingFails = 1 << 30
 	f.srv.StartTimeout = 10 * time.Millisecond
 	_ = os.MkdirAll(filepath.Dir(f.sys.errorLog), 0o755)
-	appendFile(f.sys.errorLog, strings.Repeat("noise ", 1000)+"LAST LINE\n")
+	f.sys.onStart = strings.Repeat("noise ", 1000) + "LAST LINE\n"
 
 	err := f.srv.Start(ctx, f.spec)
 	if err == nil || !strings.Contains(err.Error(), "LAST LINE") || len(err.Error()) > 2300 {
@@ -558,7 +558,7 @@ func TestStart_サーバーが権限エラーで落ちたら待たずにErrOwner
 	f.sys.pingFails = 1 << 30
 	f.sys.crashes = true
 	f.srv.StartTimeout = time.Minute
-	appendFile(f.sys.errorLog, "[ERROR] File './binlog.index' not found (OS errno 13 - Permission denied)\n")
+	f.sys.onStart = "[ERROR] File ./binlog.index not found (OS errno 13 - Permission denied)\n"
 
 	begin := time.Now()
 	err := f.srv.Start(ctx, f.spec)
@@ -575,7 +575,7 @@ func TestStart_落ちた理由が権限でなくても待たずに失敗する(t
 	f.sys.pingFails = 1 << 30
 	f.sys.crashes = true
 	f.srv.StartTimeout = time.Minute
-	appendFile(f.sys.errorLog, "[ERROR] bad option\n")
+	f.sys.onStart = "[ERROR] bad option\n"
 	err := f.srv.Start(ctx, f.spec)
 	if err == nil || errors.Is(err, domain.ErrOwnership) || !strings.Contains(err.Error(), "bad option") {
 		t.Fatalf("error = %v", err)

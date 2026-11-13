@@ -163,6 +163,7 @@ func (m *Server) start(ctx context.Context, s domain.Server, timeout time.Durati
 	if err := m.writeConfig(s); err != nil {
 		return err
 	}
+	offset := fileSize(m.errLog(s))
 	if _, err := m.Run.Run(ctx, "systemctl", "start", unit(s)); err != nil {
 		return fmt.Errorf("start %s: %w", s.ID, err)
 	}
@@ -172,10 +173,10 @@ func (m *Server) start(ctx context.Context, s domain.Server, timeout time.Durati
 			return nil
 		}
 		if m.exited(ctx, s) {
-			return domain.StartFailure(s.ID, m.tailLog(s, 0))
+			return domain.StartFailure(s.ID, m.startOutput(ctx, s, offset, 2048))
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not become ready within %s: %s", s.ID, timeout, m.tailLog(s, 0))
+			return fmt.Errorf("%s did not become ready within %s: %s", s.ID, timeout, m.startOutput(ctx, s, offset, 2048))
 		}
 		time.Sleep(m.PollInterval)
 	}
@@ -279,6 +280,17 @@ func (m *Server) Remove(ctx context.Context, s domain.Server) error {
 	_, _ = m.Run.Run(ctx, "systemctl", "stop", unit(s))
 	_, _ = m.Run.Run(ctx, "systemctl", "reset-failed", unit(s))
 	return os.RemoveAll(m.dir(s))
+}
+
+// startOutput is what the server wrote while starting: its error log since
+// offset, or, when mysqld never got as far as writing to it (the binary is
+// missing or not executable), the unit's own output from the journal.
+func (m *Server) startOutput(ctx context.Context, s domain.Server, offset int64, max int) string {
+	if logged := m.tailLogN(s, offset, max); logged != "" {
+		return logged
+	}
+	out, _ := m.Run.Run(ctx, "journalctl", "-u", unit(s), "-n", "10", "--no-pager", "-o", "cat")
+	return strings.TrimSpace(string(out))
 }
 
 // tailLog returns the error log written after offset (last 2 KiB at most).
