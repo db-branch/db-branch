@@ -707,3 +707,22 @@ li.brow.skeleton { height: 56px; border-radius: 0; border-bottom: 2px solid var(
 .field-error { color: var(--bad); margin: 0; }
 
 .cps-warning { color: var(--warn); margin: 0.4rem 0; }
+
+/* Branch upgrade */
+.runtime-line { display: inline-flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.upgrade { display: inline-flex; flex-direction: column; gap: var(--s2); align-items: flex-start; }
+.upgrade-box { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s3); border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); max-width: 60ch; }
+.upgrade-buttons { display: inline-flex; gap: var(--s2); flex-wrap: wrap; }
+.upgrade-headline { margin: 0; font-weight: 600; }
+.upgrade-good .upgrade-headline { color: var(--ok, inherit); }
+.upgrade-warn .upgrade-headline { color: var(--warn); }
+.upgrade-bad .upgrade-headline { color: var(--bad); }
+.upgrade-error { color: var(--bad); margin: 0; }
+.findings-title { margin: var(--s2) 0 var(--s1); font-size: 13px; font-weight: 600; }
+.findings ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.finding { display: flex; gap: var(--s2); align-items: baseline; font-size: 13px; }
+.finding-level { flex: none; min-width: 7ch; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; }
+.finding-error .finding-level { color: var(--bad); }
+.finding-warning .finding-level { color: var(--warn); }
+.finding-info .finding-level { color: var(--muted, inherit); }
+.upgrade-excerpt pre { max-height: 14em; overflow: auto; white-space: pre-wrap; margin: var(--s1) 0 0; }

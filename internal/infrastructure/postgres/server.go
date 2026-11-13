@@ -175,9 +175,11 @@ func (p *Server) Start(ctx context.Context, s domain.Server) error {
 // exited reports whether the unit has stopped for good, so there is nothing
 // left to wait for.
 func (p *Server) exited(ctx context.Context, s domain.Server) bool {
-	out, _ := p.Run.Run(ctx, "systemctl", "is-active", unit(s))
+	// is-active exits non-zero for a stopped unit, and the runner then
+	// returns no output; show prints the state whatever it is.
+	out, err := p.Run.Run(ctx, "systemctl", "show", "--property=ActiveState", "--value", unit(s))
 	st := strings.TrimSpace(string(out))
-	return st == "failed" || st == "inactive"
+	return err == nil && (st == "failed" || st == "inactive")
 }
 
 func (p *Server) journal(ctx context.Context, s domain.Server) string {

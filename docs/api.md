@@ -262,6 +262,7 @@ PUT  /v1/auth/password     {"current_password":"...","new_password":"..."} → 2
 | `POST` | `/v1/branches/{name}/checkpoints` | 201 チェックポイント（スナップショットは一瞬なので同期） | `branch.checkpoint` |
 | `POST` | `/v1/branches/{name}/checkpoints/{checkpoint}/restore` | 202 オペレーション | `branch.restore` |
 | `DELETE` | `/v1/branches/{name}/checkpoints/{checkpoint}` | 204 | `branch.checkpoint_delete` |
+| `POST` | `/v1/branches/{name}/upgrade` | 202 オペレーション（`result` に結果） | `branch.upgrade` |
 
 一覧の絞り込み: `?base=prod-masked`、`?node=node1`、`?status=ready`。
 
@@ -282,6 +283,22 @@ POST /v1/branches/feature-x/checkpoints
 - 復元（`branch.restore`）はブランチが `ready` のときだけ。何も失わない（今の状態は `before-restore-<時刻>` として残り、他のチェックポイントも全て残る）。進捗は `cloning` `stopping` `checkpointing` `swapping` `promoting` `starting`
 - 名前の重複は `409 already_exists`、存在しないチェックポイントは `404`、不正な名前は `400`
 - 所有者と管理者だけが使える。ログインなしの呼び出しや `open` のブランチは対象外
+
+Branch のアップグレード（[upgrade.md](upgrade.md)）:
+
+```json
+POST /v1/branches/feature-x/upgrade
+{ "runtime": "mysql@8.4.13", "check_only": false, "no_rollback": false, "force": false }
+
+202 Accepted        // オペレーション branch.upgrade。GET /v1/operations/{id} の result が UpgradeResult
+```
+
+- `runtime` だけが必須。`check_only` は事前確認だけ（何も変えない）、`no_rollback` は失敗を戻さず残す、`force` は事前確認のエラーを無視して進める
+- 同期で断るもの: `400`（形式の誤り）、`422 upgrade_not_allowed`（ダウングレード、LTS の飛び越し、別のエンジン、PostgreSQL のメジャー更新）、`404 runtime_not_installed`（入れ方を添える）、`409`（`ready` でない）、`503 cluster_upgrading`（全ノードが新しい版になるまで）
+- 進捗は `checking` `stopping` `checkpointing` `upgrading`、失敗して戻すときは `rolling_back` と復元の進捗。オペレーションが `failed` でも `result` は付く（`status` が `rolled_back`、`failed`、`refused`、`aborted`）
+- Branch の JSON の `runtime` はその Branch のもの、`base_runtime` は Base のもの。Checkpoint の JSON の `runtime` は取ったときのランタイム
+- `POST /v1/branches` に `runtime` を付けると、作成のあとすぐに同じ手順で上げる（`kind` は `branch.create` のまま、`result` に結果）。失敗しても Branch は残り、戻された Base のランタイムで動く
+- Branch の状態に `upgrading` が加わる。`no_rollback` で残した失敗は `failed` で、`status_reason` が `upgrade failed:` で始まる。このときも Checkpoint の復元は使える
 
 作成:
 

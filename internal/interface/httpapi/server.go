@@ -40,6 +40,12 @@ type Branches interface {
 	CreateCheckpoint(ctx context.Context, name domain.Name, checkpoint string) (domain.Checkpoint, error)
 	RestoreCheckpoint(ctx context.Context, name domain.Name, checkpoint string, report dbbranch.Reporter) (domain.Branch, error)
 	DeleteCheckpoint(ctx context.Context, name domain.Name, checkpoint string) error
+	// ValidateUpgrade says at once what an upgrade request would be refused for.
+	ValidateUpgrade(ctx context.Context, name domain.Name, to domain.RuntimeRef, checkOnly bool) (domain.Branch, error)
+	UpgradeBranch(ctx context.Context, req dbbranch.UpgradeRequest, report dbbranch.Reporter) (domain.UpgradeResult, error)
+	// ValidateTarget checks, for a branch created on another runtime, that this node can run it.
+	ValidateTarget(ctx context.Context, from, to domain.RuntimeRef) error
+	CreateBranchUpgraded(ctx context.Context, req dbbranch.CreateBranchRequest, report dbbranch.Reporter) (domain.Branch, *domain.UpgradeResult, error)
 
 	CreateBase(ctx context.Context, req dbbranch.CreateBaseRequest, report dbbranch.Reporter) (domain.Base, error)
 	SnapshotBase(ctx context.Context, name domain.Name, report dbbranch.Reporter) (domain.BaseSnapshot, error)
@@ -226,6 +232,7 @@ func (s *Server) routes(mux *http.ServeMux, local bool) {
 	r("POST /v1/branches/{name}/checkpoints", "branch.checkpoint", s.named(s.createCheckpoint))
 	r("POST /v1/branches/{name}/checkpoints/{checkpoint}/restore", "branch.restore", s.named(s.restoreCheckpoint))
 	r("DELETE /v1/branches/{name}/checkpoints/{checkpoint}", "branch.checkpoint_delete", s.named(s.deleteCheckpoint))
+	r("POST /v1/branches/{name}/upgrade", "branch.upgrade", s.named(s.upgradeBranch))
 	r("GET /v1/branches/{name}/dsn", "branch.connect", s.named(s.branchDSN))
 	r("POST /v1/branches/{name}/query", "branch.query", s.named(s.queryBranch))
 
@@ -426,6 +433,8 @@ func fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "rollout_running", err.Error())
 	case errors.Is(err, domain.ErrCheckpointsUnavailable):
 		writeError(w, http.StatusConflict, "checkpoints_unavailable", err.Error())
+	case errors.Is(err, domain.ErrUpgradeRefused):
+		writeError(w, http.StatusUnprocessableEntity, "upgrade_not_allowed", err.Error())
 	case errors.Is(err, domain.ErrConflict):
 		writeError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, domain.ErrRuntimeNotInstalled):

@@ -23,12 +23,14 @@ export type Branch = {
   record?: boolean;
   // checkpoints: the node holding the branch can take checkpoints (own ZFS).
   checkpoints: boolean;
+  // base_runtime: the Base's runtime; runtime differs once the Branch is upgraded.
+  base_runtime?: string;
 };
 
 // Checkpoint is a saved state of a branch. line is the line of history it was
 // taken on (a restore starts a new one); auto marks those taken before a
 // restore; current marks the one the branch's data descends from.
-export type Checkpoint = { name: string; created_at: string; size: number; line: number; auto: boolean; current: boolean; warning?: string };
+export type Checkpoint = { name: string; created_at: string; size: number; line: number; auto: boolean; current: boolean; warning?: string; runtime?: string };
 
 // Line is a line of a branch's history: a restore starts a new one, branching
 // off the checkpoint it restored (from; "reset" is the branch's creation state)
@@ -120,6 +122,8 @@ export function uploadDump(file: File, node: string | undefined, onProgress: (f:
   });
 }
 
+import type { UpgradeResult } from "./lib/upgrade";
+
 export type Runtime = { runtime: string; engine: string; version: string };
 
 export type Operation = {
@@ -130,6 +134,8 @@ export type Operation = {
   node?: string;
   phase?: string;
   error?: string;
+  // result: what a branch.upgrade (or a branch.create with a runtime) reports, also when it failed.
+  result?: UpgradeResult | null;
 };
 
 export type BaseRefresh = {
@@ -355,7 +361,8 @@ export const api = {
   operation: (id: string) => call<Operation>("GET", `/v1/operations/${id}`),
   publicBases: () => call<{ items: PublicBase[]; anonymous: { max_ttl: string; max_branches: number; branches?: number; rate_per_hour?: number } }>("GET", "/v1/public/bases"),
   branches: () => call<{ items: Branch[] }>("GET", "/v1/branches").then((r) => r.items),
-  createBranch: (b: { name: string; base: string; ttl?: string; init_sql?: string; owner?: string; access?: string; record?: boolean }) => call<Operation>("POST", "/v1/branches", b),
+  upgradeBranch: (name: string, body: { runtime: string; check_only?: boolean; no_rollback?: boolean; force?: boolean }) => call<Operation>("POST", `/v1/branches/${name}/upgrade`, body),
+  createBranch: (b: { name: string; base: string; ttl?: string; init_sql?: string; owner?: string; access?: string; record?: boolean; runtime?: string }) => call<Operation>("POST", "/v1/branches", b),
   recreateBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/recreate`),
   resetBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/reset`),
   deleteBranch: (name: string) => call<Operation>("DELETE", `/v1/branches/${name}`),

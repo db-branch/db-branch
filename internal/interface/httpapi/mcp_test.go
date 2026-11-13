@@ -167,7 +167,7 @@ func TestMCP_トークンで接続しブランチを作って使える(t *testin
 	}
 	defer s.Close()
 	tools, err := s.ListTools(context.Background(), nil)
-	if err != nil || len(tools.Tools) != 11 {
+	if err != nil || len(tools.Tools) != 13 {
 		t.Fatalf("tools: %v %v", err, tools)
 	}
 	out, isErr := callText(t, s, "create_branch", map[string]any{"name": "feature-x", "base": "prod", "ttl": "4h", "access": "open"})

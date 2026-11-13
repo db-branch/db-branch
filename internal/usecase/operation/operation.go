@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"sort"
 	"sync"
@@ -44,6 +45,9 @@ type Operation struct {
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 	// Seq orders operations by start, newest highest, across nodes.
 	Seq uint64 `json:"seq"`
+	// Result is what the task reports besides success or failure (JSON; an
+	// upgrade's pre-check findings, for one). Set when the task finishes.
+	Result json.RawMessage `json:"result,omitempty"`
 }
 
 // Store keeps operation records: in memory on a single node, in Raft in a
@@ -56,6 +60,10 @@ type Store interface {
 
 // Func is the task body. report updates the operation's phase.
 type Func func(ctx context.Context, report func(phase string)) error
+
+// ResultFunc is a task body that also returns a result, kept on the
+// operation (as JSON) whether the task succeeded or failed.
+type ResultFunc func(ctx context.Context, report func(phase string)) (any, error)
 
 // Manager runs operations and records their progress in Store.
 type Manager struct {
@@ -118,6 +126,13 @@ func (m *Manager) put(op Operation) error {
 // is not tied to the caller's context: it keeps running after the HTTP
 // request that started it ends.
 func (m *Manager) Start(kind string, target Target, f Func) (Operation, error) {
+	return m.StartResult(kind, target, func(ctx context.Context, report func(string)) (any, error) {
+		return nil, f(ctx, report)
+	})
+}
+
+// StartResult is Start for a task that returns a result.
+func (m *Manager) StartResult(kind string, target Target, f ResultFunc) (Operation, error) {
 	now := m.now()
 	op := Operation{ID: newID(), Kind: kind, Target: target, Node: m.Node, State: Running, CreatedAt: now, UpdatedAt: now, Seq: m.nextSeq()}
 	if err := m.put(op); err != nil {
@@ -133,12 +148,15 @@ func (m *Manager) Start(kind string, target Target, f Func) (Operation, error) {
 			cur.UpdatedAt = m.now()
 			_ = m.put(cur) // progress is best effort; the final state is retried below
 		}
-		err := f(context.Background(), func(phase string) { update(func(o *Operation) { o.Phase = phase }) })
+		result, err := f(context.Background(), func(phase string) { update(func(o *Operation) { o.Phase = phase }) })
 		update(func(o *Operation) {
 			end := m.now()
 			o.State, o.Phase, o.FinishedAt = Succeeded, "", &end
 			if err != nil {
 				o.State, o.Error = Failed, err.Error()
+			}
+			if result != nil {
+				o.Result, _ = json.Marshal(result)
 			}
 		})
 		m.settle(cur)

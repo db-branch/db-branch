@@ -4,6 +4,7 @@
 // publish the same events as the real server. No network, no real data.
 import type { APIToken, Base, BaseRefresh, Branch, Checkpoint, HistoryTx, Operation, SettingScope, Upload } from "../api";
 import { ownerPrefix } from "../lib/branchname";
+import { upgradeProblem, type Finding, type UpgradeResult } from "../lib/upgrade";
 import {
   ADMIN,
   BaseRec,
@@ -43,7 +44,7 @@ const ANON_TTL = 4 * 3600e3;
 const DAY = 24 * 3600e3;
 const CHECKPOINT_NAME = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const MAX_CHECKPOINT_NAME = 40;
-const CONSOLE_ACTIONS = ["base.read", "base.create", "base.delete", "base.load", "base.snapshot", "base.publish", "base.refresh", "base.refresh.read", "runtime.install", "cluster.read", "setting.write", "module.install", "token.write", "backup.read", "route-user.write", "update.read", "update.check", "update.apply", "branch.checkpoint", "branch.checkpoint_delete", "branch.restore"];
+const CONSOLE_ACTIONS = ["base.read", "base.create", "base.delete", "base.load", "base.snapshot", "base.publish", "base.refresh", "base.refresh.read", "runtime.install", "cluster.read", "setting.write", "module.install", "token.write", "backup.read", "route-user.write", "update.read", "update.check", "update.apply", "branch.checkpoint", "branch.checkpoint_delete", "branch.restore", "branch.upgrade"];
 const BASE_ACTIONS = ["base.snapshot", "base.load", "base.delete", "base.describe", "base.mask", "base.publish", "base.sql", "base.start", "base.stop", "base.refresh", "base.refresh.read", "base.snapshot_delete", "base.replicas"];
 
 /** Go-style durations: "4h", "90m", "1h30m0s". Null when it is not one. */
@@ -186,6 +187,20 @@ export class DemoBackend {
         const b = s.branches.find((x) => x.name === fx.name);
         if (!b) return;
         this.finishRestore(b, fx.checkpoint, now);
+        this.emit("branch.updated", { name: b.name });
+        return;
+      }
+      case "op.result": {
+        const op = s.ops.find((o) => o.id === fx.op);
+        if (op) op.result = fx.result;
+        return;
+      }
+      case "branch.upgrade": {
+        const b = s.branches.find((x) => x.name === fx.name);
+        const op = s.ops.find((o) => o.id === fx.op);
+        if (op) op.result = fx.result;
+        if (!b) return;
+        this.finishUpgrade(b, fx.to, fx.result.checkpoint ?? "", now);
         this.emit("branch.updated", { name: b.name });
         return;
       }
@@ -417,6 +432,7 @@ export class DemoBackend {
     a("POST", "/v1/ext/history/branches/:name/restore", "user", (c) => this.historyRestore(c));
     a("POST", "/v1/branches/:name/checkpoints", "user", (c) => this.createCheckpoint(c));
     a("POST", "/v1/branches/:name/checkpoints/:cp/restore", "user", (c) => this.restoreCheckpoint(c));
+    a("POST", "/v1/branches/:name/upgrade", "user", (c) => this.upgradeBranch(c));
     a("DELETE", "/v1/branches/:name/checkpoints/:cp", "user", (c) => this.deleteCheckpoint(c));
     a("GET", "/v1/operations", "user", () => ok({ items: s().ops.slice(-50) }));
     a("GET", "/v1/operations/:id", "anon", (c) => {
@@ -432,6 +448,7 @@ export class DemoBackend {
     const op = this.newOp(kind, "branch", b.name);
     b.status = status;
     b.operation = { id: op.id, kind };
+    if (fx.k === "branch.upgrade") fx = { ...fx, op: op.id };
     this.schedule(op, ms, fx);
     this.emit("branch.updated", { name: b.name });
     return ok(op, 202);
@@ -485,6 +502,51 @@ export class DemoBackend {
     if (!st.list.some((x) => x.name === name)) return notFound("checkpoint");
     const ms = runtimeEngine(b.runtime) === "postgres" ? TIMING.restorePostgres : TIMING.restoreMysql;
     return this.branchAction(c, "branch.restore", "restoring", ms, { k: "branch.restore", name: b.name, checkpoint: name });
+  }
+
+  // upgradeBranch is a model of internal/usecase/dbbranch/upgrade.go: the
+  // same refusals, a simulated pre-check, the automatic checkpoint.
+  private upgradeBranch(c: Ctx): Reply {
+    const b = this.branchFor(c);
+    if (!b) return notFound("branch");
+    const body = c.body as { runtime?: string; check_only?: boolean; force?: boolean };
+    const to = String(body.runtime ?? "");
+    if (!/^(mysql|postgres)@[0-9]+\.[0-9]+(\.[0-9]+)?$/.test(to)) return fail(400, "invalid_request", `invalid runtime "${to}": want engine@version, e.g. mysql@8.4.13`);
+    if (b.status !== "ready") return fail(409, "conflict", `branch ${b.name} is ${b.status}`);
+    const problem = upgradeProblem(b.runtime, to);
+    if (problem) return fail(422, "upgrade_not_allowed", `upgrade not allowed: ${b.runtime} to ${to}: ${problem}`);
+    if (!this.state.installed.includes(to)) return fail(404, "runtime_not_installed", `runtime not installed: ${to} is not installed on node ${b.node}; install it with: db-branch runtime install ${to}`);
+    const checkOnly = !!body.check_only;
+    const pre: Finding[] = [
+      { level: "info", code: "upgrade_path", message: `${b.runtime} to ${to} on node ${b.node}` },
+      { level: "info", code: "disk_space", message: "The upgrade needs about 512.0 MiB of free space; the pool has 18.8 GiB." },
+    ];
+    if (b.runtime.startsWith("mysql") && /^mysql@8\.4/.test(to)) pre.push({ level: "warning", code: "native_password_users", message: "1 account(s) use mysql_native_password, which MySQL 8.4 disables by default: 'legacyapp'@'%'. db-branch keeps the plugin loaded on this branch so they still work." });
+    const checkpoint = `before-upgrade-${this.checkpointStamp(Date.now())}`;
+    const result: UpgradeResult = { branch: b.name, from: b.runtime, to, status: checkOnly ? "checked" : "upgraded", check_only: checkOnly, checkpoint: checkOnly ? undefined : checkpoint, pre_check: pre, log: [] };
+    if (checkOnly) {
+      const op = this.newOp("branch.upgrade", "branch", b.name);
+      this.schedule(op, 700, { k: "op.result", op: op.id, result });
+      return ok(op, 202);
+    }
+    result.log = [{ level: "info", code: "log_upgrade", message: `MY-013381: Server upgrade from '${b.runtime}' to '${to}' completed.` }, { level: "warning", code: "log_warning", message: "MY-010068: CA certificate ca.pem is self signed." }];
+    if (!b.runtime.startsWith("mysql")) result.log = [];
+    return this.branchAction(c, "branch.upgrade", "upgrading", TIMING.restoreMysql, { k: "branch.upgrade", name: b.name, to, op: "", result });
+  }
+
+  // finishUpgrade saves the state before as an automatic checkpoint (it records
+  // the old runtime) and switches the branch to the new runtime.
+  private finishUpgrade(b: Branch, to: string, checkpoint: string, now: number) {
+    const st = this.checkpointsOf(b.name);
+    st.list.forEach((x) => (x.current = false));
+    st.list.push({ name: checkpoint, created_at: new Date(now).toISOString(), size: 120 * 1024, line: st.line, auto: true, current: false, runtime: b.runtime });
+    const autos = st.list.filter((x) => x.auto).sort((x, y) => Date.parse(x.created_at) - Date.parse(y.created_at) || (x.name < y.name ? -1 : 1));
+    const drop = new Set(autos.slice(0, Math.max(0, autos.length - MAX_AUTO_CHECKPOINTS)).map((x) => x.name));
+    st.list = st.list.filter((x) => !drop.has(x.name));
+    b.base_runtime = b.base_runtime ?? b.runtime;
+    b.runtime = to;
+    b.status = "ready";
+    b.operation = null;
   }
 
   // finishRestore saves the state the branch leaves as an automatic

@@ -82,23 +82,38 @@ func (c *SocketClient) Do(ctx context.Context, method, path string, in, out any)
 }
 
 type operationJSON struct {
-	ID    string `json:"id"`
-	Kind  string `json:"kind"`
-	State string `json:"state"`
-	Phase string `json:"phase"`
-	Error string `json:"error"`
+	ID     string          `json:"id"`
+	Kind   string          `json:"kind"`
+	State  string          `json:"state"`
+	Phase  string          `json:"phase"`
+	Error  string          `json:"error"`
+	Result json.RawMessage `json:"result"`
 }
 
 // start sends a request answered with 202 + operation and, unless noWait,
 // waits for the operation, printing each new phase to stderr.
 func (a *App) start(ctx context.Context, c Client, method, path string, in any, noWait bool) error {
+	op, err := a.startOp(ctx, c, method, path, in, noWait)
+	if err != nil || noWait {
+		return err
+	}
+	if op.State == "failed" {
+		return fmt.Errorf("%s failed: %s", op.Kind, op.Error)
+	}
+	return nil
+}
+
+// startOp is start for a caller that wants the finished operation, failed or
+// not (its result says more than the error does). It returns an error only
+// when the request or the waiting went wrong.
+func (a *App) startOp(ctx context.Context, c Client, method, path string, in any, noWait bool) (operationJSON, error) {
 	var op operationJSON
 	if err := c.Do(ctx, method, path, in, &op); err != nil {
-		return err
+		return op, err
 	}
 	if noWait {
 		fmt.Fprintln(a.Stdout, op.ID)
-		return nil
+		return op, nil
 	}
 	poll := a.Poll
 	if poll == 0 {
@@ -107,21 +122,18 @@ func (a *App) start(ctx context.Context, c Client, method, path string, in any, 
 	last := ""
 	for {
 		if err := c.Do(ctx, "GET", "/v1/operations/"+op.ID, nil, &op); err != nil {
-			return err
+			return op, err
 		}
 		if op.Phase != "" && op.Phase != last {
 			fmt.Fprintf(a.Stderr, "  %s...\n", op.Phase)
 			last = op.Phase
 		}
-		switch op.State {
-		case "succeeded":
-			return nil
-		case "failed":
-			return fmt.Errorf("%s failed: %s", op.Kind, op.Error)
+		if op.State == "succeeded" || op.State == "failed" {
+			return op, nil
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return op, ctx.Err()
 		case <-time.After(poll):
 		}
 	}

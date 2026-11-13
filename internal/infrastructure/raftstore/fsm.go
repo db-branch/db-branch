@@ -90,7 +90,13 @@ type Command struct {
 
 // Protocol is the cluster protocol this binary speaks. Raise it whenever a
 // command is added or changes meaning, and list the command in opProtocol.
-const Protocol = 15
+//
+// 16: a branch may run another runtime than its base (branch upgrade) and an
+// operation carries a result. Both travel inside put_branch and put_operation,
+// so there is no new command; nodes at 15 would reset or recreate such a
+// branch on the base's runtime, so the feature waits for protocol 16
+// everywhere (domain.ProtocolBranchRuntime, checked by the use case).
+const Protocol = 16
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a

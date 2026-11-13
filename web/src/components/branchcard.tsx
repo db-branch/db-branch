@@ -6,6 +6,8 @@ import { t } from "../lib/i18n";
 import { splitOwned } from "../lib/branchname";
 import { showCheckpoints } from "../lib/checkpoints";
 import { CheckpointPanel } from "./checkpoints";
+import { UpgradePanel } from "./upgrade";
+import { isUpgraded } from "../lib/upgrade";
 import { ConnectPanel } from "./connect";
 import { CopyButton, Engine, Icon, Status, StorageBar, TtlBar } from "./marks";
 import { RecordingBadge, RecordingValue } from "./recording";
@@ -147,6 +149,7 @@ export function BranchRow({
           </span>
           <span className="brow-meta">
             <Engine runtime={b.runtime} />
+            {isUpgraded(b.runtime, b.base_runtime) && <span className="badge" title={t("Upgraded: the Base runs {runtime}", { runtime: b.base_runtime ?? "" })}>{t("upgraded")}</span>}
             <span className="mono muted" title={t("Base")}>{b.base}</span>
             {b.storage && <span className="muted small" title={t("{own} own writes of {total} referenced", { own: bytes(b.storage.used), total: bytes(b.storage.referenced) })}>{bytes(b.storage.used)}</span>}
           </span>
@@ -200,6 +203,15 @@ export function BranchRow({
               <span className="mono">{b.snapshot}</span>
               {snapshot && <span className="muted"> · {relative(snapshot.created_at)}</span>}
               {snapshot?.masked && <span className="badge on">masked</span>}
+            </dd>
+            <dt>Runtime</dt>
+            <dd className="wide">
+              <span className="runtime-line">
+                <Engine runtime={b.runtime} />
+                <span className="mono">{b.runtime}</span>
+                {isUpgraded(b.runtime, b.base_runtime) && <span className="muted small">{t("The Base runs {runtime}", { runtime: b.base_runtime ?? "" })}</span>}
+                {manage && !failed && <UpgradePanel branch={b} ready={ready} allow={(a) => allowed(can, a)} onChange={onChange} />}
+              </span>
             </dd>
             <dt>Node</dt>
             <dd className="mono">{b.node}</dd>

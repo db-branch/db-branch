@@ -26,6 +26,11 @@ type CreateBranchRequest struct {
 	Owner, Access string
 	// Record asks for the branch's changes to be recorded by the history module.
 	Record bool
+	// Runtime, when set, upgrades the new branch to it right after creation
+	// (CreateBranchUpgraded); Force and PoolFree are as in UpgradeRequest.
+	Runtime  domain.RuntimeRef
+	Force    bool
+	PoolFree uint64
 }
 
 // PlaceBranch checks the request against the base and chooses the node that
@@ -269,6 +274,19 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 			return br, s.fail(ctx, br, err)
 		}
 	}
+	// The reset point is the base's state, made by the base's runtime.
+	if rt := s.runtimeOf(ctx, br, ""); rt != br.Runtime || br.LegacyAuth {
+		br.Runtime, br.LegacyAuth = rt, false
+		if err := s.Store.PutBranch(ctx, br); err != nil {
+			return br, s.fail(ctx, br, err)
+		}
+		if srv, err = s.server(br.Runtime); err != nil {
+			return br, s.fail(ctx, br, err)
+		}
+		if spec, err = s.branchSpec(ctx, br, ds, false, false); err != nil {
+			return br, s.fail(ctx, br, err)
+		}
+	}
 	report.report("starting")
 	if err := srv.Start(ctx, spec); err != nil {
 		return br, s.fail(ctx, br, err)
@@ -372,6 +390,8 @@ func (s *Service) Recover(ctx context.Context) error {
 			errs = append(errs, err)
 		case domain.BranchRestoring:
 			errs = append(errs, s.resumeRestore(ctx, br))
+		case domain.BranchUpgrading:
+			errs = append(errs, s.resumeUpgrade(ctx, br))
 		case domain.BranchFailed:
 			errs = append(errs, s.resumeFailedRestore(ctx, br))
 		case domain.BranchDeleting:

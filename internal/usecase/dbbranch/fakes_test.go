@@ -154,6 +154,15 @@ type fakeServer struct {
 	sql     map[string][]string
 	// started are the specs the server was started with, in order.
 	started []domain.Server
+
+	// Upgrader behaviour (see upgrade_test.go).
+	plan       domain.UpgradePlan
+	checkErr   error
+	checkedFor domain.Login
+	upgraded   []domain.Server
+	upFail     error
+	upFindings []domain.Finding
+	upExcerpt  string
 }
 
 func (f *fakeServer) fail(op string) error {

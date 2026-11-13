@@ -30,6 +30,10 @@ type fakeSystem struct {
 	errorLog   string
 	failOn     string
 	crashes    bool // mysqld exits right after starting
+	// outputs answers a call whose text contains the key with the value on stdout.
+	outputs map[string]string
+	// onStart is appended to the error log by "systemctl start".
+	onStart string
 }
 
 func (f *fakeSystem) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -46,9 +50,17 @@ func (f *fakeSystem) RunInput(_ context.Context, in io.Reader, name string, args
 	if f.failOn != "" && strings.Contains(call, f.failOn) {
 		return nil, &execx.Error{Command: call, Stderr: "injected failure", Err: errors.New("exit 1")}
 	}
+	for k, v := range f.outputs {
+		if strings.Contains(call, k) {
+			return []byte(v), nil
+		}
+	}
 	switch {
 	case strings.HasPrefix(call, "systemctl start"):
 		f.active = true
+		if f.onStart != "" {
+			appendFile(f.errorLog, f.onStart)
+		}
 	case strings.HasPrefix(call, "systemctl stop"), strings.HasPrefix(call, "systemctl kill"):
 		if f.active && strings.HasPrefix(call, "systemctl stop") {
 			log := "[System] [MY-010910] [Server] /mysqld: Shutdown complete (mysqld 8.4.13)\n"
@@ -59,13 +71,19 @@ func (f *fakeSystem) RunInput(_ context.Context, in io.Reader, name string, args
 		}
 		f.active = false
 	case strings.HasPrefix(call, "systemctl is-active"):
-		if f.crashes && f.active {
-			return []byte("failed\n"), &execx.Error{Command: call, Err: errors.New("exit 3")}
-		}
-		if f.active {
+		// Like the real runner: no output for a command that exits non-zero.
+		if f.active && !f.crashes {
 			return []byte("active\n"), nil
 		}
-		return []byte("inactive\n"), &execx.Error{Command: call, Err: errors.New("exit 3")}
+		return nil, &execx.Error{Command: call, Err: errors.New("exit 3")}
+	case strings.Contains(call, "--property=ActiveState"):
+		switch {
+		case f.crashes && f.active:
+			return []byte("failed\n"), nil
+		case f.active:
+			return []byte("active\n"), nil
+		}
+		return []byte("inactive\n"), nil
 	case strings.HasPrefix(call, "systemctl show"):
 		return []byte(f.stopResult + "\n"), nil
 	case strings.HasPrefix(call, "mysqladmin"):
@@ -217,7 +235,7 @@ func TestStart_時間内に応答しなければエラーログを添えて失�
 	f.sys.pingFails = 1 << 30
 	f.srv.StartTimeout = 20 * time.Millisecond
 	_ = os.MkdirAll(filepath.Dir(f.sys.errorLog), 0o755)
-	appendFile(f.sys.errorLog, "[ERROR] [MY-010119] Aborting\n")
+	f.sys.onStart = "[ERROR] [MY-010119] Aborting\n"
 
 	err := f.srv.Start(ctx, f.spec)
 	if err == nil || !strings.Contains(err.Error(), "Aborting") {
@@ -467,7 +485,7 @@ func TestStart_失敗時のエラーログは末尾だけを添える(t *testing
 	f.sys.pingFails = 1 << 30
 	f.srv.StartTimeout = 10 * time.Millisecond
 	_ = os.MkdirAll(filepath.Dir(f.sys.errorLog), 0o755)
-	appendFile(f.sys.errorLog, strings.Repeat("noise ", 1000)+"LAST LINE\n")
+	f.sys.onStart = strings.Repeat("noise ", 1000) + "LAST LINE\n"
 
 	err := f.srv.Start(ctx, f.spec)
 	if err == nil || !strings.Contains(err.Error(), "LAST LINE") || len(err.Error()) > 2300 {
@@ -540,7 +558,7 @@ func TestStart_サーバーが権限エラーで落ちたら待たずにErrOwner
 	f.sys.pingFails = 1 << 30
 	f.sys.crashes = true
 	f.srv.StartTimeout = time.Minute
-	appendFile(f.sys.errorLog, "[ERROR] File './binlog.index' not found (OS errno 13 - Permission denied)\n")
+	f.sys.onStart = "[ERROR] File ./binlog.index not found (OS errno 13 - Permission denied)\n"
 
 	begin := time.Now()
 	err := f.srv.Start(ctx, f.spec)
@@ -557,7 +575,7 @@ func TestStart_落ちた理由が権限でなくても待たずに失敗する(t
 	f.sys.pingFails = 1 << 30
 	f.sys.crashes = true
 	f.srv.StartTimeout = time.Minute
-	appendFile(f.sys.errorLog, "[ERROR] bad option\n")
+	f.sys.onStart = "[ERROR] bad option\n"
 	err := f.srv.Start(ctx, f.spec)
 	if err == nil || errors.Is(err, domain.ErrOwnership) || !strings.Contains(err.Error(), "bad option") {
 		t.Fatalf("error = %v", err)

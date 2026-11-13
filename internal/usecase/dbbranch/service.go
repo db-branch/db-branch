@@ -181,7 +181,7 @@ func (s *Service) branchSpec(ctx context.Context, br domain.Branch, dataset stri
 	if err != nil {
 		return spec, err
 	}
-	spec.Maintenance = maintenance
+	spec.Maintenance, spec.LegacyAuth = maintenance, br.LegacyAuth
 	if s.ServerOptions == nil {
 		if br.Record {
 			return spec, fmt.Errorf("%w: the history module is not installed or not loaded", ErrRecordRequired)

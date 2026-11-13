@@ -10,6 +10,7 @@ db-branch is an independent open-source project, built from scratch. Create a co
 
 - **Branches in seconds.** On our own 3-node test cluster a PostgreSQL branch is ready in about 0.5 s and a MySQL branch in about 3 s, with 0 bytes copied at creation (copy-on-write).
 - **Reset and expire.** `branch reset` returns a branch to its creation state; `--ttl` deletes it automatically.
+- **Per-branch upgrades.** `branch upgrade feature-x --runtime mysql@8.4.13` moves one branch from MySQL 8.0 to 8.4 (or a PostgreSQL minor version) while the base and the other branches stay put. A checkpoint is saved first, a failed upgrade rolls back by itself, and restoring that checkpoint goes back. `branch create --runtime` makes an old/new pair from one base in one step each.
 - **Checkpoints.** `branch checkpoint` saves a running branch's state instantly; `branch restore` puts it back. Restoring loses nothing: the state you leave is kept too, and every checkpoint stays restorable.
 - **MySQL and PostgreSQL, several versions at once.** Engine runtimes are installed by version and can live side by side.
 - **One interface everywhere.** CLI, REST API, web console and an MCP server (so LLM agents can create and query their own branches) all use the same API.
@@ -41,6 +42,8 @@ db-branch branch create feature-x --base prod --ttl 72h                     # a 
 db-branch branch dsn feature-x                                              # connection URL (includes the password)
 db-branch branch checkpoint feature-x --name before-migration               # save the state (instant)
 db-branch branch restore feature-x before-migration                         # go back to it; nothing is lost
+db-branch branch upgrade feature-x --runtime mysql@8.4.13 --check-only      # (MySQL) what would a version upgrade run into?
+db-branch branch upgrade feature-x --runtime mysql@8.4.13                   # move this branch only; a checkpoint is saved first
 db-branch branch reset feature-x                                            # discard every change
 db-branch branch delete feature-x                                           # remove it
 ```

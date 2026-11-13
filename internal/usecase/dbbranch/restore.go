@@ -46,6 +46,9 @@ type restoreIntent struct {
 	Auto string
 	// Note is a module's: handed to AfterRestore once the data is in place.
 	Note string
+	// Runtime is what the restored data needs: the branch switches to it
+	// when the data is swapped in (zero: unchanged).
+	Runtime domain.RuntimeRef
 }
 
 // head is the checkpoint the restored data descends from.
@@ -74,6 +77,7 @@ func (s *Service) writeIntent(ctx context.Context, n domain.Name, in restoreInte
 	return s.Lineage.SetProps(ctx, root, map[string]string{
 		domain.PropOp: in.Op, domain.PropSource: in.Source, domain.PropNewLine: strconv.Itoa(in.NewLine),
 		domain.PropAutoName: orNone(in.Auto), domain.PropNote: orNone(encodeNote(in.Note)),
+		domain.PropRuntime: orNone(domain.RuntimeProp(in.Runtime)),
 	})
 }
 
@@ -122,6 +126,7 @@ func (s *Service) readIntent(ctx context.Context, n domain.Name) (restoreIntent,
 		in.Auto = ""
 	}
 	in.Note = decodeNote(p[domain.PropNote])
+	in.Runtime, _ = domain.ParseRuntimeProp(p[domain.PropRuntime])
 	return in, true, nil
 }
 
@@ -131,7 +136,7 @@ func (s *Service) clearIntent(ctx context.Context, n domain.Name) error {
 	if err != nil || !ok {
 		return err
 	}
-	return s.Lineage.Unset(ctx, root, domain.PropOp, domain.PropSource, domain.PropNewLine, domain.PropAutoName, domain.PropNote)
+	return s.Lineage.Unset(ctx, root, domain.PropOp, domain.PropSource, domain.PropNewLine, domain.PropAutoName, domain.PropNote, domain.PropRuntime)
 }
 
 // RestoreCheckpoint sets the branch back to checkpoint name. Nothing is lost:
@@ -177,7 +182,7 @@ func (s *Service) beginRestore(ctx context.Context, n domain.Name, name, note st
 	if err != nil {
 		return br, restoreIntent{}, err
 	}
-	if err := br.CanCheckpoint(); err != nil {
+	if err := br.CanRestore(); err != nil {
 		return br, restoreIntent{}, err
 	}
 	lines, err := s.family(ctx, n)
@@ -186,18 +191,25 @@ func (s *Service) beginRestore(ctx context.Context, n domain.Name, name, note st
 	}
 	source := domain.CheckpointSnapshot(name)
 	found := false
+	prop := ""
 	if name == domain.ResetPoint {
 		source = ResetSnapshot
 		_, found = domain.FindSnapshot(lines, ResetSnapshot)
 	} else {
-		_, _, found = domain.FindCheckpoint(lines, name)
+		var info domain.SnapshotInfo
+		_, info, found = domain.FindCheckpoint(lines, name)
+		prop = info.Props[domain.PropRuntime]
 	}
 	if !found {
 		return br, restoreIntent{}, fmt.Errorf("checkpoint %s of branch %s: %w", name, n, domain.ErrNotFound)
 	}
+	rt := s.runtimeOf(ctx, br, prop)
+	if err := s.requireInstalled(ctx, rt); err != nil {
+		return br, restoreIntent{}, err
+	}
 	in := restoreIntent{
 		Op: opRestore, Source: source, NewLine: domain.NextLine(lines),
-		Auto: domain.UniqueCheckpointName(lines, domain.AutoCheckpointName("restore", s.Clock())), Note: note,
+		Auto: domain.UniqueCheckpointName(lines, domain.AutoCheckpointName("restore", s.Clock())), Note: note, Runtime: rt,
 	}
 	br.Status = domain.BranchRestoring
 	return br, in, s.Store.PutBranch(ctx, br)
@@ -207,7 +219,7 @@ func (s *Service) beginRestore(ctx context.Context, n domain.Name, name, note st
 // succeeds; back to ready with nothing changed when it failed before the
 // swap began; failed (and finished on the next start) when it failed later.
 func (s *Service) runRestore(ctx context.Context, br domain.Branch, in restoreIntent, report Reporter) (domain.Branch, error) {
-	err := s.continueRestore(ctx, br, in, report)
+	err := s.continueRestore(ctx, &br, in, report)
 	if err != nil {
 		if s.beforeSwap(ctx, br.Name, in) {
 			return br, errors.Join(err, s.abortRestore(ctx, br, in))
@@ -238,7 +250,8 @@ func (s *Service) beforeSwap(ctx context.Context, n domain.Name, in restoreInten
 	return err == nil && exists && !done
 }
 
-func (s *Service) continueRestore(ctx context.Context, br domain.Branch, in restoreIntent, report Reporter) error {
+func (s *Service) continueRestore(ctx context.Context, brp *domain.Branch, in restoreIntent, report Reporter) error {
+	br := *brp
 	srv, err := s.server(br.Runtime)
 	if err != nil {
 		return err
@@ -271,6 +284,11 @@ func (s *Service) continueRestore(ctx context.Context, br domain.Branch, in rest
 	if err := s.promoteOwn(ctx, br.Name); err != nil {
 		return err
 	}
+	// The data is in place: the branch runs what the data needs from here on.
+	if err := s.switchRuntime(ctx, &br, in); err != nil {
+		return err
+	}
+	*brp = br
 	spec, err := s.branchSpec(ctx, br, liveDS, false, false)
 	if err != nil {
 		return err
@@ -396,7 +414,7 @@ func (s *Service) hideLive(ctx context.Context, br domain.Branch, in restoreInte
 	}
 	if in.Auto != "" {
 		report.report("checkpointing")
-		if err := s.ensureAuto(ctx, liveDS, in.Auto, props); err != nil {
+		if err := s.ensureAuto(ctx, liveDS, in.Auto, props, br.Runtime); err != nil {
 			return err
 		}
 	}
@@ -409,7 +427,7 @@ func (s *Service) hideLive(ctx context.Context, br domain.Branch, in restoreInte
 
 // ensureAuto takes the automatic checkpoint unless an earlier attempt did,
 // and labels it either way.
-func (s *Service) ensureAuto(ctx context.Context, dataset, name string, props map[string]string) error {
+func (s *Service) ensureAuto(ctx context.Context, dataset, name string, props map[string]string, rt domain.RuntimeRef) error {
 	snaps, err := s.Lineage.SnapshotInfos(ctx, dataset)
 	if err != nil {
 		return err
@@ -417,10 +435,10 @@ func (s *Service) ensureAuto(ctx context.Context, dataset, name string, props ma
 	snap := domain.Snapshot{Dataset: dataset, Name: domain.CheckpointSnapshot(name)}
 	for _, x := range snaps {
 		if x.Name == snap.Name {
-			return s.labelCheckpoint(ctx, snap, props, true)
+			return s.labelCheckpoint(ctx, snap, props, true, rt)
 		}
 	}
-	return s.takeCheckpoint(ctx, domain.Line{Dataset: dataset, Props: props}, name, true)
+	return s.takeCheckpoint(ctx, domain.Line{Dataset: dataset, Props: props}, name, true, rt)
 }
 
 // abortRestore undoes a restore that failed before anything was moved: the
@@ -512,7 +530,10 @@ func (s *Service) resetBySwap(ctx context.Context, br domain.Branch) (restoreInt
 	if l, ok := liveOf(lines); ok && len(l.Snapshots) == 1 && l.Snapshots[0].Name == ResetSnapshot {
 		return restoreIntent{}, false, nil
 	}
-	in := restoreIntent{Op: opReset, Source: ResetSnapshot, NewLine: domain.NextLine(lines)}
+	in := restoreIntent{Op: opReset, Source: ResetSnapshot, NewLine: domain.NextLine(lines), Runtime: s.runtimeOf(ctx, br, "")}
+	if err := s.requireInstalled(ctx, in.Runtime); err != nil {
+		return in, false, err
+	}
 	return in, true, s.writeIntent(ctx, br.Name, in)
 }
 

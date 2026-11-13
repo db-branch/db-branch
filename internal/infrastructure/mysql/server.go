@@ -41,6 +41,9 @@ type Server struct {
 
 	StartTimeout time.Duration
 	PollInterval time.Duration
+	// UpgradeTimeout is how long a start may take when the server upgrades
+	// its data dictionary (default 15 minutes).
+	UpgradeTimeout time.Duration
 }
 
 var _ domain.DBServer = (*Server)(nil)
@@ -67,6 +70,20 @@ func (m *Server) writeConfig(s domain.Server) error {
 	if err := os.MkdirAll(m.dir(s), 0o750); err != nil {
 		return err
 	}
+	cnf, _ := m.config(s)
+	if err := os.WriteFile(m.cnf(s), []byte(cnf), 0o640); err != nil {
+		return err
+	}
+	env := "MYSQLD=" + m.bin(s, "mysqld") + "\n"
+	if err := os.WriteFile(filepath.Join(m.dir(s), "env"), []byte(env), 0o640); err != nil {
+		return err
+	}
+	return m.chown(m.dir(s), m.cnf(s), filepath.Join(m.dir(s), "env"))
+}
+
+// config renders the instance's my.cnf for the server's runtime. Options the
+// runtime no longer knows are dropped or renamed (notes says which).
+func (m *Server) config(s domain.Server) (cnf string, notes []string) {
 	lines := []string{
 		"# Written by db-branch. Changes are overwritten.",
 		"[mysqld]",
@@ -88,15 +105,13 @@ func (m *Server) writeConfig(s domain.Server) error {
 		// Work on the data only (a module replaying changes): no network.
 		lines = append(lines, "skip-networking")
 	}
-	cnf := strings.Join(append(lines, append(s.Extra, "")...), "\n")
-	if err := os.WriteFile(m.cnf(s), []byte(cnf), 0o640); err != nil {
-		return err
+	series := domain.MySQLSeries(s.Runtime.Version)
+	if s.LegacyAuth && series == "8.4" {
+		// 8.4 ships mysql_native_password disabled; 8.0 has it, 9.0 removed it.
+		lines = append(lines, "mysql_native_password=ON")
 	}
-	env := "MYSQLD=" + m.bin(s, "mysqld") + "\n"
-	if err := os.WriteFile(filepath.Join(m.dir(s), "env"), []byte(env), 0o640); err != nil {
-		return err
-	}
-	return m.chown(m.dir(s), m.cnf(s), filepath.Join(m.dir(s), "env"))
+	extra, notes := adaptOptions(series, s.Extra)
+	return strings.Join(append(lines, append(extra, "")...), "\n"), notes
 }
 
 func (m *Server) chown(paths ...string) error {
@@ -136,6 +151,10 @@ func (m *Server) PrepareClone(_ context.Context, s domain.Server) error {
 
 // Start starts the unit and waits until mysqld answers on its socket.
 func (m *Server) Start(ctx context.Context, s domain.Server) error {
+	return m.start(ctx, s, m.StartTimeout)
+}
+
+func (m *Server) start(ctx context.Context, s domain.Server, timeout time.Duration) error {
 	if m.CheckOwner != nil {
 		if err := m.CheckOwner(s.DataDir); err != nil {
 			return err
@@ -144,19 +163,20 @@ func (m *Server) Start(ctx context.Context, s domain.Server) error {
 	if err := m.writeConfig(s); err != nil {
 		return err
 	}
+	offset := fileSize(m.errLog(s))
 	if _, err := m.Run.Run(ctx, "systemctl", "start", unit(s)); err != nil {
 		return fmt.Errorf("start %s: %w", s.ID, err)
 	}
-	deadline := time.Now().Add(m.StartTimeout)
+	deadline := time.Now().Add(timeout)
 	for {
 		if _, err := m.Run.Run(ctx, m.bin(s, "mysqladmin"), "--socket="+m.socket(s), "-uroot", "ping"); err == nil {
 			return nil
 		}
 		if m.exited(ctx, s) {
-			return domain.StartFailure(s.ID, m.tailLog(s, 0))
+			return domain.StartFailure(s.ID, m.startOutput(ctx, s, offset, 2048))
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not become ready within %s: %s", s.ID, m.StartTimeout, m.tailLog(s, 0))
+			return fmt.Errorf("%s did not become ready within %s: %s", s.ID, timeout, m.startOutput(ctx, s, offset, 2048))
 		}
 		time.Sleep(m.PollInterval)
 	}
@@ -165,9 +185,11 @@ func (m *Server) Start(ctx context.Context, s domain.Server) error {
 // exited reports whether the unit has stopped for good (mysqld gave up), so
 // there is nothing left to wait for.
 func (m *Server) exited(ctx context.Context, s domain.Server) bool {
-	out, _ := m.Run.Run(ctx, "systemctl", "is-active", unit(s))
+	// is-active exits non-zero for a stopped unit, and the runner then
+	// returns no output; show prints the state whatever it is.
+	out, err := m.Run.Run(ctx, "systemctl", "show", "--property=ActiveState", "--value", unit(s))
 	st := strings.TrimSpace(string(out))
-	return st == "failed" || st == "inactive"
+	return err == nil && (st == "failed" || st == "inactive")
 }
 
 // Running reports whether the unit is active.
@@ -260,16 +282,30 @@ func (m *Server) Remove(ctx context.Context, s domain.Server) error {
 	return os.RemoveAll(m.dir(s))
 }
 
+// startOutput is what the server wrote while starting: its error log since
+// offset, or, when mysqld never got as far as writing to it (the binary is
+// missing or not executable), the unit's own output from the journal.
+func (m *Server) startOutput(ctx context.Context, s domain.Server, offset int64, max int) string {
+	if logged := m.tailLogN(s, offset, max); logged != "" {
+		return logged
+	}
+	out, _ := m.Run.Run(ctx, "journalctl", "-u", unit(s), "-n", "10", "--no-pager", "-o", "cat")
+	return strings.TrimSpace(string(out))
+}
+
 // tailLog returns the error log written after offset (last 2 KiB at most).
-func (m *Server) tailLog(s domain.Server, offset int64) string {
+func (m *Server) tailLog(s domain.Server, offset int64) string { return m.tailLogN(s, offset, 2048) }
+
+// tailLogN is tailLog with a limit of max bytes.
+func (m *Server) tailLogN(s domain.Server, offset int64, max int) string {
 	b, _ := os.ReadFile(m.errLog(s))
 	if offset < int64(len(b)) {
 		b = b[offset:]
 	} else {
 		b = nil
 	}
-	if len(b) > 2048 {
-		b = b[len(b)-2048:]
+	if len(b) > max {
+		b = b[len(b)-max:]
 	}
 	return strings.TrimSpace(string(b))
 }

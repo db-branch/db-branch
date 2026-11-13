@@ -122,8 +122,8 @@ PGDG の .deb はディストリビューションごとにビルドされ、そ
 ### ベース・ブランチとの関係
 
 - ベースは作成時に 1 つのランタイムに紐づく（datadir の形式がバージョンに依存するため）
-- ブランチはベースのランタイムを引き継ぐ。マイナーバージョンの差し替え（例: 8.4.3 → 8.4.4）はブランチ単位で指定できる
-- メジャーバージョンを上げるときは、新しいランタイムで新しいベースを作る
+- ブランチはベースのランタイムを引き継ぐ。ブランチのランタイムはブランチ自身の属性で、`branch upgrade` でそのブランチだけを上げられる（MySQL 8.0 → 8.4 など。ベースとほかのブランチは変わらない）。手順・許す移行・戻し方は [upgrade.md](upgrade.md)
+- PostgreSQL のメジャーバージョンを上げるときは、新しいランタイムで新しいベースを作る（`pg_upgrade` は未対応）
 
 ### エンジンの抽象化
 
@@ -164,6 +164,10 @@ DB サーバー停止 → `zfs rollback tank/branches/feature-x@reset` → DB �
 ### チェックポイント `db-branch branch checkpoint feature-x` / `branch restore feature-x <名前>`
 
 稼働中のブランチのデータセットのスナップショットを取り、あとでその状態に戻せる。復元してもほかのチェックポイントは消えない（履歴の線を別のデータセットとして残す）。設計・データセットの配置・復元の手順・クラッシュ時の再開は [checkpoints.md](checkpoints.md)。
+
+### アップグレード `db-branch branch upgrade feature-x --runtime mysql@8.4.13`
+
+1 つのブランチだけを新しいランタイムに上げる。事前確認、きれいな停止、自動の Checkpoint `before-upgrade-<時刻>`、新しいバイナリでの起動、失敗時の自動復元。ブランチのランタイムは Checkpoint に記録され、Checkpoint の復元とリセットがランタイムを切り替える。設計は [upgrade.md](upgrade.md)。
 
 ### 削除 / TTL 失効
 
@@ -268,6 +272,8 @@ ZFS はコピーオンライトでページの書き込みが壊れないため�
 | クライアント向けポート | 6033 | 6133 |
 | 管理インターフェース | 127.0.0.1:6032 | 127.0.0.1:6132 |
 | 設定テーブル | `mysql_servers` / `mysql_users` / `mysql_query_rules` | `pgsql_servers` / `pgsql_users` / `pgsql_query_rules` |
+
+ProxySQL が接続元に見せるサーバーバージョン（`mysql-server_version`）は、ブランチを上げても変えない。ブランチの実際のバージョンは `branch show` か、ブランチへ直接つないだ `SELECT VERSION()` で確かめる（[upgrade.md](upgrade.md) §7）。
 
 PostgreSQL 側の機能の成熟度（特にクエリルールと拡張クエリプロトコルの扱い）は、フェーズ 6 の着手時に検証する。
 
@@ -460,6 +466,8 @@ db-branch base create <name> --runtime mysql@8.4.3 --from-dump dump.sql.gz
 db-branch base snapshot <name>
 db-branch branch create <name> --base <base> [--init f.sql] [--ttl 72h]
 db-branch branch list | show <name> | reset <name> | delete <name>
+db-branch branch upgrade <name> --runtime mysql@8.4.13 [--check-only] [--no-rollback] [--force]
+db-branch branch create <name> --base <base> --runtime mysql@8.4.13   # 作って、すぐ上げる
 db-branch branch dsn <name>        # 接続文字列を表示
 ```
 
