@@ -42,7 +42,8 @@ const snapshotsOut = "" +
 	"tank/b/x@ckpt-c1\tused\t4096\t-\n" +
 	"tank/b/x@ckpt-c1\tclones\ttank/h/x/1,tank/h/x/2\t-\n" +
 	"tank/b/x@ckpt-c1\tdb-branch:line\t1\tlocal\n" +
-	"tank/b/x@ckpt-c1\tdb-branch:auto\toff\tlocal\n"
+	"tank/b/x@ckpt-c1\tdb-branch:auto\toff\tlocal\n" +
+	"tank/b/x@ckpt-c1\tdb-branch:runtime\tmysql:8.0.46\tlocal\n"
 
 func TestSnapshotInfos_作成順に時刻と容量とクローンと自前のプロパティを返す(t *testing.T) {
 	f := &fakeRunner{out: []byte(snapshotsOut)}
@@ -58,11 +59,11 @@ func TestSnapshotInfos_作成順に時刻と容量とクローンと自前のプ
 	}
 	c := got[1]
 	if !c.Created.Equal(time.Unix(1794480060, 0)) || c.Used != 4096 || !reflect.DeepEqual(c.Clones, []string{"tank/h/x/1", "tank/h/x/2"}) ||
-		c.Props[domain.PropLine] != "1" || c.Props[domain.PropAuto] != "off" {
+		c.Props[domain.PropLine] != "1" || c.Props[domain.PropAuto] != "off" || c.Props[domain.PropRuntime] != "mysql:8.0.46" {
 		t.Errorf("checkpoint = %+v", c)
 	}
 	assertCalls(t, f, call{"zfs", "get", "-Hp", "-d", "1", "-t", "snapshot", "-o", "name,property,value,source",
-		"createtxg,creation,used,clones,db-branch:line,db-branch:auto,db-branch:from,db-branch:parent", "tank/b/x"})
+		"createtxg,creation,used,clones,db-branch:line,db-branch:auto,db-branch:from,db-branch:parent,db-branch:runtime", "tank/b/x"})
 }
 
 func TestSnapshotInfos_壊れた出力と不正な名前はエラー(t *testing.T) {

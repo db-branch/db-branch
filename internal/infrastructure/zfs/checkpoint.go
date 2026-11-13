@@ -22,7 +22,7 @@ var _ domain.CheckpointStorage = (*Driver)(nil)
 var userPropPattern = regexp.MustCompile(`^[a-z][a-z0-9_:.-]*$`)
 
 // snapshotProps are what SnapshotInfos asks zfs for.
-var snapshotProps = "createtxg,creation,used,clones," + domain.PropLine + "," + domain.PropAuto + "," + domain.PropFrom + "," + domain.PropParent
+var snapshotProps = "createtxg,creation,used,clones," + domain.PropLine + "," + domain.PropAuto + "," + domain.PropFrom + "," + domain.PropParent + "," + domain.PropRuntime
 
 // checkTarget accepts a dataset or a snapshot (dataset@name).
 func checkTarget(target string) error {
