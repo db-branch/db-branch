@@ -18,6 +18,8 @@ export function HistoryGraph({
   checkpoints,
   head,
   events,
+  recorded,
+  scale = 1,
   selected,
   onSelect,
 }: {
@@ -26,10 +28,14 @@ export function HistoryGraph({
   checkpoints: Checkpoint[];
   head: string | null;
   events?: Record<number, HistoryTx[]>;
+  // recorded: the branch records its transactions (see mergeLines).
+  recorded?: boolean;
+  // scale draws the whole picture larger (the enlarged view), keeping its proportions.
+  scale?: number;
   selected: string | null;
   onSelect: (node: GNode) => void;
 }) {
-  const g = layoutGraph({ lines, checkpoints, head, events });
+  const g = layoutGraph({ lines, checkpoints, head, events, recorded });
   const refs = useRef<Record<string, SVGGElement | null>>({});
   const scroller = useRef<HTMLDivElement>(null);
   // The one node in the tab order (the others are reached with the arrows).
@@ -55,8 +61,8 @@ export function HistoryGraph({
   };
 
   return (
-    <div className="hg" ref={scroller}>
-      <svg width={g.width} height={g.height} viewBox={`0 0 ${g.width} ${g.height}`} role="group" aria-label={`History of ${branch}`}>
+    <div className={scale === 1 ? "hg" : "hg big"} ref={scroller}>
+      <svg width={g.width * scale} height={g.height * scale} viewBox={`0 0 ${g.width} ${g.height}`} role="group" aria-label={`History of ${branch}`}>
         {g.lanes.map((l) => (
           <g key={`lane-${l.line}`} className={`hg-lane hg-c${l.line % 6}`}>
             <text x={8} y={l.y + 4} className="hg-lane-label">
@@ -80,7 +86,7 @@ export function HistoryGraph({
               tabIndex={n.id === focusable?.id ? 0 : -1}
               aria-label={describe(n)}
               aria-pressed={n.id === selected}
-              className={`hg-node hg-${n.kind} hg-c${n.line % 6} ${n.id === selected ? "selected" : ""} ${n.checkpoint?.auto ? "auto" : ""}`}
+              className={`hg-node hg-${n.kind} hg-c${n.shown % 6} ${n.id === selected ? "selected" : ""} ${n.checkpoint?.auto ? "auto" : ""}`}
               onClick={() => onSelect(n)}
               onKeyDown={(e) => key(e, n)}
             >

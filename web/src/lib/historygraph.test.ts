@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Checkpoint, HistoryTx, Line } from "../api";
-import { describe as say, layoutGraph, LANE_H, LEFT, MAX_DOTS, neighbour, sample, SLOT_W } from "./historygraph";
+import { describe as say, layoutGraph, LANE_H, LEFT, MAX_DOTS, mergeLines, neighbour, sample, SLOT_W } from "./historygraph";
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 12, 10, min)).toISOString();
 const cp = (name: string, min: number, line: number, extra: Partial<Checkpoint> = {}): Checkpoint => ({ name, created_at: at(min), size: 1, line, auto: false, current: false, ...extra });
@@ -122,5 +122,128 @@ describe("describe", () => {
     expect(g.nodes.map(say)).toContain("Creation state");
     expect(g.nodes.map(say)).toContain("Checkpoint c1, line 0");
     expect(g.nodes.map(say)).toContain("Transaction 7, line 0");
+  });
+});
+
+// Restoring the tip of a line extends the line instead of forking a new lane.
+describe("layoutGraph: a restore of the tip extends its lane", () => {
+  const auto = (name: string, min: number, line: number) => cp(name, min, line, { auto: true });
+  const root: Line = { line: 0, live: false, parent: null, from: "" };
+  // c1, c2 (the tip) on line 0; c2 restored: the automatic b1 is taken on line 0 and line 1 continues.
+  const tipLines: Line[] = [root, { line: 1, live: true, parent: 0, from: "c2" }];
+  const tipCps = [cp("c1", 0, 0), cp("c2", 10, 0), auto("before-restore-1", 20, 0), cp("d1", 30, 1, { current: true })];
+  const laneOf = (g: ReturnType<typeof layoutGraph>, id: string) => g.nodes.find((n) => n.id === id)!.lane;
+
+  it("keeps the restored state on the same lane: no fork, no new label, the lane runs on to now", () => {
+    const g = layoutGraph({ lines: tipLines, checkpoints: tipCps, head: "d1" });
+    expect(g.lanes).toHaveLength(1);
+    expect(g.forks).toEqual([]);
+    expect(g.lanes[0]).toMatchObject({ line: 0, lane: 0, y: 30, live: true, x2: LEFT + 5 * SLOT_W });
+    expect(g.nodes.every((n) => n.lane === 0 && n.y === 30)).toBe(true);
+    expect(g.now).toEqual({ x: LEFT + 5 * SLOT_W, y: 30, lane: 0 });
+    expect(g.height).toBe(30 + 46);
+    expect(g.nodes.find((n) => n.head)?.checkpoint?.name).toBe("d1");
+  });
+
+  it("names the line a node is on by the lane it is drawn on, and keeps the line it really belongs to for the API", () => {
+    const g = layoutGraph({ lines: tipLines, checkpoints: tipCps, head: null });
+    const d1 = g.nodes.find((n) => n.id === "checkpoint:d1")!;
+    expect(d1).toMatchObject({ line: 1, shown: 0 });
+    expect(say(d1)).toBe("Checkpoint d1, line 0");
+    expect(mergeLines({ lines: tipLines, checkpoints: tipCps, head: null })).toEqual(new Map([[0, 0], [1, 0]]));
+  });
+
+  it("lets the arrow keys walk across the merged lane", () => {
+    const g = layoutGraph({ lines: tipLines, checkpoints: tipCps, head: null });
+    const byId = (id: string) => g.nodes.find((n) => n.id === id)!;
+    expect(neighbour(g.nodes, byId("checkpoint:c2"), "ArrowRight")?.id).toBe("checkpoint:before-restore-1");
+    expect(neighbour(g.nodes, byId("checkpoint:before-restore-1"), "ArrowRight")?.id).toBe("checkpoint:d1");
+    expect(neighbour(g.nodes, byId("checkpoint:d1"), "ArrowDown")).toBeUndefined();
+  });
+
+  it("extends the lane again and again for a chain of tip restores", () => {
+    const l: Line[] = [root, { line: 1, live: false, parent: 0, from: "c2" }, { line: 2, live: true, parent: 1, from: "d1" }];
+    const c = [cp("c1", 0, 0), cp("c2", 10, 0), auto("before-restore-1", 20, 0), cp("d1", 30, 1), auto("before-restore-2", 40, 1), cp("e1", 50, 2)];
+    const g = layoutGraph({ lines: l, checkpoints: c, head: "e1" });
+    expect(g.lanes).toHaveLength(1);
+    expect(g.forks).toEqual([]);
+    expect(g.nodes.filter((n) => n.kind === "checkpoint").map((n) => n.shown)).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(mergeLines({ lines: l, checkpoints: c, head: null })).toEqual(new Map([[0, 0], [1, 0], [2, 0]]));
+  });
+
+  it("still forks a new lane for a checkpoint in the middle of the line", () => {
+    const l: Line[] = [root, { line: 1, live: true, parent: 0, from: "c1" }];
+    const g = layoutGraph({ lines: l, checkpoints: [cp("c1", 0, 0), cp("c2", 10, 0), auto("before-restore-1", 20, 0), cp("d1", 30, 1)], head: "d1" });
+    expect(g.lanes.map((x) => x.line)).toEqual([0, 1]);
+    expect(g.forks).toHaveLength(1);
+    expect(g.nodes.find((n) => n.id === "checkpoint:d1")).toMatchObject({ lane: 1, shown: 1 });
+  });
+
+  it("counts a later checkpoint made by hand or by an upgrade, but not the automatic one a restore took", () => {
+    const l: Line[] = [root, { line: 1, live: true, parent: 0, from: "c1" }];
+    const forks = (c: Checkpoint[]) => layoutGraph({ lines: l, checkpoints: [cp("c1", 0, 0), ...c, cp("d1", 30, 1)], head: null }).forks.length;
+    expect(forks([auto("before-restore-1", 20, 0)])).toBe(0);
+    expect(forks([cp("c2", 10, 0), auto("before-restore-1", 20, 0)])).toBe(1);
+    expect(forks([auto("before-upgrade-1", 10, 0), auto("before-restore-1", 20, 0)])).toBe(1);
+    expect(forks([cp("before-restore-by-hand", 10, 0), auto("before-restore-1", 20, 0)])).toBe(1);
+  });
+
+  it("forks when the restored checkpoint has a recorded transaction after it, and extends when the last transaction came before it", () => {
+    const l: Line[] = [root, { line: 1, live: true, parent: 0, from: "c2" }];
+    const run = (events: Record<number, HistoryTx[]> | undefined, recorded = true) => layoutGraph({ lines: l, checkpoints: tipCps, head: null, events, recorded });
+    expect(run({ 0: [tx(1, 5)], 1: [] }).forks).toHaveLength(0);
+    expect(run({ 0: [tx(1, 12)], 1: [] }).forks).toHaveLength(1);
+    expect(run({ 0: [], 1: [] }).lanes).toHaveLength(1);
+  });
+
+  it("does not guess about a recorded branch whose transactions it cannot see", () => {
+    const l: Line[] = [root, { line: 1, live: true, parent: 0, from: "c2" }];
+    expect(layoutGraph({ lines: l, checkpoints: tipCps, head: null, recorded: true }).lanes).toHaveLength(2);
+    expect(layoutGraph({ lines: l, checkpoints: tipCps, head: null, recorded: true, events: { 1: [] } }).lanes).toHaveLength(2);
+    expect(layoutGraph({ lines: l, checkpoints: tipCps, head: null, recorded: false }).lanes).toHaveLength(1);
+  });
+
+  it("forks when a checkpoint was saved on the continued lane after the restore, and the new restore is of an earlier one", () => {
+    const l: Line[] = [root, { line: 1, live: false, parent: 0, from: "c2" }, { line: 2, live: true, parent: 0, from: "c2" }];
+    const c = [cp("c1", 0, 0), cp("c2", 10, 0), auto("before-restore-1", 20, 0), cp("d1", 30, 1), auto("before-restore-2", 40, 1), cp("e1", 50, 2)];
+    const g = layoutGraph({ lines: l, checkpoints: c, head: "e1" });
+    expect(g.lanes.map((x) => x.line)).toEqual([0, 2]);
+    expect(g.forks).toHaveLength(1);
+    expect(g.forks[0]).toMatchObject({ line: 2, x1: LEFT + 2 * SLOT_W, y1: 30, y2: 30 + LANE_H });
+    expect(laneOf(g, "checkpoint:d1")).toBe(0);
+    expect(laneOf(g, "checkpoint:e1")).toBe(1);
+  });
+
+  it("forks off the lane a merged line is drawn on, and keeps the real line numbers on the lanes it forks", () => {
+    const l: Line[] = [root, { line: 1, live: false, parent: 0, from: "c2" }, { line: 2, live: true, parent: 1, from: "d1" }];
+    const c = [cp("c1", 0, 0), cp("c2", 10, 0), auto("before-restore-1", 20, 0), cp("d1", 30, 1), cp("d2", 35, 1), auto("before-restore-2", 40, 1), cp("e1", 50, 2)];
+    const g = layoutGraph({ lines: l, checkpoints: c, head: "e1" });
+    expect(g.lanes.map((x) => [x.line, x.lane])).toEqual([[0, 0], [2, 1]]);
+    expect(g.forks[0]).toMatchObject({ line: 2, y1: 30, y2: 30 + LANE_H });
+    expect(g.nodes.find((n) => n.id === "checkpoint:e1")).toMatchObject({ line: 2, shown: 2, lane: 1 });
+  });
+
+  it("does not merge a line whose origin is unknown, or a restore of the creation state that is not the end of the line", () => {
+    const old: Line[] = [root, { line: 1, live: true, parent: null, from: "c2" }];
+    expect(layoutGraph({ lines: old, checkpoints: tipCps, head: null }).lanes).toHaveLength(2);
+    const first: Line[] = [root, { line: 1, live: true, parent: 0, from: "reset" }];
+    expect(layoutGraph({ lines: first, checkpoints: [cp("a", 0, 0), auto("before-restore-1", 5, 0)], head: null }).lanes).toHaveLength(2);
+    expect(layoutGraph({ lines: first, checkpoints: [auto("before-restore-1", 5, 0), cp("d", 9, 1)], head: null }).lanes).toHaveLength(1);
+  });
+
+  it("places the transaction dots of a merged line on the shared lane", () => {
+    const g = layoutGraph({ lines: tipLines, checkpoints: tipCps, head: null, events: { 0: [tx(1, 5)], 1: [tx(2, 40)] } });
+    const dots = g.nodes.filter((n) => n.kind === "tx");
+    expect(dots.map((n) => [n.id, n.lane, n.shown])).toEqual([["tx:0:u:1", 0, 0], ["tx:1:u:2", 0, 0]]);
+    expect(dots[0].x).toBeLessThan(dots[1].x);
+  });
+
+  it("leaves a set-aside lane that ends in a fork where it was", () => {
+    // After the tip restore, line 1 was left by a restore of c1: line 2 forks, and lane 0 now stops at the last checkpoint of line 1.
+    const l: Line[] = [root, { line: 1, live: false, parent: 0, from: "c2" }, { line: 2, live: true, parent: 0, from: "c1" }];
+    const c = [...tipCps.slice(0, 4), auto("before-restore-2", 40, 1), cp("e1", 50, 2)];
+    const g = layoutGraph({ lines: l, checkpoints: c, head: "e1" });
+    expect(g.lanes[0]).toMatchObject({ line: 0, live: false, x2: LEFT + 5 * SLOT_W });
+    expect(g.lanes[1]).toMatchObject({ line: 2, live: true });
   });
 });
