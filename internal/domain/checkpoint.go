@@ -51,6 +51,12 @@ const (
 	// container) record a restore in progress so that it can be finished.
 	// PropNote carries a module's note for the restore (see ext.RestoreFinisher).
 	PropNote = "db-branch:note"
+	// PropRuntime (on a checkpoint) is the runtime the branch ran when it was
+	// taken, as RuntimeProp writes it; restoring the checkpoint switches back
+	// to it. On the history container it is the runtime an interrupted restore
+	// ends on. PropUpgrade (history container) records an upgrade in progress.
+	PropRuntime = "db-branch:runtime"
+	PropUpgrade = "db-branch:upgrade"
 	// PropFrom and PropParent (on a line's dataset) say which snapshot the
 	// line was cloned from by a restore ("ckpt-x" or "reset") and the line
 	// that snapshot was taken on.
@@ -126,6 +132,8 @@ type Checkpoint struct {
 	Auto bool `json:"auto"`
 	// Current marks the checkpoint the branch's data descends from.
 	Current bool `json:"current"`
+	// Runtime is what the branch ran when it was taken ("" before this was recorded).
+	Runtime string `json:"runtime,omitempty"`
 }
 
 // ListCheckpoints returns the checkpoints of every line, oldest first.
@@ -138,7 +146,11 @@ func ListCheckpoints(lines []Line, head string) []Checkpoint {
 				continue
 			}
 			line, _ := strconv.Atoi(s.Props[PropLine])
-			out = append(out, Checkpoint{Name: n, CreatedAt: s.Created, Size: s.Used, Line: line, Auto: s.Props[PropAuto] == "on", Current: n == head})
+			rt := ""
+			if r, ok := ParseRuntimeProp(s.Props[PropRuntime]); ok {
+				rt = r.String()
+			}
+			out = append(out, Checkpoint{Name: n, CreatedAt: s.Created, Size: s.Used, Line: line, Auto: s.Props[PropAuto] == "on", Current: n == head, Runtime: rt})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -384,6 +396,18 @@ type CheckpointStorage interface {
 	MountReadOnly(ctx context.Context, target string) (string, error)
 	Unmount(ctx context.Context, dir string) error
 }
+
+// CanRestore reports whether a checkpoint may be restored: while the branch is
+// ready, or failed by an upgrade that was kept for investigation.
+func (b Branch) CanRestore() error {
+	if b.Status == BranchFailed && strings.HasPrefix(b.Error, UpgradeFailedPrefix) {
+		return nil
+	}
+	return b.CanCheckpoint()
+}
+
+// CanUpgrade reports whether an upgrade may start.
+func (b Branch) CanUpgrade() error { return b.CanCheckpoint() }
 
 // CanCheckpoint reports whether checkpoints may be taken, listed changed or
 // restored now: only while the branch is ready.

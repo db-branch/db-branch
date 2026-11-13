@@ -135,6 +135,8 @@ func (s *Service) claimLost(ctx context.Context, name domain.Name) (domain.Branc
 	if err != nil {
 		return br, err
 	}
+	// The branch is built again from its base snapshot, so it runs the base's runtime.
+	br.Runtime, br.LegacyAuth = s.runtimeOf(ctx, br, ""), false
 	br.Node, br.Port, br.Status, br.Error, br.ResetAt = s.Node, port, domain.BranchProvisioning, "", nil
 	return br, s.Store.PutBranch(ctx, br)
 }

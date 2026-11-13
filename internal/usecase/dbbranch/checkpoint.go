@@ -191,7 +191,7 @@ func (s *Service) CreateCheckpoint(ctx context.Context, n domain.Name, name stri
 	if !ok {
 		return domain.Checkpoint{}, fmt.Errorf("branch %s: %w: its dataset is missing", n, domain.ErrNotFound)
 	}
-	if err := s.takeCheckpoint(ctx, liveLine, name, false); err != nil {
+	if err := s.takeCheckpoint(ctx, liveLine, name, false, br.Runtime); err != nil {
 		return domain.Checkpoint{}, err
 	}
 	if err := s.Lineage.SetProps(ctx, liveLine.Dataset, map[string]string{domain.PropHead: name}); err != nil {
@@ -211,23 +211,26 @@ func (s *Service) CreateCheckpoint(ctx context.Context, n domain.Name, name stri
 
 // takeCheckpoint snapshots line's dataset as checkpoint name and records the
 // line it belongs to. A snapshot that was made but cannot be labelled is removed.
-func (s *Service) takeCheckpoint(ctx context.Context, line domain.Line, name string, auto bool) error {
+func (s *Service) takeCheckpoint(ctx context.Context, line domain.Line, name string, auto bool, rt domain.RuntimeRef) error {
 	snap := domain.Snapshot{Dataset: line.Dataset, Name: domain.CheckpointSnapshot(name)}
 	if err := s.Storage.Snapshot(ctx, snap); err != nil {
 		return err
 	}
-	return s.labelCheckpoint(ctx, snap, line.Props, auto)
+	return s.labelCheckpoint(ctx, snap, line.Props, auto, rt)
 }
 
-// labelCheckpoint records on the snapshot the line it belongs to, and where
+// labelCheckpoint records on the snapshot the runtime the branch ran, the line it belongs to, and where
 // that line came from: a line that a later restore promotes away loses its
 // dataset, and the checkpoints are all that is left to draw it from.
-func (s *Service) labelCheckpoint(ctx context.Context, snap domain.Snapshot, lineProps map[string]string, auto bool) error {
+func (s *Service) labelCheckpoint(ctx context.Context, snap domain.Snapshot, lineProps map[string]string, auto bool, rt domain.RuntimeRef) error {
 	flag := "off"
 	if auto {
 		flag = "on"
 	}
 	props := map[string]string{domain.PropLine: strconv.Itoa(lineNumber(lineProps)), domain.PropAuto: flag}
+	if rt != (domain.RuntimeRef{}) {
+		props[domain.PropRuntime] = domain.RuntimeProp(rt)
+	}
 	for _, k := range []string{domain.PropFrom, domain.PropParent} {
 		if v := lineProps[k]; v != "" {
 			props[k] = v

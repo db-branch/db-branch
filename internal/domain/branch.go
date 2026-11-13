@@ -214,6 +214,8 @@ const (
 	BranchFailed    BranchStatus = "failed"
 	// BranchLost: the node holding the branch is gone.
 	BranchLost BranchStatus = "lost"
+	// BranchUpgrading: the branch is moving to another runtime (see upgrade.go).
+	BranchUpgrading BranchStatus = "upgrading"
 )
 
 // Branch is a writable clone of a base snapshot served by its own database server.
@@ -238,10 +240,13 @@ type Branch struct {
 	InitSQL string `json:"init_sql,omitempty"`
 	// Record asks for the branch's changes to be recorded (the history
 	// module honours it; without the module it has no effect).
-	Record    bool       `json:"record,omitempty"`
-	Error     string     `json:"error,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	ResetAt   *time.Time `json:"reset_at,omitempty"`
+	Record bool `json:"record,omitempty"`
+	// LegacyAuth keeps MySQL 8.4's mysql_native_password plugin loaded for a
+	// branch upgraded with accounts that use it.
+	LegacyAuth bool       `json:"legacy_auth,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ResetAt    *time.Time `json:"reset_at,omitempty"`
 }
 
 // Expired reports whether the branch's TTL has run out at now.
@@ -357,6 +362,8 @@ type Server struct {
 	// module (ext.ServerOptioner). MySQL: the [mysqld] section of my.cnf.
 	// PostgreSQL ignores them for now.
 	Extra []string
+	// LegacyAuth loads MySQL 8.4's mysql_native_password plugin (ignored elsewhere).
+	LegacyAuth bool
 	// Maintenance starts the server for work on its data only (a module
 	// replaying changes after a restore): it takes no network connections.
 	Maintenance bool
