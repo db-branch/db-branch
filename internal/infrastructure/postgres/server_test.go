@@ -62,13 +62,19 @@ func (f *fakeSystem) RunInput(_ context.Context, in io.Reader, name string, args
 	case strings.HasPrefix(call, "systemctl stop"), strings.HasPrefix(call, "systemctl kill"):
 		f.active = false
 	case strings.HasPrefix(call, "systemctl is-active"):
-		if f.crashes && f.active {
-			return []byte("failed\n"), &execx.Error{Command: call, Err: errors.New("exit 3")}
-		}
-		if f.active {
+		// Like the real runner: no output for a command that exits non-zero.
+		if f.active && !f.crashes {
 			return []byte("active\n"), nil
 		}
-		return []byte("inactive\n"), &execx.Error{Command: call, Err: errors.New("exit 3")}
+		return nil, &execx.Error{Command: call, Err: errors.New("exit 3")}
+	case strings.Contains(call, "--property=ActiveState"):
+		switch {
+		case f.crashes && f.active:
+			return []byte("failed\n"), nil
+		case f.active:
+			return []byte("active\n"), nil
+		}
+		return []byte("inactive\n"), nil
 	case strings.HasPrefix(call, "systemctl show"):
 		return []byte(f.stopResult + "\n"), nil
 	case strings.Contains(call, "pg_isready"):

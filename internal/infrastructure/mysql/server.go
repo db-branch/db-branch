@@ -184,9 +184,11 @@ func (m *Server) start(ctx context.Context, s domain.Server, timeout time.Durati
 // exited reports whether the unit has stopped for good (mysqld gave up), so
 // there is nothing left to wait for.
 func (m *Server) exited(ctx context.Context, s domain.Server) bool {
-	out, _ := m.Run.Run(ctx, "systemctl", "is-active", unit(s))
+	// is-active exits non-zero for a stopped unit, and the runner then
+	// returns no output; show prints the state whatever it is.
+	out, err := m.Run.Run(ctx, "systemctl", "show", "--property=ActiveState", "--value", unit(s))
 	st := strings.TrimSpace(string(out))
-	return st == "failed" || st == "inactive"
+	return err == nil && (st == "failed" || st == "inactive")
 }
 
 // Running reports whether the unit is active.
