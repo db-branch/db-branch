@@ -288,3 +288,12 @@ func (p *Server) Remove(ctx context.Context, s domain.Server) error {
 	_, _ = p.Run.Run(ctx, "systemctl", "reset-failed", unit(s))
 	return os.RemoveAll(p.dir(s))
 }
+
+// UpdateStats runs VACUUM (FREEZE, ANALYZE) on every database: statistics
+// for the planner, and rows marked visible and frozen so that branches do not
+// rewrite every page they read to set hint bits.
+func (p *Server) UpdateStats(ctx context.Context, s domain.Server) error {
+	name, args := p.tool(s, "vacuumdb", "-h", p.sockDir(s), "-p", fmt.Sprint(s.Port), "-U", Superuser, "--all", "--freeze", "--analyze", "--quiet")
+	_, err := p.Run.Run(ctx, name, args...)
+	return err
+}

@@ -25,6 +25,7 @@ func TestCreateBase_初期化しダンプを入れ正常停止してからスナ
 		"init base-prod mysql@8.4.13 port=40000",
 		"start base-prod",
 		"load base-prod /d.sql",
+		"analyze base-prod",
 		"stop base-prod clean",
 		"zfs snapshot tank/db-branch/bases/prod@s20261109120000",
 	}
@@ -34,7 +35,7 @@ func TestCreateBase_初期化しダンプを入れ正常停止してからスナ
 	if b.Status != domain.BaseReady || len(b.Snapshots) != 1 || b.Snapshots[0].Name != "s20261109120000" {
 		t.Errorf("base = %+v", b)
 	}
-	if !reflect.DeepEqual(phases, []string{"creating", "initializing", "loading", "stopping", "snapshotting"}) {
+	if !reflect.DeepEqual(phases, []string{"creating", "initializing", "loading", "analyzing", "stopping", "snapshotting"}) {
 		t.Errorf("phases = %q", phases)
 	}
 	stored, _ := e.store.GetBase(ctx, name("prod"))
@@ -79,7 +80,7 @@ func TestCreateBase_前提を満たさなければ何もせずに失敗する(t 
 }
 
 func TestCreateBase_途中で失敗したら失敗状態と理由を残す(t *testing.T) {
-	for _, op := range []string{"create", "info", "init", "start", "load", "stop-clean", "snapshot"} {
+	for _, op := range []string{"create", "info", "init", "start", "load", "analyze", "stop-clean", "snapshot"} {
 		e := newEnv(t)
 		e.storage.failOn = map[string]string{"create": "create", "info": "info", "snapshot": "snapshot"}[op]
 		if e.storage.failOn == "" {
@@ -113,7 +114,7 @@ func TestSnapshotBase_動いていたベースは止めて取ってから再開�
 	if snap.Name != "s20261109130000" {
 		t.Errorf("snapshot = %+v", snap)
 	}
-	want := []string{"stop base-prod clean", "zfs snapshot tank/db-branch/bases/prod@s20261109130000", "start base-prod"}
+	want := []string{"analyze base-prod", "stop base-prod clean", "zfs snapshot tank/db-branch/bases/prod@s20261109130000", "start base-prod"}
 	if !reflect.DeepEqual(e.j.entries, want) {
 		t.Errorf("journal %q", e.j.entries)
 	}

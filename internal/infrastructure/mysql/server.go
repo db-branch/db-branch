@@ -317,3 +317,9 @@ func fileSize(path string) int64 {
 	}
 	return info.Size()
 }
+
+// UpdateStats runs ANALYZE TABLE on every table (mysqlcheck --analyze).
+func (m *Server) UpdateStats(ctx context.Context, s domain.Server) error {
+	_, err := m.Run.Run(ctx, m.bin(s, "mysqlcheck"), "--socket="+m.socket(s), "-uroot", "--analyze", "--all-databases", "--silent")
+	return err
+}

@@ -592,3 +592,19 @@ func TestStart_データディレクトリの所有者が違えば起動せず�
 		t.Error("started anyway")
 	}
 }
+
+func TestUpdateStats_全データベースをANALYZEする(t *testing.T) {
+	f := newFixture(t)
+	var _ domain.StatsUpdater = f.srv
+	if err := f.srv.UpdateStats(ctx, f.spec); err != nil {
+		t.Fatal(err)
+	}
+	last := f.sys.calls[len(f.sys.calls)-1]
+	if !strings.HasPrefix(last, "mysqlcheck ") || !strings.Contains(last, "--analyze --all-databases") || !strings.Contains(last, "-uroot") {
+		t.Errorf("call = %q", last)
+	}
+	f.sys.failOn = "mysqlcheck"
+	if err := f.srv.UpdateStats(ctx, f.spec); err == nil {
+		t.Error("failing mysqlcheck: want error")
+	}
+}
