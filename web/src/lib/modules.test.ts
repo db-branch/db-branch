@@ -3,7 +3,7 @@ import { planLabel } from "./modules";
 
 describe("planLabel", () => {
   it("names the plans and what they include", () => {
-    expect(planLabel("lite")).toBe("Lite · history, diff");
+    expect(planLabel("lite")).toBe("Lite · history, diff (beta)");
     expect(planLabel("team")).toContain("Team");
     expect(planLabel("team")).toContain("diff");
     expect(planLabel("business")).toContain("SSO");

@@ -3,8 +3,8 @@
 // Plans, as the server reads them (keys of the earlier plans arrive as
 // the plan that replaced them).
 const plans: Record<string, [string, string]> = {
-  lite: ["Lite", "history, diff"],
-  team: ["Team", "users, roles, teams, history, diff"],
+  lite: ["Lite", "history, diff (beta)"],
+  team: ["Team", "users, roles, teams, history, diff (beta)"],
   business: ["Business", "users, roles, teams, SSO, audit"],
 };
 

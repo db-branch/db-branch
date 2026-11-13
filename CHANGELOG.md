@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- The diff module is labelled beta: the console's licence card reads "Lite · history, diff (beta)" (and Team likewise). It stays in the Lite, Team and Business plans.
 - Whether a branch records its changes (history module) is now decided once, when the branch is created, and can never change, so the change log has no gaps. A branch records if it is created with `record: true` or if the module setting `history.record_all` is on at that moment; later changes of `record_all` affect only branches created after them (before, it also applied to existing branches at their next start). No API, CLI or console path turns recording on or off for an existing branch (stores keep the stored value when a branch record is rewritten). A recorded branch does not start while the history module is missing, disabled or unlicensed, on create, recreate, reset, checkpoint restore and every restart: it is `failed` with the reason in `status_reason`, and becomes `ready` at the next start once the module is back. The branch views show it read-only (`record` in the API, `Recording: on (since creation)` in `branch show` and the console, where the Record checkbox is only in the create form). Extension point: `ext.ServerBranch.Creating` and `ext.ServerOptions.Record` let a module answer, once at creation, that a new branch is to be recorded (additive). No Raft protocol change.
 
 ### Fixed
