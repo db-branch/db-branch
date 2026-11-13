@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Checkpoint } from "../api";
-import { checkpointNameProblem, hasHistory, MAX_CHECKPOINT_NAME, newestFirst, notes, savedLabel, showCheckpoints, spaceWarning } from "./checkpoints";
+import { checkpointNameProblem, MAX_CHECKPOINT_NAME, newestFirst, notes, savedLabel, showCheckpoints, spaceWarning } from "./checkpoints";
 
 const cp = (name: string, at: string, over: Partial<Checkpoint> = {}): Checkpoint => ({ name, created_at: at, size: 0, line: 0, auto: false, current: false, ...over });
 
@@ -27,13 +27,6 @@ describe("newestFirst", () => {
   it("同時刻は名前の逆順で安定させる", () => {
     const t = "2026-11-12T10:00:00Z";
     expect(newestFirst([cp("a", t), cp("b", t)]).map((c) => c.name)).toEqual(["b", "a"]);
-  });
-});
-
-describe("hasHistory", () => {
-  it("復元で別の線ができていれば真", () => {
-    expect(hasHistory([cp("a", "x"), cp("b", "x")])).toBe(false);
-    expect(hasHistory([cp("a", "x"), cp("b", "x", { line: 1 })])).toBe(true);
   });
 });
 

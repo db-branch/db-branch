@@ -726,3 +726,24 @@ li.brow.skeleton { height: 56px; border-radius: 0; border-bottom: 2px solid var(
 .finding-warning .finding-level { color: var(--warn); }
 .finding-info .finding-level { color: var(--muted, inherit); }
 .upgrade-excerpt pre { max-height: 14em; overflow: auto; white-space: pre-wrap; margin: var(--s1) 0 0; }
+
+/* The Checkpoints panel enlarged in a modal. Above the drawers and dialogs that can hold the button (they are at 20). */
+.hg-bar { display: flex; justify-content: flex-end; margin-bottom: calc(-1 * var(--s1)); }
+.hg-expand { gap: var(--s1); }
+.hg.big { overflow-y: auto; min-height: 40vh; padding: var(--s3) 0; }
+.gm-scrim { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: color-mix(in srgb, var(--ink) 40%, transparent); overscroll-behavior: contain; }
+.gm {
+  display: flex; flex-direction: column; width: min(1400px, calc(100vw - 48px)); height: min(920px, calc(100dvh - 48px));
+  background: var(--paper); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.35); outline: none;
+}
+.gm-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line); }
+.gm-head h2 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.gm-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--s3) var(--s4) var(--s4); }
+.cps-modal { margin: 0; padding-top: 0; border-top: 0; }
+.cps-modal .hg-sql { max-height: 18em; }
+@media (max-width: 640px) {
+  .gm { width: 100vw; height: 100dvh; border: 0; border-radius: 0; box-shadow: none; }
+  .gm-head, .gm-body { padding-left: max(var(--s3), env(safe-area-inset-left)); padding-right: max(var(--s3), env(safe-area-inset-right)); }
+  .gm-body { padding-bottom: max(var(--s4), env(safe-area-inset-bottom)); }
+}
