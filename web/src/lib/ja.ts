@@ -242,6 +242,7 @@ export const ja: Record<string, string> = {
   "Go back to this state; nothing is lost": "この状態に戻します。何も失われません",
   "Busy stretches show a sample of their transactions.": "取引が多い区間は、その一部だけを点で表示しています。",
   "Dots are recorded transactions. Select a checkpoint or a dot.": "点は記録したトランザクションです。チェックポイントか点を選んでください。",
+  "Show the Checkpoints larger": "Checkpoint を大きく表示します",
   "Select a checkpoint.": "チェックポイントを選んでください。",
   "The branch's creation state. Reset returns here.": "この Branch を作ったときの状態です。Reset するとここに戻ります。",
   "Restore {name} to just after this transaction? Nothing is lost: the branch continues on a new line, the current state is saved first as a before-restore checkpoint, and every checkpoint stays.":

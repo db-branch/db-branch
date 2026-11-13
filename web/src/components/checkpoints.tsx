@@ -1,29 +1,34 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { api, Branch, HistoryTx } from "../api";
 import { useCapabilities } from "../lib/caps";
-import { checkpointNameProblem, hasHistory, MAX_CHECKPOINT_NAME, newestFirst, notes, savedLabel, spaceWarning } from "../lib/checkpoints";
+import { checkpointNameProblem, MAX_CHECKPOINT_NAME, newestFirst, notes, savedLabel, spaceWarning } from "../lib/checkpoints";
 import { bytes, relative } from "../lib/format";
 import { hasHistoryModule, rowsLabel, txNumber } from "../lib/history";
-import { GNode } from "../lib/historygraph";
+import { GNode, mergeLines } from "../lib/historygraph";
 import { t } from "../lib/i18n";
 import { useLive } from "../lib/live";
 import { HistoryGraph } from "./historygraph";
+import { Icon } from "./marks";
+import { Modal } from "./modal";
 import { ErrorLine } from "./ui";
 
 // How long an armed Confirm stays before it goes back to the plain button.
 const CONFIRM_MS = 8000;
+
+// How much larger the graph is drawn in the modal.
+const MODAL_SCALE = 1.5;
 
 type Asking = { what: "restore" | "delete"; name: string; from: "list" | "graph" } | null;
 
 // How often the transactions on the graph are read again while it is shown.
 const EVENTS_MS = 15000;
 
-// CheckpointPanel: save the branch's state, see the saved states, go back to
-// one or delete it. Restoring loses nothing, and the panel says so before it
-// asks to confirm. allow tells which actions the signed-in person may do.
-export function CheckpointPanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready: boolean; allow: (action: string) => boolean; onChange?: () => void }) {
+// usePanel holds everything the Checkpoints panel knows and does: the data, the
+// selection, the pending confirmations and the actions. The panel is drawn from
+// it twice while it is enlarged (on the page and in the modal), so both always
+// show the same thing, and an action in one refreshes the other.
+function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready: boolean; allow: (action: string) => boolean; onChange?: () => void }) {
   const { data: graph, error: loadError, reload } = useLive(() => api.checkpointGraph(b.name), ["branch", "operation"]);
-  const list = graph?.items;
   const caps = useCapabilities();
   // The transactions are the history module's, and only the owner and admins may read them.
   const overlay = hasHistoryModule(caps) && allow("ext.history.read");
@@ -93,78 +98,166 @@ export function CheckpointPanel({ branch: b, ready, allow, onChange }: { branch:
     ).then(() => setName(""));
   };
 
-  const rows = list ? newestFirst(list) : [];
-  const lines = hasHistory(rows);
-  const dots = !!events && Object.values(events).some((l) => l.length > 0);
-  const select = (n: GNode) => (setSelected(n), setAsking(null), setAskingTx(false));
-  const txRestoreWhy = !allow("ext.history.write") ? noRole : !ready ? t("Available once it is ready.") : undefined;
+  const rows = graph ? newestFirst(graph.items) : [];
+  // The line a node is drawn on: a line that continued another one's lane is shown as that one.
+  const lanes = useMemo(() => (graph ? mergeLines({ lines: graph.lines, checkpoints: graph.items, head: graph.head, events, recorded: b.record }) : new Map<number, number>()), [graph, events, b.record]);
 
+  return {
+    branch: b,
+    graph,
+    rows,
+    events,
+    error: error ?? loadError,
+    note,
+    warning,
+    working,
+    name,
+    setName,
+    problem,
+    saveWhy,
+    restoreWhy,
+    deleteWhy,
+    txRestoreWhy: !allow("ext.history.write") ? noRole : !ready ? t("Available once it is ready.") : undefined,
+    save,
+    selected,
+    select: (n: GNode) => (setSelected(n), setAsking(null), setAskingTx(false)),
+    asking,
+    setAsking,
+    askingTx,
+    setAskingTx,
+    restoreCheckpoint: (cp: string): void => {
+      setAsking(null);
+      void run(api.restoreCheckpoint(b.name, cp), t("Restore started"));
+    },
+    deleteCheckpoint: (cp: string): void => {
+      setAsking(null);
+      void run(api.deleteCheckpoint(b.name, cp), t("Deleted checkpoint"));
+    },
+    restoreTx: (line: number, gtid: string): void => {
+      setAskingTx(false);
+      void run(api.historyRestore(b.name, { line, gtid }), t("Restore started"));
+    },
+    // shown: the line number to tell the person for a line of the server.
+    shown: (line: number) => lanes.get(line) ?? line,
+    // showLines: the lines are worth naming once there is more than one lane.
+    showLines: new Set(lanes.values()).size > 1,
+  };
+}
+
+export type Panel = ReturnType<typeof usePanel>;
+
+// CheckpointPanel: save the branch's state, see the saved states, go back to
+// one or delete it. Restoring loses nothing, and the panel says so before it
+// asks to confirm. allow tells which actions the signed-in person may do. The
+// graph has an Expand button that opens the whole panel in a modal.
+export function CheckpointPanel(props: { branch: Branch; ready: boolean; allow: (action: string) => boolean; onChange?: () => void }) {
+  const p = usePanel(props);
+  const [open, setOpen] = useState(false);
+  const opener = useRef<HTMLButtonElement>(null);
+  return <PanelView p={p} open={open} onOpen={() => setOpen(true)} onClose={() => setOpen(false)} expandRef={opener} />;
+}
+
+// PanelView draws the panel on the page and, while open, the same panel
+// enlarged in a modal. The one on the page is inert meanwhile: out of reach of
+// the keyboard and of screen readers, so there is one of each control to find.
+export function PanelView({ p, open, onOpen, onClose, expandRef }: { p: Panel; open: boolean; onOpen: () => void; onClose: () => void; expandRef?: RefObject<HTMLButtonElement | null> }) {
   return (
-    <section className="cps" aria-label="Checkpoints">
-      <h3 className="cps-title">Checkpoints</h3>
+    <>
+      <section className="cps" aria-label="Checkpoints" inert={open}>
+        <PanelBody p={p} onExpand={onOpen} expandRef={expandRef} />
+      </section>
+      {open && (
+        <Modal title={t("Checkpoints of {name}", { name: p.branch.name })} onClose={onClose} returnFocus={expandRef}>
+          <section className="cps cps-modal" aria-label="Checkpoints">
+            <PanelBody p={p} modal />
+          </section>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+// PanelBody is the panel itself: save, the graph with the selected node and its
+// actions, and the list. modal draws it enlarged for the modal.
+export function PanelBody({ p, modal, onExpand, expandRef }: { p: Panel; modal?: boolean; onExpand?: () => void; expandRef?: RefObject<HTMLButtonElement | null> }): ReactNode {
+  const { branch: b, graph, rows, selected, asking, working } = p;
+  const dots = !!p.events && Object.values(p.events).some((l) => l.length > 0);
+  return (
+    <>
+      {!modal && <h3 className="cps-title">Checkpoints</h3>}
       <p className="muted small">{t("Save the state of this Branch before risky work. Restoring one loses nothing.")}</p>
-      <form className="cps-save" onSubmit={save}>
+      <form className="cps-save" onSubmit={p.save}>
         <input
           className="mono"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
+          value={p.name}
+          onChange={(e) => p.setName(e.target.value)}
           placeholder="Name (optional)"
           aria-label="Name (optional)"
           maxLength={MAX_CHECKPOINT_NAME + 10}
-          aria-invalid={problem ? true : undefined}
-          disabled={!!saveWhy}
+          aria-invalid={p.problem ? true : undefined}
+          disabled={!!p.saveWhy}
         />
-        <button type="submit" disabled={!!saveWhy || !!problem || working} title={saveWhy}>
+        <button type="submit" disabled={!!p.saveWhy || !!p.problem || working} title={p.saveWhy}>
           Save checkpoint
         </button>
       </form>
-      {problem && <p className="field-error small">{problem === "long" ? t("At most {max} characters.", { max: MAX_CHECKPOINT_NAME }) : t("Use lowercase letters, digits and hyphens, not at the ends.")}</p>}
-      {note && (
+      {p.problem && <p className="field-error small">{p.problem === "long" ? t("At most {max} characters.", { max: MAX_CHECKPOINT_NAME }) : t("Use lowercase letters, digits and hyphens, not at the ends.")}</p>}
+      {p.note && (
         <p className="brow-note" role="status">
-          {note}
+          {p.note}
         </p>
       )}
-      {warning && (
+      {p.warning && (
         <p className="cps-warning small" role="status">
-          {warning}
+          {p.warning}
         </p>
       )}
-      <ErrorLine error={error ?? loadError} />
+      <ErrorLine error={p.error} />
       {graph && (rows.length > 0 || graph.lines.length > 1) && (
         <>
-          <HistoryGraph branch={b.name} lines={graph.lines} checkpoints={graph.items} head={graph.head} events={events} selected={selected?.id ?? null} onSelect={select} />
-          <p className="muted small hg-legend">
-            {dots ? t("Dots are recorded transactions. Select a checkpoint or a dot.") : t("Select a checkpoint.")}
-          </p>
+          {!modal && (
+            <div className="hg-bar">
+              <button type="button" className="hg-expand" ref={expandRef} aria-haspopup="dialog" title={t("Show the Checkpoints larger")} onClick={onExpand}>
+                <Icon name="expand" />
+                Expand
+              </button>
+            </div>
+          )}
+          <HistoryGraph
+            branch={b.name}
+            lines={graph.lines}
+            checkpoints={graph.items}
+            head={graph.head}
+            events={p.events}
+            recorded={b.record}
+            scale={modal ? MODAL_SCALE : 1}
+            selected={selected?.id ?? null}
+            onSelect={p.select}
+          />
+          <p className="muted small hg-legend">{dots ? t("Dots are recorded transactions. Select a checkpoint or a dot.") : t("Select a checkpoint.")}</p>
           {selected && (
             <div className="hg-detail" role="region" aria-label="Selected" aria-live="polite">
               {selected.kind === "tx" && selected.tx ? (
                 <TxDetail
                   tx={selected.tx}
-                  line={selected.line}
-                  asking={askingTx}
+                  line={selected.shown}
+                  asking={p.askingTx}
                   working={working}
-                  why={txRestoreWhy}
+                  why={p.txRestoreWhy}
                   branch={b.name}
-                  onAsk={setAskingTx}
-                  onRestore={() => {
-                    setAskingTx(false);
-                    run(api.historyRestore(b.name, { line: selected.line, gtid: selected.tx!.gtid }), t("Restore started"));
-                  }}
+                  onAsk={p.setAskingTx}
+                  onRestore={() => p.restoreTx(selected.line, selected.tx!.gtid)}
                 />
               ) : selected.kind === "checkpoint" && selected.checkpoint ? (
                 <CheckpointDetail
                   c={selected.checkpoint}
+                  line={selected.shown}
                   branch={b.name}
                   asking={asking?.from === "graph" && asking.name === selected.checkpoint.name}
                   working={working}
-                  why={restoreWhy}
-                  onAsk={(on) => setAsking(on ? { what: "restore", name: selected.checkpoint!.name, from: "graph" } : null)}
-                  onRestore={() => {
-                    const cp = selected.checkpoint!.name;
-                    setAsking(null);
-                    run(api.restoreCheckpoint(b.name, cp), t("Restore started"));
-                  }}
+                  why={p.restoreWhy}
+                  onAsk={(on) => p.setAsking(on ? { what: "restore", name: selected.checkpoint!.name, from: "graph" } : null)}
+                  onRestore={() => p.restoreCheckpoint(selected.checkpoint!.name)}
                 />
               ) : (
                 <p className="small">{t("The branch's creation state. Reset returns here.")}</p>
@@ -173,7 +266,7 @@ export function CheckpointPanel({ branch: b, ready, allow, onChange }: { branch:
           )}
         </>
       )}
-      {list && rows.length === 0 && <p className="muted small">{t("No checkpoints yet.")}</p>}
+      {graph && rows.length === 0 && <p className="muted small">{t("No checkpoints yet.")}</p>}
       {rows.length > 0 && (
         <ul className="cps-list">
           {rows.map((c) => (
@@ -192,28 +285,24 @@ export function CheckpointPanel({ branch: b, ready, allow, onChange }: { branch:
                   {bytes(c.size)}
                 </span>
                 {c.runtime && <span className="muted small mono" title={t("The runtime the Branch ran when this Checkpoint was taken")}>{c.runtime}</span>}
-                {lines && <span className="muted small">line {c.line}</span>}
+                {p.showLines && <span className="muted small">line {p.shown(c.line)}</span>}
               </div>
               {asking?.name === c.name && asking.from === "list" ? (
-                <div className="confirm" role="group" aria-label={asking.what === "restore" ? `Restore ${c.name}` : `Delete ${c.name}`} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), setAsking(null))}>
+                <div className="confirm" role="group" aria-label={asking.what === "restore" ? `Restore ${c.name}` : `Delete ${c.name}`} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), p.setAsking(null))}>
                   <span role="alert">
                     {asking.what === "restore"
                       ? t("Restore {name} to {checkpoint}? Nothing is lost: the current state is saved first as a before-restore checkpoint (the newest five are kept), and every other checkpoint stays.", { name: b.name, checkpoint: c.name })
                       : t("Delete checkpoint {checkpoint}? The other checkpoints are not affected.", { checkpoint: c.name })}
                   </span>
                   <span className="confirm-buttons">
-                    <button type="button" autoFocus onClick={() => setAsking(null)}>
+                    <button type="button" autoFocus onClick={() => p.setAsking(null)}>
                       {t("Cancel")}
                     </button>
                     <button
                       type="button"
                       className={asking.what === "delete" ? "danger-button" : "primary"}
                       disabled={working}
-                      onClick={() => {
-                        const what = asking.what;
-                        setAsking(null);
-                        run(what === "restore" ? api.restoreCheckpoint(b.name, c.name) : api.deleteCheckpoint(b.name, c.name), what === "restore" ? t("Restore started") : t("Deleted checkpoint"));
-                      }}
+                      onClick={() => (asking.what === "restore" ? p.restoreCheckpoint(c.name) : p.deleteCheckpoint(c.name))}
                     >
                       {asking.what === "restore" ? "Confirm restore" : "Confirm delete"}
                     </button>
@@ -221,10 +310,10 @@ export function CheckpointPanel({ branch: b, ready, allow, onChange }: { branch:
                 </div>
               ) : (
                 <span className="cp-actions">
-                  <button type="button" disabled={!!restoreWhy || working} title={restoreWhy ?? t("Go back to this state; nothing is lost")} onClick={() => setAsking({ what: "restore", name: c.name, from: "list" })}>
+                  <button type="button" disabled={!!p.restoreWhy || working} title={p.restoreWhy ?? t("Go back to this state; nothing is lost")} onClick={() => p.setAsking({ what: "restore", name: c.name, from: "list" })}>
                     Restore
                   </button>
-                  <button type="button" className="text-button danger" disabled={!!deleteWhy || working} title={deleteWhy} onClick={() => setAsking({ what: "delete", name: c.name, from: "list" })}>
+                  <button type="button" className="text-button danger" disabled={!!p.deleteWhy || working} title={p.deleteWhy} onClick={() => p.setAsking({ what: "delete", name: c.name, from: "list" })}>
                     Delete
                   </button>
                 </span>
@@ -233,7 +322,7 @@ export function CheckpointPanel({ branch: b, ready, allow, onChange }: { branch:
           ))}
         </ul>
       )}
-    </section>
+    </>
   );
 }
 
@@ -254,7 +343,7 @@ function Confirm({ label, text, action, danger, working, onCancel, onConfirm }: 
   );
 }
 
-function CheckpointDetail({ c, branch, asking, working, why, onAsk, onRestore }: { c: import("../api").Checkpoint; branch: string; asking: boolean; working: boolean; why?: string; onAsk: (on: boolean) => void; onRestore: () => void }) {
+function CheckpointDetail({ c, line, branch, asking, working, why, onAsk, onRestore }: { c: import("../api").Checkpoint; line: number; branch: string; asking: boolean; working: boolean; why?: string; onAsk: (on: boolean) => void; onRestore: () => void }) {
   return (
     <div className="hg-detail-body">
       <div className="cp-main">
@@ -264,7 +353,7 @@ function CheckpointDetail({ c, branch, asking, working, why, onAsk, onRestore }:
             {n}
           </span>
         ))}
-        <span className="muted small">line {c.line}</span>
+        <span className="muted small">line {line}</span>
         <span className="muted small" title={new Date(c.created_at).toLocaleString()}>
           {relative(c.created_at)}
         </span>

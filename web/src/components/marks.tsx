@@ -55,9 +55,10 @@ export function StorageBar({ storage, max }: { storage: { used: number; referenc
   );
 }
 
-export function Icon({ name }: { name: "plus" | "copy" | "check" | "more" | "out" | "key" | "up" | "down" }) {
+export function Icon({ name }: { name: "plus" | "expand" | "copy" | "check" | "more" | "out" | "key" | "up" | "down" }) {
   const paths: Record<string, string> = {
     plus: "M8 3v10M3 8h10",
+    expand: "M9.5 3.5h3v3M12.5 3.5 9 7M6.5 12.5h-3v-3M3.5 12.5 7 9",
     copy: "M5.5 5.5h7v7h-7zM3.5 10.5v-7h7",
     check: "M3.5 8.5l3 3 6-7",
     more: "M3.5 8h.01M8 8h.01M12.5 8h.01",

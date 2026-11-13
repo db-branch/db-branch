@@ -19,11 +19,6 @@ export function newestFirst(list: Checkpoint[]): Checkpoint[] {
   return [...list].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || (a.name < b.name ? 1 : -1));
 }
 
-// hasHistory: a restore has set a line of history aside, so the lines are worth showing.
-export function hasHistory(list: Checkpoint[]): boolean {
-  return list.some((c) => c.line > 0);
-}
-
 // notes: the badges of a checkpoint.
 export function notes(c: Checkpoint): ("current" | "auto")[] {
   const out: ("current" | "auto")[] = [];
