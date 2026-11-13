@@ -42,6 +42,8 @@ db-branch branch create feature-x --base prod --ttl 72h                     # a 
 db-branch branch dsn feature-x                                              # connection URL (includes the password)
 db-branch branch checkpoint feature-x --name before-migration               # save the state (instant)
 db-branch branch restore feature-x before-migration                         # go back to it; nothing is lost
+db-branch branch upgrade feature-x --runtime mysql@8.4.13 --check-only      # (MySQL) what would a version upgrade run into?
+db-branch branch upgrade feature-x --runtime mysql@8.4.13                   # move this branch only; a checkpoint is saved first
 db-branch branch reset feature-x                                            # discard every change
 db-branch branch delete feature-x                                           # remove it
 ```
