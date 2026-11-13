@@ -255,7 +255,7 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		for engine, port := range srv.Ext.Ports {
 			srv.ProxyPorts[domain.Engine(engine)] = port
 		}
-		go routingLoop(ctx, rt, log)
+		go routingLoop(ctx, rt, branchKicks(ctx, bus), 5*time.Second, log)
 	}
 	// Performance: a sample every 10s, the last hour kept here; the latest
 	// travels in the heartbeat.

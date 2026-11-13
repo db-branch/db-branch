@@ -18,6 +18,7 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/execx"
 	"github.com/db-branch/db-branch/internal/infrastructure/licenseclient"
 	"github.com/db-branch/db-branch/internal/infrastructure/modmask"
+	"github.com/db-branch/db-branch/internal/infrastructure/portreserve"
 	"github.com/db-branch/db-branch/internal/interface/httpapi"
 	"github.com/db-branch/db-branch/internal/usecase/arccap"
 	"github.com/db-branch/db-branch/internal/usecase/auth"
@@ -119,6 +120,16 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 			hi, _ := strconv.Atoi(v["ports.max"])
 			if mem > 0 && lo > 0 && hi >= lo {
 				svc.SetLimits(mem, dbbranch.PortRange{Min: lo, Max: hi})
+			}
+			if lo > 0 && hi >= lo && applied["core:ports"] != v["ports.min"]+"-"+v["ports.max"] {
+				applied["core:ports"] = v["ports.min"] + "-" + v["ports.max"]
+				// Keep outgoing connections off the branch ports, or a server
+				// started on a port one of them holds fails ("Address already in use").
+				if changed, err := portreserve.Reserve(lo, hi); err != nil {
+					log.Warn("reserving the branch ports", "min", lo, "max", hi, "err", err)
+				} else if changed {
+					log.Info("reserved the branch ports (net.ipv4.ip_local_reserved_ports)", "min", lo, "max", hi)
+				}
 			}
 			d, _ := time.ParseDuration(v["branch.default_ttl"])
 			defaultTTL.Store(int64(d))

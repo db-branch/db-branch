@@ -149,6 +149,7 @@ create ──▶ provisioning ──▶ ready ⇄ (reset) ──▶ deleting ─
 3. 配置ノードの agent が実行
    1. `zfs clone tank/bases/prod-masked@<snap> tank/branches/feature-x`
    2. ポートを払い出し、ベースのランタイムで DB サーバーを起動（datadir = クローン）
+      - ブランチのポート範囲（既定 40000-40999）は Linux のエフェメラルポート（32768-60999）と重なるので、agent は起動時と範囲の変更時に `net.ipv4.ip_local_reserved_ports` へこの範囲を足す（既存の値は残す）。外向きの接続がブランチのポートを使ってしまい、サーバーが `Address already in use` で起動できなくなるのを防ぐ
    3. init SQL を適用（ブランチ用ユーザー作成を含む）
    4. DB サーバーを**正常停止**する（§6 の「一貫性のあるスナップショット」と同じ手順）
    5. `zfs snapshot tank/branches/feature-x@reset` — リセットポイント
@@ -281,6 +282,7 @@ PostgreSQL 側の機能の成熟度（特にクエリルールと拡張クエリ
 
 - ブランチ 1 つ = ProxySQL の hostgroup 1 つ
 - `*_servers`: hostgroup → `<配置ノード IP>:<ブランチのポート>`
+- 各ノードの agent は、ブランチの変更（Raft で全ノードに届く）を受けるたびにすぐ設定を当て直す。5 秒ごとの見直しは取りこぼし対策として残す
 
 ### 8.1 ユーザー名による指定
 

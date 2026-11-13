@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -76,8 +77,11 @@ func refreshDue(ctx context.Context, log *slog.Logger, svc *dbbranch.Service, op
 	}
 }
 
-// routingLoop keeps the proxy in line with the branches (cheap when nothing changed).
-func routingLoop(ctx context.Context, rt *routing.Service, log *slog.Logger) {
+// routingLoop keeps the proxy in line with the branches (cheap when nothing
+// changed). It syncs as soon as kick fires (a branch changed) and otherwise
+// every fallback, so a new branch is reachable through the proxy right after
+// it is ready rather than up to one interval later.
+func routingLoop(ctx context.Context, rt *routing.Service, kick <-chan struct{}, fallback time.Duration, log *slog.Logger) {
 	failing := false
 	for {
 		changed, err := rt.Sync(ctx)
@@ -94,9 +98,43 @@ func routingLoop(ctx context.Context, rt *routing.Service, log *slog.Logger) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(5 * time.Second):
+		case <-kick:
+		case <-time.After(fallback):
 		}
 	}
+}
+
+// branchKicks signals (coalesced, never blocking the bus) whenever a branch
+// event is published. A subscription the bus dropped is renewed with a kick,
+// since events may have been missed.
+func branchKicks(ctx context.Context, bus *operation.Bus) <-chan struct{} {
+	kick := make(chan struct{}, 1)
+	signal := func() {
+		select {
+		case kick <- struct{}{}:
+		default:
+		}
+	}
+	go func() {
+		for {
+			sub := bus.Subscribe(0)
+			for open := true; open; {
+				select {
+				case <-ctx.Done():
+					sub.Close()
+					return
+				case ev, ok := <-sub.Events():
+					if !ok {
+						open = false
+					} else if strings.HasPrefix(ev.Type, "branch.") {
+						signal()
+					}
+				}
+			}
+			signal()
+		}
+	}()
+	return kick
 }
 
 func every(ctx context.Context, d time.Duration, f func()) {
