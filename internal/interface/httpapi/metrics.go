@@ -223,10 +223,10 @@ func sortedPairs(m map[[2]string]int) [][2]string {
 // and the cluster has a leader).
 func (s *Server) health(w http.ResponseWriter, r *http.Request) bool {
 	switch r.URL.Path {
-	case "/healthz":
+	case pathHealthz:
 		_, _ = w.Write([]byte("ok\n"))
 		return true
-	case "/readyz":
+	case pathReadyz:
 		if _, err := s.Branches(); err != nil {
 			http.Error(w, "not ready: "+err.Error(), http.StatusServiceUnavailable)
 			return true

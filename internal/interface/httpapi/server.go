@@ -196,11 +196,11 @@ func (s *Server) Handler(local bool) http.Handler {
 		if s.health(w, r) {
 			return
 		}
-		if r.URL.Path == "/v1/auth/methods" && r.Method == http.MethodGet {
+		if r.URL.Path == pathAuthMethods && r.Method == http.MethodGet {
 			s.loginMethods(w, r)
 			return
 		}
-		if r.URL.Path == "/tls.pem" && s.TLSCertPEM != nil {
+		if r.URL.Path == pathTLS && s.TLSCertPEM != nil {
 			w.Header().Set("Content-Type", "application/x-pem-file")
 			_, _ = w.Write(s.TLSCertPEM)
 			return
@@ -217,9 +217,28 @@ func (s *Server) Handler(local bool) http.Handler {
 	}))
 }
 
+// Paths answered before the routes below, without a login.
+const (
+	pathHealthz     = "/healthz"
+	pathReadyz      = "/readyz"
+	pathTLS         = "/tls.pem"
+	pathAuthMethods = "/v1/auth/methods"
+)
+
+// outerPatterns are the routes Handler answers itself, ahead of the mux. The
+// OpenAPI test reads them together with the patterns routes registers.
+var outerPatterns = []string{"GET " + pathHealthz, "GET " + pathReadyz, "GET " + pathTLS, "GET " + pathAuthMethods}
+
+// router is the part of *http.ServeMux that routes needs: registering
+// handlers. Tests pass one that only records the patterns.
+type router interface {
+	Handle(pattern string, h http.Handler)
+	HandleFunc(pattern string, h func(http.ResponseWriter, *http.Request))
+}
+
 // routes registers every handler under an action name: each call is
 // authorized (Authorizer) and, if it changes something, audited (AuditSink).
-func (s *Server) routes(mux *http.ServeMux, local bool) {
+func (s *Server) routes(mux router, local bool) {
 	r := func(pattern, action string, h http.HandlerFunc) { mux.HandleFunc(pattern, s.guard(action, h)) }
 	r("GET /v1/branches", "branch.read", s.withService(s.listBranches))
 	r("POST /v1/branches", "branch.create", s.withService(s.createBranch))
@@ -272,7 +291,7 @@ func (s *Server) routes(mux *http.ServeMux, local bool) {
 	r("POST /v1/account/tokens", "account.token.write", s.createMyToken)
 	r("DELETE /v1/account/tokens/{id}", "account.token.write", s.revokeMyToken)
 	// MCP: each tool call goes through the routes above (authorized and audited there).
-	mux.Handle("/v1/mcp", s.mcpHandler())
+	mux.Handle("POST /v1/mcp", s.mcpHandler())
 
 	r("GET /v1/settings", "setting.read", s.listSettings)
 	r("PUT /v1/settings/{scope}", "setting.write", s.putSettings)
