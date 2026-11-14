@@ -234,3 +234,24 @@ func TestDefault_同梱のPostgreSQLは対応する全ディストリビュー�
 		t.Errorf("22.04: %v", err)
 	}
 }
+
+func TestDefault_同梱のカタログにMySQL5系があり_amd64だけで_チェックサムを持つ(t *testing.T) {
+	c, err := catalog.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"5.7.44", "5.6.51"} {
+		ref := domain.RuntimeRef{Engine: domain.MySQL, Version: v}
+		arts, err := c.Lookup(ref, "amd64")
+		if err != nil || len(arts) != 1 {
+			t.Fatalf("%s: %v %v", v, arts, err)
+		}
+		if !strings.HasPrefix(arts[0].URL, "https://cdn.mysql.com/archives/mysql-"+v[:3]+"/") || !strings.HasSuffix(arts[0].URL, ".tar.gz") || len(arts[0].SHA256) != 64 || arts[0].Size == 0 {
+			t.Errorf("%s: %+v", v, arts[0])
+		}
+		// Oracle publishes no arm64 build of 5.x.
+		if _, err := c.Lookup(ref, "arm64"); err == nil {
+			t.Errorf("%s has no arm64 build", v)
+		}
+	}
+}

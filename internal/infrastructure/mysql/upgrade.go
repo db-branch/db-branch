@@ -106,6 +106,13 @@ func (m *Server) query(ctx context.Context, s domain.Server, sql string) ([][]st
 	return rows, nil
 }
 
+const oldPasswordUsers = "SELECT user, host FROM mysql.user WHERE plugin = 'mysql_old_password' ORDER BY user, host"
+
+// partitionedNotInnoDB lists the tables 8.0 cannot take: it has no partitioning outside InnoDB.
+const partitionedNotInnoDB = "SELECT DISTINCT p.table_schema, p.table_name FROM information_schema.partitions p " +
+	"JOIN information_schema.tables t ON t.table_schema = p.table_schema AND t.table_name = p.table_name " +
+	"WHERE p.partition_name IS NOT NULL AND t.engine <> 'InnoDB' ORDER BY 1, 2"
+
 const nativeUsers = "SELECT user, host FROM mysql.user WHERE plugin = 'mysql_native_password' AND account_locked = 'N' AND user NOT LIKE 'mysql.%' ORDER BY user, host"
 
 func accountList(rows [][]string) string {
@@ -126,6 +133,30 @@ func (m *Server) CheckUpgrade(ctx context.Context, s domain.Server, to domain.Ru
 		plan.Findings = append(plan.Findings, domain.Finding{Level: level, Code: code, Message: msg})
 	}
 	series := domain.MySQLSeries(to.Version)
+	from := domain.MySQLSeries(s.Runtime.Version)
+	if !seriesAtLeast(from, "5.7") && seriesAtLeast(series, "5.7") {
+		// 5.7 dropped the pre-4.1 password hashes (mysql_old_password).
+		rows, err := m.query(ctx, s, oldPasswordUsers)
+		if err != nil {
+			return plan, fmt.Errorf("list accounts with old passwords: %w", err)
+		}
+		if len(rows) > 0 {
+			add(domain.LevelError, domain.CodeOldPassword, fmt.Sprintf("%d account(s) use the old password hash (mysql_old_password), which MySQL 5.7 removed: %s. Give them a new password first: SET PASSWORD FOR ... = PASSWORD('...').", len(rows), accountList(rows)))
+		}
+	}
+	if !seriesAtLeast(from, "8.0") && seriesAtLeast(series, "8.0") {
+		rows, err := m.query(ctx, s, partitionedNotInnoDB)
+		if err != nil {
+			return plan, fmt.Errorf("list partitioned tables: %w", err)
+		}
+		if len(rows) > 0 {
+			var names []string
+			for _, r := range rows {
+				names = append(names, fmt.Sprintf("`%s`.`%s`", r[0], r[1]))
+			}
+			add(domain.LevelError, domain.CodePartitionEngine, fmt.Sprintf("%d table(s) are partitioned in an engine other than InnoDB, which MySQL 8.0 does not support: %s. Convert them first: ALTER TABLE ... ENGINE = InnoDB.", len(rows), strings.Join(names, ", ")))
+		}
+	}
 	if seriesAtLeast(series, "8.4") {
 		rows, err := m.query(ctx, s, nativeUsers)
 		if err != nil {

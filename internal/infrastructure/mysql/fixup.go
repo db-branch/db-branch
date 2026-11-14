@@ -2,10 +2,12 @@
 package mysql
 
 import (
+	"bytes"
 	"debug/elf"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // SystemLibDirs returns where Debian/Ubuntu install shared libraries for arch.
@@ -103,8 +105,85 @@ func NeededLibs(path string) ([]string, error) {
 	return f.ImportedLibraries()
 }
 
+// wrapperMark starts the launcher WrapLegacy writes, so a second run knows it.
+const wrapperMark = "# db-branch: launcher for a binary without an RPATH"
+
+// HasRunpath reports whether an ELF executable names its own library
+// directories (RPATH or RUNPATH). The 8.x tarballs do ($ORIGIN/../lib/private);
+// the old 5.x ones do not.
+func HasRunpath(path string) bool {
+	f, err := elf.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	for _, tag := range []elf.DynTag{elf.DT_RUNPATH, elf.DT_RPATH} {
+		if v, err := f.DynString(tag); err == nil && len(v) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// WrapLegacy makes the compat links in lib/private reachable for binaries that
+// have no RPATH of their own (MySQL 5.x): such a binary that needs a library
+// the links stand in for is renamed to <name>.real and replaced by a small
+// launcher that puts lib/private on LD_LIBRARY_PATH and runs it.
+func WrapLegacy(runtimeDir string, needed func(binary string) ([]string, error), hasRunpath func(binary string) bool) error {
+	private := filepath.Join(runtimeDir, "lib", "private")
+	links, err := os.ReadDir(private)
+	if err != nil || len(links) == 0 {
+		return nil
+	}
+	have := map[string]bool{}
+	for _, l := range links {
+		have[l.Name()] = true
+	}
+	bins, err := os.ReadDir(filepath.Join(runtimeDir, "bin"))
+	if err != nil {
+		return nil
+	}
+	for _, b := range bins {
+		path := filepath.Join(runtimeDir, "bin", b.Name())
+		if b.IsDir() || strings.HasSuffix(b.Name(), ".real") || isLauncher(path) || hasRunpath(path) {
+			continue
+		}
+		libs, err := needed(path)
+		if err != nil || !anyIn(libs, have) {
+			continue
+		}
+		if err := os.Rename(path, path+".real"); err != nil {
+			return err
+		}
+		script := wrapperMark + "\n" + `d=$(dirname "$(readlink -f "$0")")` + "\n" +
+			`LD_LIBRARY_PATH="$d/../lib/private${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "$d/` + b.Name() + `.real" "$@"` + "\n"
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func anyIn(libs []string, set map[string]bool) bool {
+	for _, l := range libs {
+		if set[l] {
+			return true
+		}
+	}
+	return false
+}
+
+func isLauncher(path string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil || len(b) > 4096 {
+		return false
+	}
+	return bytes.Contains(b, []byte(wrapperMark))
+}
+
 // Fixup prepares an unpacked MySQL runtime for this system: libaio under
-// its t64 name, and ncurses 5 for 8.0 clients.
+// its t64 name, ncurses 5 for the clients of old versions, and launchers for
+// the binaries of 5.x that cannot find those links by themselves.
 func Fixup(libDirs []string, needed func(binary string) ([]string, error)) func(dir string) error {
 	return func(dir string) error {
 		if err := FixLibaio(dir, libDirs); err != nil {
@@ -115,6 +194,9 @@ func Fixup(libDirs []string, needed func(binary string) ([]string, error)) func(
 			l, _ := needed(filepath.Join(dir, "bin", bin))
 			libs = append(libs, l...)
 		}
-		return FixNcurses(dir, libs, libDirs)
+		if err := FixNcurses(dir, libs, libDirs); err != nil {
+			return err
+		}
+		return WrapLegacy(dir, needed, HasRunpath)
 	}
 }

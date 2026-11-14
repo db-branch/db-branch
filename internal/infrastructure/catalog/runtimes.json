@@ -212,6 +212,28 @@
           }
         }
       }
+    },
+    {
+      "engine": "mysql",
+      "version": "5.7.44",
+      "artifacts": {
+        "amd64": {
+          "url": "https://cdn.mysql.com/archives/mysql-5.7/mysql-5.7.44-linux-glibc2.12-x86_64.tar.gz",
+          "sha256": "798ff0a14cdc1ab259f8a3b6a7f683403e9bbaa85957d82e5370f82b27ba6805",
+          "size": 694785800
+        }
+      }
+    },
+    {
+      "engine": "mysql",
+      "version": "5.6.51",
+      "artifacts": {
+        "amd64": {
+          "url": "https://cdn.mysql.com/archives/mysql-5.6/mysql-5.6.51-linux-glibc2.12-x86_64.tar.gz",
+          "sha256": "1b6158dde3953c455f9538454a20dcc6c6cb941b8282405c66ded5674356c5e2",
+          "size": 341603885
+        }
+      }
     }
   ]
-}
+}\n

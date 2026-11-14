@@ -41,6 +41,8 @@ const (
 	CodeNativePassword     = "native_password_users"
 	CodeNativePasswordGone = "native_password_removed"
 	CodeBranchUser         = "branch_user_converted"
+	CodeOldPassword        = "old_password_users"
+	CodePartitionEngine    = "partitions_not_innodb"
 	CodeConfigInvalid      = "config_invalid"
 	CodeConfigAdapted      = "config_adapted"
 	CodeLogWarning         = "log_warning"
@@ -140,7 +142,7 @@ func parseVersion(s string) version {
 }
 
 // mysqlLTS are the long-term-support series; an upgrade may not jump over one.
-var mysqlLTS = []version{{8, 0, 0}, {8, 4, 0}, {9, 7, 0}}
+var mysqlLTS = []version{{5, 7, 0}, {8, 0, 0}, {8, 4, 0}, {9, 7, 0}}
 
 // CheckUpgradePath decides whether a branch on from may move to to.
 func CheckUpgradePath(from, to RuntimeRef) error {
@@ -175,8 +177,8 @@ func checkPostgresPath(from, to RuntimeRef, a, b version) error {
 }
 
 func checkMySQLPath(from, to RuntimeRef, a, b version) error {
-	if a.major < 8 {
-		return fmt.Errorf("%w: %s is too old; upgrades start from MySQL 8.0", ErrUpgradeRefused, from)
+	if a.major < 5 || (a.major == 5 && a.minor < 6) {
+		return fmt.Errorf("%w: %s is too old; upgrades start from MySQL 5.6", ErrUpgradeRefused, from)
 	}
 	sa, sb := version{a.major, a.minor, 0}, version{b.major, b.minor, 0}
 	for _, l := range mysqlLTS {

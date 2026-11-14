@@ -262,3 +262,66 @@ func TestUpgradeFindings_多すぎる行は件数にまとめる(t *testing.T) {
 		t.Errorf("%d findings, last = %+v", len(got.Findings), last)
 	}
 }
+
+// from gives the fixture's running server a runtime of another version.
+func (f fixture) running(version string) fixture {
+	f.spec.Runtime = mysqlRT(version)
+	return f
+}
+
+func TestCheckUpgrade_5_6から5_7へは旧パスワード方式のユーザーをエラーにする(t *testing.T) {
+	f := newFixture(t).running("5.6.51")
+	f.sys.outputs = map[string]string{"mysql_old_password": "legacy\t%\nold2\tlocalhost\n"}
+
+	plan, err := f.srv.CheckUpgrade(ctx, f.spec, mysqlRT("5.7.44"), domain.Login{User: "branch-x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, ok := finding(plan.Findings, domain.CodeOldPassword)
+	if !ok || e.Level != domain.LevelError || !strings.Contains(e.Message, "'legacy'@'%'") || !strings.Contains(e.Message, "'old2'@'localhost'") || !domain.HasErrors(plan.Findings) {
+		t.Errorf("findings = %+v", plan.Findings)
+	}
+	// 5.6 has no native password issue and no partition check for 5.7.
+	if f.sys.called("information_schema.partitions") || plan.LegacyAuth {
+		t.Errorf("calls = %q legacy = %v", f.sys.calls, plan.LegacyAuth)
+	}
+}
+
+func TestCheckUpgrade_5_7から8_0へはInnoDB以外のパーティションをエラーにする(t *testing.T) {
+	f := newFixture(t).running("5.7.44")
+	f.sys.outputs = map[string]string{"information_schema.partitions": "shop\torders\nshop\tlog\n"}
+
+	plan, err := f.srv.CheckUpgrade(ctx, f.spec, mysqlRT("8.0.46"), domain.Login{User: "branch-x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, ok := finding(plan.Findings, domain.CodePartitionEngine)
+	if !ok || e.Level != domain.LevelError || !strings.Contains(e.Message, "`shop`.`orders`") || !strings.Contains(e.Message, "`shop`.`log`") {
+		t.Errorf("findings = %+v", plan.Findings)
+	}
+	if f.sys.called("mysql_old_password") {
+		t.Errorf("5.7 has no old passwords: %q", f.sys.calls)
+	}
+}
+
+func TestCheckUpgrade_5系で該当がなければ何も言わず_設定の確認はする(t *testing.T) {
+	f := newFixture(t).running("5.7.44")
+	plan, err := f.srv.CheckUpgrade(ctx, f.spec, mysqlRT("8.0.46"), domain.Login{User: "branch-x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Findings) != 0 {
+		t.Errorf("findings = %+v", plan.Findings)
+	}
+	if !f.sys.called("mysqld --defaults-file=" + filepath.Join(f.state, f.spec.ID, "my.cnf.check") + " --validate-config") {
+		t.Errorf("config was not validated: %q", f.sys.calls)
+	}
+}
+
+func TestCheckUpgrade_5系の検査のSQLが失敗したらエラー(t *testing.T) {
+	f := newFixture(t).running("5.7.44")
+	f.sys.failOn = "information_schema.partitions"
+	if _, err := f.srv.CheckUpgrade(ctx, f.spec, mysqlRT("8.0.46"), domain.Login{User: "branch-x"}); err == nil {
+		t.Error("a check that cannot run must not pass silently")
+	}
+}

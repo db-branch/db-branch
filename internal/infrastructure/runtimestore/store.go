@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/db-branch/db-branch/internal/domain"
 )
@@ -123,10 +124,14 @@ func (s Store) List(ctx context.Context) ([]domain.RuntimeRef, error) {
 	return refs, nil
 }
 
-// debMagic starts every .deb (an ar archive).
-const debMagic = "!<arch>\n"
+// debMagic starts every .deb (an ar archive); gzipMagic every .tar.gz (the
+// generic tarballs of MySQL 5.x).
+const (
+	debMagic  = "!<arch>\n"
+	gzipMagic = "\x1f\x8b"
+)
 
-// unpack extracts a tar.xz (dropping its top-level directory, as upstream
+// unpack extracts a tar.xz or tar.gz (dropping its top-level directory, as upstream
 // MySQL tarballs have one) or a .deb (its file tree as is) into dir.
 func (s Store) unpack(ctx context.Context, archive, dir string) error {
 	f, err := os.Open(archive)
@@ -140,6 +145,10 @@ func (s Store) unpack(ctx context.Context, archive, dir string) error {
 		_, err = s.Run.Run(ctx, "dpkg-deb", "-x", archive, dir)
 		return err
 	}
-	_, err = s.Run.Run(ctx, "tar", "-xJf", archive, "-C", dir, "--strip-components=1", "--no-same-owner")
+	flag := "-xJf"
+	if strings.HasPrefix(string(head[:n]), gzipMagic) {
+		flag = "-xzf"
+	}
+	_, err = s.Run.Run(ctx, "tar", flag, archive, "-C", dir, "--strip-components=1", "--no-same-owner")
 	return err
 }

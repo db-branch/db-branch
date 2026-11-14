@@ -295,3 +295,26 @@ func TestInstall_debはそのまま展開し複数をひとつにまとめる(t 
 		t.Error("missing archive: want error")
 	}
 }
+
+func TestInstall_tar_gz_の旧版も最上位ディレクトリを外して展開する(t *testing.T) {
+	s, dir := newStore(t)
+	src := t.TempDir()
+	const topDir = "mysql-5.7.44-linux-glibc2.12-x86_64"
+	if err := os.MkdirAll(filepath.Join(src, topDir, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, topDir, "bin", "mysqld"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "rt.tar.gz")
+	if b, err := exec.Command("tar", "-czf", out, "-C", src, topDir).CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v %s", err, b)
+	}
+	ref := domain.RuntimeRef{Engine: domain.MySQL, Version: "5.7.44"}
+	if err := s.Install(ctx, ref, []string{out}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "mysql", "5.7.44", "bin", "mysqld")); err != nil {
+		t.Fatal(err)
+	}
+}

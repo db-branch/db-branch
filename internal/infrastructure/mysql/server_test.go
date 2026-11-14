@@ -608,3 +608,69 @@ func TestUpdateStats_全データベースをANALYZEする(t *testing.T) {
 		t.Error("failing mysqlcheck: want error")
 	}
 }
+
+// with5 gives the fixture a runtime of an old series.
+func (f fixture) with(version string) fixture {
+	f.spec.Runtime.Version = version
+	return f
+}
+
+func TestInitialize_MySQL5系の設定にはmysqlxを書かない_8系には書く(t *testing.T) {
+	for _, tc := range []struct {
+		version string
+		x       bool
+	}{{"5.6.51", false}, {"5.7.44", false}, {"8.0.46", true}, {"8.4.13", true}, {"9.6.0", true}} {
+		f := newFixture(t).with(tc.version)
+		if err := f.srv.Initialize(ctx, f.spec); err != nil {
+			t.Fatal(err)
+		}
+		cnf := read(t, filepath.Join(f.state, f.spec.ID, "my.cnf"))
+		if got := strings.Contains(cnf, "mysqlx=OFF\n"); got != tc.x {
+			t.Errorf("%s: mysqlx=OFF present = %v, want %v\n%s", tc.version, got, tc.x, cnf)
+		}
+	}
+}
+
+func TestInitialize_5_7は_initialize_insecureで_5_6はmysql_install_dbで初期化する(t *testing.T) {
+	f := newFixture(t).with("5.7.44")
+	if err := f.srv.Initialize(ctx, f.spec); err != nil {
+		t.Fatal(err)
+	}
+	if !f.sys.called("mysqld --defaults-file=" + filepath.Join(f.state, f.spec.ID, "my.cnf") + " --initialize-insecure") {
+		t.Errorf("5.7: %q", f.sys.calls)
+	}
+	g := newFixture(t).with("5.6.51")
+	if err := g.srv.Initialize(ctx, g.spec); err != nil {
+		t.Fatal(err)
+	}
+	want := "mysql_install_db --defaults-file=" + filepath.Join(g.state, g.spec.ID, "my.cnf") + " --basedir=" + g.rtDir + " --datadir=" + g.spec.DataDir + " --user=db-branch --skip-name-resolve"
+	if !g.sys.called(want) {
+		t.Errorf("5.6 should run %q, calls = %q", want, g.sys.calls)
+	}
+	if g.sys.called("mysqld --defaults-file=" + filepath.Join(g.state, g.spec.ID, "my.cnf") + " --initialize-insecure") {
+		t.Error("5.6 has no --initialize-insecure")
+	}
+}
+
+func TestCreateUser_5_7は従来の文で_5_6はGRANTでユーザーを作り匿名と遠隔rootを消す(t *testing.T) {
+	f := newFixture(t).with("5.7.44")
+	if err := f.srv.CreateUser(ctx, f.spec, "feature-x", "pw1"); err != nil {
+		t.Fatal(err)
+	}
+	if sql := f.sys.calls[len(f.sys.calls)-1]; !strings.Contains(sql, "CREATE USER IF NOT EXISTS 'feature-x'@'%' IDENTIFIED BY 'pw1'") {
+		t.Errorf("5.7: %s", sql)
+	}
+	g := newFixture(t).with("5.6.51")
+	if err := g.srv.CreateUser(ctx, g.spec, "feature-x", "pw1"); err != nil {
+		t.Fatal(err)
+	}
+	sql := g.sys.calls[len(g.sys.calls)-1]
+	if strings.Contains(sql, "CREATE USER IF NOT EXISTS") {
+		t.Errorf("5.6 cannot CREATE USER IF NOT EXISTS: %s", sql)
+	}
+	for _, want := range []string{"GRANT ALL PRIVILEGES ON *.* TO 'feature-x'@'%' IDENTIFIED BY 'pw1' WITH GRANT OPTION", "DELETE FROM mysql.user WHERE User = ''", "User = 'root' AND Host <> 'localhost'", "FLUSH PRIVILEGES"} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("5.6 sql lacks %q: %s", want, sql)
+		}
+	}
+}

@@ -94,7 +94,6 @@ func (m *Server) config(s domain.Server) (cnf string, notes []string) {
 		"socket=" + m.socket(s),
 		"pid-file=" + filepath.Join(m.RunRoot, s.ID, "mysqld.pid"),
 		"log-error=" + m.errLog(s),
-		"mysqlx=OFF",
 		"skip-name-resolve",
 		fmt.Sprintf("innodb_buffer_pool_size=%dM", s.MemoryMB),
 		// ZFS is copy-on-write: torn pages cannot happen, so doublewrite only costs writes.
@@ -106,6 +105,10 @@ func (m *Server) config(s domain.Server) (cnf string, notes []string) {
 		lines = append(lines, "skip-networking")
 	}
 	series := domain.MySQLSeries(s.Runtime.Version)
+	if seriesAtLeast(series, "8.0") {
+		// The X plugin exists from 8.0; 5.x does not know the option and refuses to start.
+		lines = append(lines, "mysqlx=OFF")
+	}
 	if s.LegacyAuth && series == "8.4" {
 		// 8.4 ships mysql_native_password disabled; 8.0 has it, 9.0 removed it.
 		lines = append(lines, "mysql_native_password=ON")
@@ -132,6 +135,13 @@ func (m *Server) Initialize(ctx context.Context, s domain.Server) error {
 		return err
 	}
 	if err := m.chown(s.DataDir); err != nil {
+		return err
+	}
+	if !seriesAtLeast(domain.MySQLSeries(s.Runtime.Version), "5.7") {
+		// 5.6 has no --initialize-insecure: its script builds the data directory. Without
+		// --skip-name-resolve it would also add accounts for the host name.
+		rt := m.RuntimeDir(s.Runtime)
+		_, err := m.Run.Run(ctx, filepath.Join(rt, "scripts", "mysql_install_db"), "--defaults-file="+m.cnf(s), "--basedir="+rt, "--datadir="+s.DataDir, "--user=db-branch", "--skip-name-resolve")
 		return err
 	}
 	_, err := m.Run.Run(ctx, m.bin(s, "mysqld"), "--defaults-file="+m.cnf(s), "--initialize-insecure", "--user=db-branch")
@@ -251,6 +261,12 @@ func (m *Server) Exec(ctx context.Context, s domain.Server, sql string) error {
 // every privilege. Names are branch names and passwords letters and digits,
 // so neither needs escaping inside the quotes.
 func (m *Server) CreateUser(ctx context.Context, s domain.Server, user, password string) error {
+	if !seriesAtLeast(domain.MySQLSeries(s.Runtime.Version), "5.7") {
+		// 5.6: no CREATE USER IF NOT EXISTS (GRANT ... IDENTIFIED BY makes the account), and the
+		// install script left anonymous accounts and root for other hosts without a password.
+		return m.Exec(ctx, s, fmt.Sprintf("DELETE FROM mysql.user WHERE User = '' OR (User = 'root' AND Host <> 'localhost'); FLUSH PRIVILEGES; "+
+			"GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%' IDENTIFIED BY '%s' WITH GRANT OPTION", user, password))
+	}
 	return m.Exec(ctx, s, fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%' WITH GRANT OPTION",
 		user, password, user))
 }
