@@ -98,9 +98,14 @@ type LayoutInput = {
 // own, and a lane keeps the number of the first line drawn on it, so numbers
 // are never renumbered (a lane may be line 3 beside line 0).
 //
-// What the API cannot say: the restore time, whether the data had changed since
-// `from` (the automatic checkpoint holds that), and whether a restore was made
-// to a transaction (a line made that way only names the checkpoint before it).
+// A restore to a recorded transaction names only the checkpoint before it in
+// the API, but the line's own transactions begin with the ones the module
+// replayed, which the lane already holds: the last of them is the restored
+// point, and it is the tip when nothing on the lane is later than it. Without
+// the transactions (not recorded, or not loaded) the line forks as before.
+//
+// What the API cannot say: the restore time, and whether the data had changed
+// since `from`.
 export function mergeLines(input: LayoutInput): Map<number, number> {
   const lines = [...input.lines].sort((a, b) => a.line - b.line);
   const cps = sortedCheckpoints(input.checkpoints);
@@ -116,13 +121,31 @@ export function mergeLines(input: LayoutInput): Map<number, number> {
     if (at === undefined || (l.from !== "reset" && origin?.line !== l.parent)) continue;
     const members = lines.filter((m) => m.line < l.line && lane.get(m.line) === target).map((m) => m.line);
     if (input.recorded && members.some((m) => input.events?.[m] === undefined)) continue;
-    const since = origin ? ms(origin.created_at) : -Infinity;
+    // A restore to a recorded transaction: the module replays the log up to the
+    // transaction on the new line, so the line starts with transactions the lane
+    // already holds. The last of them is the point that was really restored.
+    const fork = replayedPoint(input.events?.[l.line], members.flatMap((m) => input.events?.[m] ?? []));
+    const since = fork ? ms(fork.time) : origin ? ms(origin.created_at) : -Infinity;
     const later =
-      cps.some((c) => members.includes(c.line) && !isRestoreCopy(c) && rank.get(c.name)! > at) ||
+      cps.some((c) => members.includes(c.line) && !isRestoreCopy(c) && (fork ? ms(c.created_at) > since : rank.get(c.name)! > at)) ||
       members.some((m) => (input.events?.[m] ?? []).some((x) => ms(x.time) > since));
     if (!later) lane.set(l.line, target);
   }
   return lane;
+}
+
+// replayedPoint is the last transaction of a line's beginning that the lane it
+// restored from already holds (the transactions a restore to a transaction
+// replayed), or undefined for the restore of a checkpoint.
+function replayedPoint(own: HistoryTx[] | undefined, lane: HistoryTx[]): HistoryTx | undefined {
+  if (!own || lane.length === 0) return undefined;
+  const held = new Set(lane.map((x) => x.gtid));
+  let point: HistoryTx | undefined;
+  for (const x of [...own].sort((a, b) => ms(a.time) - ms(b.time))) {
+    if (!held.has(x.gtid)) break;
+    point = x;
+  }
+  return point;
 }
 
 const sortedCheckpoints = (list: Checkpoint[]) => [...list].sort((a, b) => ms(a.created_at) - ms(b.created_at) || (a.name < b.name ? -1 : 1));
@@ -196,7 +219,8 @@ export function layoutGraph(input: LayoutInput): GLayout {
     }
 
     // Transactions between the lane's neighbours, by time.
-    const txs = [...(input.events?.[l.line] ?? [])].sort((a, b) => ms(a.time) - ms(b.time));
+    const shownBefore = new Set(shown === l.line ? [] : lines.filter((m) => m.line < l.line && merged.get(m.line) === shown).flatMap((m) => (input.events?.[m.line] ?? []).map((x) => x.gtid)));
+    const txs = [...(input.events?.[l.line] ?? [])].filter((x) => !shownBefore.has(x.gtid)).sort((a, b) => ms(a.time) - ms(b.time));
     if (txs.length > 0) {
       const anchors: { x: number; t: number }[] = cps.filter((c) => c.line === l.line).map((c) => ({ x: xOf(slot.get(c.name)!), t: ms(c.created_at) }));
       const t0 = ms(txs[0].time) - 1000;

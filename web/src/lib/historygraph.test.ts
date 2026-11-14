@@ -247,3 +247,63 @@ describe("layoutGraph: a restore of the tip extends its lane", () => {
     expect(g.lanes[1]).toMatchObject({ line: 2, live: true });
   });
 });
+
+describe("layoutGraph: a restore to a recorded transaction", () => {
+  const root: Line = { line: 0, live: false, parent: null, from: "" };
+  const lines2: Line[] = [root, { line: 1, live: true, parent: 0, from: "c1" }];
+  // c1 on line 0, then the transactions 1, 2 and 3 (the module replays up to the chosen one on the new line).
+  const cps2 = [cp("c1", 0, 0), cp("d1", 40, 1, { current: true })];
+  const onLine0 = [tx(1, 10), tx(2, 20), tx(3, 30)];
+  const run = (replayed: HistoryTx[], extra: Checkpoint[] = [], parentTxs = onLine0, recorded = true) =>
+    layoutGraph({ lines: lines2, checkpoints: [...cps2, ...extra], head: "d1", events: { 0: parentTxs, 1: [...replayed, tx(9, 50)] }, recorded });
+
+  it("extends the lane when the transaction is the last one of its line: no fork, no label", () => {
+    const g = run([tx(1, 10), tx(2, 20), tx(3, 30)]);
+    expect(g.lanes).toHaveLength(1);
+    expect(g.forks).toEqual([]);
+    expect(g.nodes.every((n) => n.lane === 0 && n.shown === 0)).toBe(true);
+  });
+
+  it("draws a transaction the restore replayed once, on the shared lane, with its real line for the API", () => {
+    const g = run([tx(1, 10), tx(2, 20), tx(3, 30)]);
+    const dots = g.nodes.filter((n) => n.kind === "tx");
+    expect(dots.map((n) => n.tx!.gtid).sort()).toEqual(["u:1", "u:2", "u:3", "u:9"]);
+    expect(dots.filter((n) => n.tx!.gtid !== "u:9").every((n) => n.line === 0)).toBe(true);
+    expect(dots.find((n) => n.tx!.gtid === "u:9")!.line).toBe(1);
+  });
+
+  it("still forks when a later transaction was left behind on the line", () => {
+    const g = run([tx(1, 10), tx(2, 20)]);
+    expect(g.lanes).toHaveLength(2);
+    expect(g.forks).toHaveLength(1);
+  });
+
+  it("forks when a checkpoint was saved on the line after the transaction", () => {
+    const g = run([tx(1, 10), tx(2, 20), tx(3, 30)], [cp("c2", 35, 0)]);
+    expect(g.forks).toHaveLength(1);
+  });
+
+  it("does not take a transaction the line made for itself as a replayed one", () => {
+    // Nothing of line 1 is on line 0: a plain restore of c1, which the transactions after c1 make a fork.
+    const g = run([]);
+    expect(g.forks).toHaveLength(1);
+  });
+
+  it("does not guess when the transactions of the lane are not all known", () => {
+    const g = layoutGraph({ lines: lines2, checkpoints: cps2, head: "d1", events: { 1: [tx(1, 10), tx(9, 50)] }, recorded: true });
+    expect(g.forks).toHaveLength(1);
+  });
+
+  it("extends again for a chain: the restored line's own last transaction is the new tip", () => {
+    const three: Line[] = [root, { line: 1, live: false, parent: 0, from: "c1" }, { line: 2, live: true, parent: 0, from: "c1" }];
+    const g = layoutGraph({
+      lines: three,
+      checkpoints: [cp("c1", 0, 0), cp("d1", 40, 1), cp("e1", 60, 2, { current: true })],
+      head: "e1",
+      events: { 0: onLine0, 1: [...onLine0, tx(9, 50)], 2: [...onLine0, tx(9, 50)] },
+      recorded: true,
+    });
+    expect(g.lanes).toHaveLength(1);
+    expect(g.forks).toEqual([]);
+  });
+});
