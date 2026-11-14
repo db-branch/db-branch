@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- MySQL 5.7 and 5.6 for migration testing: `db-branch runtime install mysql@5.7.44` (and `mysql@5.6.51`) installs the official generic tarballs (amd64 only; Oracle ships no arm64 build of 5.x). Branches of them can be created, saved as checkpoints and upgraded 5.6 to 5.7 to 8.0 (a series is never skipped), with pre-checks for old password hashes and for partitions outside InnoDB, and `mysql_upgrade` run after an upgrade to 5.7. The history module does not record 5.x branches (it says so when asked to); masking has not been checked on 5.x.
 - Web console: every branch has a page of its own at `/admin/branches/<name>`, with its facts, its actions (recreate, copy proxy URL, extend, reset, delete), the connection details, the Checkpoints graph, the recorded transactions as a searchable table (history module) and the upgrade. The Branches list is now a light table (status, name, base) whose names open the page; its action menu and the Connect and Checkpoints dialogs moved to the page.
 - Web console, user side (the portal): a branch row in "Your branches" is a summary that opens the branch's own page at `/branch/<name>` instead of expanding in place; the details it showed, the Checkpoints graph, and (history module, recorded branches) the transactions table are on that page. A new branch opens its page once it is ready.
 
