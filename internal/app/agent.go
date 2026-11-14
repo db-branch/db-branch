@@ -263,18 +263,20 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	history.Add(sampler.Sample())
 	go every(ctx, 10*time.Second, func() { history.Add(sampler.Sample()) })
 	srv.Metrics = history.List
-	srv.Storage = func(ctx context.Context) (domain.StorageReport, error) {
-		z := zfs.New(execx.Runner{})
-		root := cfg.Pool + "/db-branch"
-		nodes, err := z.Tree(ctx, root)
-		if err != nil {
-			return domain.StorageReport{}, err
+	if pool != "" { // a node with its own ZFS pool (shared storage reports none)
+		srv.Storage = func(ctx context.Context) (domain.StorageReport, error) {
+			z := zfs.New(execx.Runner{})
+			root := pool + "/db-branch"
+			nodes, err := z.Tree(ctx, root)
+			if err != nil {
+				return domain.StorageReport{}, err
+			}
+			size, free, err := z.Space(ctx, pool)
+			if err != nil {
+				return domain.StorageReport{}, err
+			}
+			return domain.StorageReport{Pool: pool, PoolSize: size, PoolFree: free, Root: root, Nodes: nodes}, nil
 		}
-		size, free, err := z.Space(ctx, cfg.Pool)
-		if err != nil {
-			return domain.StorageReport{}, err
-		}
-		return domain.StorageReport{Pool: cfg.Pool, PoolSize: size, PoolFree: free, Root: root, Nodes: nodes}, nil
 	}
 	if cl != nil {
 		cl.metrics = func() *domain.Metrics {
