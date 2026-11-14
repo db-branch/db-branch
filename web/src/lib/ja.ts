@@ -229,25 +229,25 @@ export const ja: Record<string, string> = {
   "This page is served by the {module} module on a real cluster. Here it shows sample data.": "実際のクラスタでは、このページは {module} モジュールが提供します。ここではサンプルのデータを表示しています。",
   "The demo has no sample for this page.": "このページのサンプルはデモにありません。",
   // Checkpoints
-  "Save the state of this Branch before risky work. Restoring one loses nothing.": "危険な作業の前に、この Branch の状態を保存します。復元しても何も失われません。",
+  "Save the state of this Branch before risky work. A restore replaces the current state and saves nothing.": "危険な作業の前に、この Branch の状態を保存してください。復元すると、いまの状態は置き換わり、自動では保存されません。",
   "No checkpoints yet.": "チェックポイントはまだありません。",
   "At most {max} characters.": "最大 {max} 文字です。",
   "Use lowercase letters, digits and hyphens, not at the ends.": "小文字の英字・数字・ハイフンが使えます（先頭と末尾にハイフンは置けません）。",
-  "Restore {name} to {checkpoint}? Nothing is lost: the current state is saved first as a before-restore checkpoint (the newest five are kept), and every other checkpoint stays.":
-    "{name} を {checkpoint} の状態に戻しますか？ 何も失われません。いまの状態は先に before-restore のチェックポイントとして保存され（新しい 5 件が残ります）、ほかのチェックポイントもすべて残ります。",
+  "Restore {name} to {checkpoint}? The current state of {name} is replaced and is not saved. Save a checkpoint first if you may need it. Every checkpoint you already have stays.":
+    "{name} を {checkpoint} の状態に戻しますか？ {name} のいまの状態は置き換わり、保存されません。必要になりそうなら、先に Checkpoint を保存してください。すでにある Checkpoint はすべて残ります。",
   "Delete checkpoint {checkpoint}? The other checkpoints are not affected.": "チェックポイント {checkpoint} を削除しますか？ ほかのチェックポイントには影響しません。",
   "The branch's data descends from this checkpoint.": "この Branch のデータは、このチェックポイントから続いています。",
   "Saved automatically before a restore.": "復元の前に自動で保存されました。",
   "Space only this checkpoint holds": "このチェックポイントだけが持っている容量",
-  "Go back to this state; nothing is lost": "この状態に戻します。何も失われません",
+  "Go back to this state": "この状態に戻します",
   "Busy stretches show a sample of their transactions.": "取引が多い区間は、その一部だけを点で表示しています。",
   "Dots are recorded transactions. Select a checkpoint or a dot.": "点は記録したトランザクションです。チェックポイントか点を選んでください。",
   "Show the Checkpoints larger": "Checkpoint を大きく表示します",
   "Select a checkpoint.": "チェックポイントを選んでください。",
   "The branch's creation state. Reset returns here.": "この Branch を作ったときの状態です。Reset するとここに戻ります。",
-  "Restore {name} to just after this transaction? Nothing is lost: the branch continues on a new line, the current state is saved first as a before-restore checkpoint, and every checkpoint stays.":
-    "{name} をこのトランザクションの直後の状態に戻しますか？ 何も失われません。新しい線で続き、いまの状態は先に before-restore のチェックポイントとして保存され、チェックポイントもすべて残ります。",
-  "Go back to just after this transaction; nothing is lost": "このトランザクションの直後に戻します。何も失われません",
+  "Restore {name} to just after this transaction? The branch continues on a new line. The current state of {name} is replaced and is not saved: save a checkpoint first if you may need it. Every checkpoint you already have stays.":
+    "{name} をこのトランザクションの直後の状態に戻しますか？ 新しい線で続きます。{name} のいまの状態は置き換わり、保存されません。必要になりそうなら、先に Checkpoint を保存してください。すでにある Checkpoint はすべて残ります。",
+  "Go back to just after this transaction": "このトランザクションの直後に戻します",
   "Recording: on, since the Branch was created. Its changes are recorded; it can be restored to any point.": "記録: オン（Branch の作成時から）。変更を記録しています。任意の時点に戻せます。",
   "Keep every change so you can go back to any point, not only to checkpoints. Decided now: it cannot be turned on or off after the Branch is created.":
     "すべての変更を残し、チェックポイントだけでなく任意の時点に戻せるようにします。作成時にだけ決められ、Branch を作ったあとにオンにもオフにもできません。",

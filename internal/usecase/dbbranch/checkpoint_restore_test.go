@@ -35,17 +35,6 @@ func (z *zenv) restore(t *testing.T, cp string) {
 
 func (z *zenv) data() string { return z.sim.ds[live].data }
 
-func (z *zenv) autoName(t *testing.T) string {
-	t.Helper()
-	for _, n := range z.names(t) {
-		if strings.HasPrefix(n, "before-restore-") {
-			return n
-		}
-	}
-	t.Fatalf("no automatic checkpoint in %v", z.names(t))
-	return ""
-}
-
 func TestRestoreCheckpoint_選んだ時点に戻し他のチェックポイントも残す(t *testing.T) {
 	z := newZEnv(t)
 	z.history(t)
@@ -56,15 +45,15 @@ func TestRestoreCheckpoint_選んだ時点に戻し他のチェックポイン�
 		t.Errorf("data = %q, want v1", z.data())
 	}
 	got := z.names(t)
-	if len(got) != 3 || got[0] != "c1" || got[1] != "c2" || !strings.HasPrefix(got[2], "before-restore-") {
-		t.Fatalf("names = %v", got)
+	if len(got) != 2 || got[0] != "c1" || got[1] != "c2" {
+		t.Fatalf("names = %v, want c1 and c2 only: a restore saves nothing by itself", got)
 	}
 	list, _ := z.svc.ListCheckpoints(ctx, name("x"))
-	if !list[0].Current || list[1].Current || list[2].Current || !list[2].Auto || list[0].Auto {
+	if !list[0].Current || list[1].Current || list[0].Auto || list[1].Auto {
 		t.Errorf("marks = %+v", list)
 	}
-	if list[0].Line != 0 || list[1].Line != 0 || list[2].Line != 0 {
-		t.Errorf("all three were taken on line 0: %+v", list)
+	if list[0].Line != 0 || list[1].Line != 0 {
+		t.Errorf("both were taken on line 0: %+v", list)
 	}
 	if !z.server.running["branch-x"] {
 		t.Error("server not running")
@@ -79,14 +68,14 @@ func TestRestoreCheckpoint_選んだ時点に戻し他のチェックポイン�
 	if p, _ := z.sim.Props(ctx, history); p[domain.PropOp] != "" {
 		t.Errorf("the intent is still recorded: %v", p)
 	}
-	// The data as it was before the restore is kept.
-	auto := z.autoName(t)
+	// The line the branch was on is set aside because it holds checkpoints; the
+	// state after its last checkpoint (v3) is not saved by the restore.
 	if h := z.sim.ds[history+"/0"]; h == nil || h.origin != live+"@ckpt-c1" {
 		t.Errorf("the old line = %+v", h)
 	} else {
 		for _, s := range h.snaps {
-			if s.name == "ckpt-"+auto && s.data != "v3" {
-				t.Errorf("auto checkpoint holds %q, want v3", s.data)
+			if strings.HasPrefix(s.name, "ckpt-before-restore-") {
+				t.Errorf("a restore took an automatic checkpoint: %s", s.name)
 			}
 		}
 	}
@@ -105,18 +94,7 @@ func TestRestoreCheckpoint_どれを何度戻しても全部戻せる(t *testing
 	if z.data() != "v1" {
 		t.Fatalf("data = %q, want v1", z.data())
 	}
-	// The state before the first restore, saved automatically.
-	first := ""
-	for _, n := range z.names(t) {
-		if strings.HasPrefix(n, "before-restore-") && first == "" {
-			first = n
-		}
-	}
-	z.restore(t, first)
-	if z.data() != "v3" {
-		t.Fatalf("data = %q, want v3", z.data())
-	}
-	for _, want := range []string{"c1", "c2", first} {
+	for _, want := range []string{"c1", "c2"} {
 		found := false
 		for _, n := range z.names(t) {
 			found = found || n == want
@@ -125,7 +103,7 @@ func TestRestoreCheckpoint_どれを何度戻しても全部戻せる(t *testing
 			t.Errorf("%s was lost: %v", want, z.names(t))
 		}
 	}
-	if d := z.sim.ds[live]; d.props[domain.PropLine] != "4" || !z.promoted() {
+	if d := z.sim.ds[live]; d.props[domain.PropLine] != "3" || !z.promoted() {
 		t.Errorf("live = %+v", d)
 	}
 }
@@ -159,7 +137,7 @@ func TestRestoreCheckpoint_進捗を報告する(t *testing.T) {
 	if _, err := z.svc.RestoreCheckpoint(ctx, name("x"), "c1", func(p string) { phases = append(phases, p) }); err != nil {
 		t.Fatal(err)
 	}
-	want := "cloning stopping checkpointing swapping promoting starting"
+	want := "cloning stopping swapping promoting starting"
 	if got := strings.Join(phases, " "); got != want {
 		t.Errorf("phases = %q, want %q", got, want)
 	}
@@ -185,14 +163,14 @@ func TestRestoreCheckpoint_受け付けない場合を断る(t *testing.T) {
 	}
 }
 
-func TestRestoreCheckpoint_自動のチェックポイントは上限に数えず復元を妨げない(t *testing.T) {
+func TestRestoreCheckpoint_上限に達していても復元できる(t *testing.T) {
 	z := newZEnv(t)
 	z.history(t)
 	z.max = 2
 	z.restore(t, "c1") // two manual checkpoints: at the limit, restoring still works
 	z.restore(t, "c2")
 	z.restore(t, "c1")
-	if got := len(z.names(t)); got != 5 {
+	if got := len(z.names(t)); got != 2 {
 		t.Fatalf("names = %v", z.names(t))
 	}
 	z.tick()
@@ -202,56 +180,17 @@ func TestRestoreCheckpoint_自動のチェックポイントは上限に数え�
 	if err := z.svc.DeleteCheckpoint(ctx, name("x"), "c2"); err != nil {
 		t.Fatal(err)
 	}
-	z.checkpoint(t, "c3") // the automatic ones did not count
-}
-
-func TestRestoreCheckpoint_自動は新しい5件だけ残し古いものから消す(t *testing.T) {
-	z := newZEnv(t)
-	z.history(t)
-	var autos []string
-	autoNames := func() []string {
-		var out []string
-		for _, n := range z.names(t) {
-			if strings.HasPrefix(n, "before-restore-") {
-				out = append(out, n)
-			}
-		}
-		return out
-	}
-	seen := map[string]bool{}
-	for i := 0; i < 7; i++ {
-		z.restore(t, []string{"c1", "c2"}[i%2])
-		for _, n := range autoNames() {
-			if !seen[n] {
-				seen[n] = true
-				autos = append(autos, n)
-			}
-		}
-		if got := len(autoNames()); got > 5 {
-			t.Fatalf("after restore %d: %d automatic checkpoints: %v", i+1, got, autoNames())
-		}
-	}
-	if len(autos) != 7 {
-		t.Fatalf("took %d automatic checkpoints: %v", len(autos), autos)
-	}
-	if got, want := autoNames(), autos[2:]; !eq(got, want) {
-		t.Errorf("automatic = %v, want the newest five %v", got, want)
-	}
-	names := strings.Join(z.names(t), " ")
-	if !strings.Contains(names, "c1") || !strings.Contains(names, "c2") {
-		t.Errorf("manual checkpoints must stay: %s", names)
-	}
+	z.checkpoint(t, "c3")
 }
 
 func TestResetBranch_リセットは自動チェックポイントを増やさず回転もしない(t *testing.T) {
 	z := newZEnv(t)
 	z.history(t)
 	z.restore(t, "c1")
-	auto := z.autoName(t)
 	if _, err := z.svc.ResetBranch(ctx, name("x"), nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := z.names(t); !strings.Contains(strings.Join(got, " "), auto) || len(got) != 3 {
+	if got := z.names(t); strings.Join(got, " ") != "c1 c2" {
 		t.Errorf("names after reset = %v", got)
 	}
 }
@@ -260,13 +199,12 @@ func TestDeleteCheckpoint_復元元の線が依存するものは見えなくし
 	z := newZEnv(t)
 	z.history(t)
 	z.restore(t, "c1")
-	auto := z.autoName(t)
 
 	// c1 is what the old line was cloned from: it cannot be destroyed yet.
 	if err := z.svc.DeleteCheckpoint(ctx, name("x"), "c1"); err != nil {
 		t.Fatal(err)
 	}
-	if got := z.names(t); len(got) != 2 {
+	if got := z.names(t); len(got) != 1 {
 		t.Fatalf("names = %v", got)
 	}
 	gone := false
@@ -277,13 +215,11 @@ func TestDeleteCheckpoint_復元元の線が依存するものは見えなくし
 		t.Error("the deleted checkpoint should wait under another name")
 	}
 	if z.sim.ds[history+"/0"] == nil {
-		t.Fatal("the old line is still needed for c2 and the automatic checkpoint")
+		t.Fatal("the old line is still needed for c2")
 	}
 
-	for _, n := range []string{"c2", auto} {
-		if err := z.svc.DeleteCheckpoint(ctx, name("x"), n); err != nil {
-			t.Fatal(err)
-		}
+	if err := z.svc.DeleteCheckpoint(ctx, name("x"), "c2"); err != nil {
+		t.Fatal(err)
 	}
 	// No checkpoint left on the old line: it and the waiting c1 are destroyed.
 	if _, ok := z.sim.ds[history+"/0"]; ok {
@@ -308,11 +244,8 @@ func TestRestoreCheckpoint_空になった旧線は復元の最後に片付く(t
 	z.sim.write(live, "v1")
 	z.checkpoint(t, "c1")
 	z.restore(t, "c1")
-	// The automatic checkpoint is on the old line, so the line stays; delete it
-	// and the line is garbage.
-	if err := z.svc.DeleteCheckpoint(ctx, name("x"), z.autoName(t)); err != nil {
-		t.Fatal(err)
-	}
+	// Nothing is left on the old line (c1 now belongs to the restored data), so
+	// the restore itself clears it away.
 	for _, n := range z.sim.names() {
 		if strings.HasPrefix(n, history) {
 			t.Errorf("%s is left", n)
@@ -321,7 +254,7 @@ func TestRestoreCheckpoint_空になった旧線は復元の最後に片付く(t
 }
 
 func TestRestoreCheckpoint_スワップ前の失敗は何も変えずに戻す(t *testing.T) {
-	for _, failOn := range []string{"zfs clone", "zfs snapshot", "zfs set canmount=off"} {
+	for _, failOn := range []string{"zfs clone", "zfs set canmount=off"} {
 		t.Run(failOn, func(t *testing.T) {
 			z := newZEnv(t)
 			z.history(t)
@@ -500,25 +433,4 @@ type stuckSnapshots struct{ *zsim }
 
 func (stuckSnapshots) DestroySnapshot(context.Context, domain.Snapshot) error {
 	return errors.New("dataset is busy")
-}
-
-func TestRestoreCheckpoint_古い自動チェックポイントを消せなくても復元は成功する(t *testing.T) {
-	z := newZEnv(t)
-	z.history(t)
-	var logged []string
-	z.svc.Logf = func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }
-	for i := 0; i < 5; i++ {
-		z.restore(t, []string{"c1", "c2"}[i%2])
-	}
-	z.svc.Storage = stuckSnapshots{z.sim}
-	z.restore(t, "c1") // a sixth automatic checkpoint that cannot be rotated out
-	if got := len(z.names(t)); got != 8 {
-		t.Errorf("names = %v", z.names(t))
-	}
-	if len(logged) == 0 || !strings.Contains(strings.Join(logged, "\n"), "old automatic checkpoint") {
-		t.Errorf("log = %v", logged)
-	}
-	if b, _ := z.store.GetBranch(ctx, name("x")); b.Status != domain.BranchReady {
-		t.Errorf("status = %s", b.Status)
-	}
 }

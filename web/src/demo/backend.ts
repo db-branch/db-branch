@@ -69,7 +69,7 @@ type Route = { method: string; re: RegExp; access: Access; run: (c: Ctx) => Repl
 
 const ok = (body?: unknown, status = 200): Reply => ({ status, body });
 const fail = (status: number, code: string, message: string): Reply => ({ status, body: { error: { code, message } } });
-// Automatic (before-restore) checkpoints kept per branch (domain.MaxAutoCheckpoints).
+// Automatic checkpoints (taken before an upgrade) kept per branch (domain.MaxAutoCheckpoints).
 const MAX_AUTO_CHECKPOINTS = 5;
 
 const notFound = (what: string) => fail(404, "not_found", `${what} not found`);
@@ -186,7 +186,7 @@ export class DemoBackend {
       case "branch.restore": {
         const b = s.branches.find((x) => x.name === fx.name);
         if (!b) return;
-        this.finishRestore(b, fx.checkpoint, now);
+        this.finishRestore(b, fx.checkpoint);
         this.emit("branch.updated", { name: b.name });
         return;
       }
@@ -485,7 +485,7 @@ export class DemoBackend {
     if (st.list.some((x) => x.name === name)) return fail(409, "already_exists", `checkpoint ${name} of branch ${b.name}: already exists`);
     const max = this.maxCheckpoints();
     const own = st.list.filter((x) => !x.auto).length;
-    if (own >= max) return fail(409, "conflict", `conflict: branch ${b.name} has ${own} checkpoints of its own (limit ${max}, automatic before-restore checkpoints not counted); delete one first or raise the branch.max_checkpoints setting`);
+    if (own >= max) return fail(409, "conflict", `conflict: branch ${b.name} has ${own} checkpoints of its own (limit ${max}, automatic checkpoints not counted); delete one first or raise the branch.max_checkpoints setting`);
     const cp: Checkpoint = { name, created_at: new Date().toISOString(), size: 96 * 1024 + (this.state.seq++ % 9) * 64 * 1024, line: st.line, auto: false, current: true };
     st.list.forEach((x) => (x.current = false));
     st.list.push(cp);
@@ -549,23 +549,16 @@ export class DemoBackend {
     b.operation = null;
   }
 
-  // finishRestore saves the state the branch leaves as an automatic
-  // checkpoint, starts a new line and marks the restored checkpoint current.
-  private finishRestore(b: Branch, checkpoint: string, now: number) {
+  // finishRestore starts a new line and marks the restored checkpoint current.
+  // The state the branch leaves is not saved: the person saves a checkpoint first.
+  private finishRestore(b: Branch, checkpoint: string) {
     const st = this.checkpointsOf(b.name);
     const lines = this.linesOf(st);
-    let auto = `before-restore-${this.checkpointStamp(now)}`;
-    for (let i = 2; st.list.some((x) => x.name === auto); i++) auto = `before-restore-${this.checkpointStamp(now)}-${i}`;
     st.list.forEach((x) => (x.current = false));
-    st.list.push({ name: auto, created_at: new Date(now).toISOString(), size: 128 * 1024 + (this.state.seq++ % 5) * 96 * 1024, line: st.line, auto: true, current: false });
     st.line = Math.max(st.line, ...st.list.map((x) => x.line), ...lines.map((l) => l.line)) + 1;
     const from = st.list.find((x) => x.name === checkpoint);
     st.lines = [...lines, { line: st.line, parent: from ? from.line : 0, from: from ? checkpoint : "reset" }];
     if (from) from.current = true;
-    // Only the newest MAX_AUTO_CHECKPOINTS automatic ones are kept: the oldest goes.
-    const autos = st.list.filter((x) => x.auto).sort((a, c) => Date.parse(a.created_at) - Date.parse(c.created_at) || (a.name < c.name ? -1 : 1));
-    const drop = new Set(autos.slice(0, Math.max(0, autos.length - MAX_AUTO_CHECKPOINTS)).map((x) => x.name));
-    st.list = st.list.filter((x) => !drop.has(x.name));
     b.status = "ready";
     b.operation = null;
   }

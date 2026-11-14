@@ -78,7 +78,7 @@ func main() {
 |---|---|
 | `ext.ServerOptioner`（`Module.ServerOptioner`） | ブランチのサーバーの設定ファイルに行を足す。`ServerOptions(ctx, ServerBranch) (ServerOptions{Config []string}, error)`。agent がブランチのサーバー設定を書くたび（作成・再作成・再起動・復元）に呼ぶ。MySQL は `my.cnf` の `[mysqld]` に足す。PostgreSQL は未対応（無視） |
 | `ext.RestoreFinisher`（`Module.RestoreFinisher`） | 復元（チェックポイントの復元・リセット）の直後、サーバーが**保守モード**（`skip-networking`。誰も接続できない）で動いている間に呼ぶ。`AfterRestore(ctx, ServerBranch, note)`。モジュールが復元を頼んだときに渡した `note` がある復元でだけ呼ぶ。中断後はやり直すので、冪等に書く。失敗しても復元は戻さない（チェックポイントのデータのまま起動し、agent のログに残る） |
-| `ext.Host.Branches`（`ext.BranchHost`） | この**ノードの**ブランチを扱う口: `Branch` / `Branches` / `Graph`（チェックポイントと線の構造）/ `CreateCheckpoint` / `RestoreCheckpoint(name, checkpoint, note)`（完了まで待つ。`@reset` は作成時の状態。どちらも今の状態を `before-restore-…` として残す）/ `DB`（管理者としてサーバーに入る口: ソケットとクライアントツール）/ `OpenLine`・`CloseLine`（ある線、またはあるチェックポイント（`@reset` は作成時の状態）の時点のデータを**読み取り専用**でマウント）/ `StartOperation`・`ReportOperation`・`EndOperation`（モジュールの操作をコンソールや `GET /v1/operations/{id}` に出す。1 時間で閉じなければ失敗） |
+| `ext.Host.Branches`（`ext.BranchHost`） | この**ノードの**ブランチを扱う口: `Branch` / `Branches` / `Graph`（チェックポイントと線の構造）/ `CreateCheckpoint` / `RestoreCheckpoint(name, checkpoint, note)`（完了まで待つ。`@reset` は作成時の状態。どちらも今の状態を自動では保存しない（モジュールが必要なら、先に `CreateCheckpoint` で取る））/ `DB`（管理者としてサーバーに入る口: ソケットとクライアントツール）/ `OpenLine`・`CloseLine`（ある線、またはあるチェックポイント（`@reset` は作成時の状態）の時点のデータを**読み取り専用**でマウント）/ `StartOperation`・`ReportOperation`・`EndOperation`（モジュールの操作をコンソールや `GET /v1/operations/{id}` に出す。1 時間で閉じなければ失敗） |
 | `/v1/ext/<モジュール>/branches/<名前>/...` | この形のパスは、そのブランチを持つノードのモジュールに自動で転送される（`?node=` を付けなくてよい） |
 
 - `ServerBranch` はブランチ名・所有者・エンジンと版・`Record`（このブランチは記録する）・`Creating`・`Anonymous`（ログインなしで作られたブランチ。記録しない）・`Maintenance`。作成時にエラーを返すと作成が失敗する（`ErrForbidden` を包めば拒否として 403）

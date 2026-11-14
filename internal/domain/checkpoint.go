@@ -32,8 +32,9 @@ const (
 	MaxCheckpointNameLength = 40
 	// DefaultMaxCheckpoints is the default of the branch.max_checkpoints setting.
 	DefaultMaxCheckpoints = 20
-	// MaxAutoCheckpoints is how many automatic (before-restore) checkpoints a
-	// branch keeps; a restore that adds another deletes the oldest one.
+	// MaxAutoCheckpoints is how many automatic checkpoints (before-upgrade, and
+	// the before-restore ones of older versions) a branch keeps; one that adds
+	// another deletes the oldest.
 	MaxAutoCheckpoints = 5
 )
 
@@ -43,7 +44,8 @@ const (
 	// PropLine is the line number: on a checkpoint, the line it was taken on;
 	// on a dataset, the line it holds.
 	PropLine = "db-branch:line"
-	// PropAuto is "on" for checkpoints the system took (before a restore).
+	// PropAuto is "on" for checkpoints the system took (before an upgrade, or
+	// before a restore in older versions).
 	PropAuto = "db-branch:auto"
 	// PropHead (on the live dataset) names the checkpoint the current state descends from.
 	PropHead = "db-branch:head"
@@ -222,7 +224,7 @@ var ErrCheckpointsUnavailable = fmt.Errorf("%w: checkpoints are not available on
 // already. The automatic checkpoints taken before a restore are not counted.
 func CheckLimit(branch string, manual, max int) error {
 	if manual >= max {
-		return fmt.Errorf("%w: branch %s has %d checkpoints of its own (limit %d, automatic before-restore checkpoints not counted); delete one first or raise the branch.max_checkpoints setting", ErrConflict, branch, manual, max)
+		return fmt.Errorf("%w: branch %s has %d checkpoints of its own (limit %d, automatic checkpoints not counted); delete one first or raise the branch.max_checkpoints setting", ErrConflict, branch, manual, max)
 	}
 	return nil
 }

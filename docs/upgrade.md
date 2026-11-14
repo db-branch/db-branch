@@ -33,7 +33,7 @@ OSS（Apache-2.0）の機能で、有償モジュールは要らない。
 
 1. 検証して、Branch を `upgrading` にする
 2. **事前確認**（サーバーは動いたまま。変更しない）。指摘は `{level: error|warning|info, code, message}` の一覧で返る。`error` があれば止まる（`--force` で進める）
-3. サーバーを**きれいに停止**する（MySQL は `innodb_fast_shutdown=0`）。次に自動の Checkpoint `before-upgrade-<時刻>` を取る。これは古いランタイムを記録し、`before-restore-*` と同じ種類・同じ保持（新しい 5 件）で、`branch.max_checkpoints` に数えない
+3. サーバーを**きれいに停止**する（MySQL は `innodb_fast_shutdown=0`）。次に自動の Checkpoint `before-upgrade-<時刻>` を取る。これは古いランタイムを記録する自動の Checkpoint で、新しい 5 件を残し、`branch.max_checkpoints` に数えない
 4. Branch のランタイムを切り替え、**新しいバイナリで起動**する。MySQL 8.0.16 以降は起動時にデータ辞書とシステムテーブルを自分で更新する（`upgrade=AUTO`）。待つ上限は 15 分
 5. 起動中にエラーログへ出た警告・エラー・アップグレードの進行を集めて結果に入れる
 6. 失敗したら（起動しない、アップグレードのエラー、時間切れ）**自動で Checkpoint を復元して古いランタイムで起動し直す**。結果にエラーログの抜粋が残る。`--no-rollback` なら失敗したまま残す（状態 `failed`。Checkpoint を復元するか Branch を削除する）

@@ -132,7 +132,7 @@ func TestUpgradeBranch_自動チェックポイントは上限に数えず他と
 	z := newUEnv(t)
 	z.max = 1
 	z.checkpoint(t, "mine")
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 7; i++ {
 		if _, err := z.upgrade(t, dbbranch.UpgradeRequest{}); err != nil {
 			t.Fatal(err)
 		}

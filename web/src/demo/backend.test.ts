@@ -519,10 +519,9 @@ describe("checkpoints", () => {
     settle(800); // PostgreSQL: about 0.7 s
     expect(branch("migration-test")!.status).toBe("ready");
     expect(op((r.body as Operation).id).state).toBe("succeeded");
-    expect(names("migration-test")).toEqual(["before-migration", "after-schema-change", "before-restore-20261112-030000"]);
+    expect(names("migration-test")).toEqual(["before-migration", "after-schema-change"]);
     const cur = list("migration-test").filter((c) => c.current);
     expect(cur.map((c) => c.name)).toEqual(["before-migration"]);
-    expect(list("migration-test")[2]).toMatchObject({ auto: true, line: 0 });
     // New checkpoints are on a new line.
     expect((call("POST", "/v1/branches/migration-test/checkpoints", { name: "later" }).body as Checkpoint).line).toBe(1);
   });
@@ -538,41 +537,26 @@ describe("checkpoints", () => {
     call("POST", "/v1/branches/report-fix/checkpoints/c2/restore");
     settle();
     expect(list("report-fix").find((c) => c.current)!.name).toBe("c2");
-    const auto = list("report-fix").filter((c) => c.auto);
-    expect(auto).toHaveLength(2);
+    expect(list("report-fix").filter((c) => c.auto)).toHaveLength(0); // a restore saves nothing by itself
     vi.setSystemTime(Date.now() + 5000);
-    call("POST", `/v1/branches/report-fix/checkpoints/${auto[0].name}/restore`);
+    call("POST", "/v1/branches/report-fix/checkpoints/c1/restore");
     settle();
-    expect(names("report-fix")).toHaveLength(5);
-    expect(list("report-fix").find((c) => c.current)!.name).toBe(auto[0].name);
+    expect(names("report-fix")).toEqual(["c1", "c2"]);
+    expect(list("report-fix").find((c) => c.current)!.name).toBe("c1");
   });
   it("answers 404 for an unknown checkpoint and 400 for a bad name", () => {
     expect(call("POST", "/v1/branches/migration-test/checkpoints/nope/restore").status).toBe(404);
     expect(call("POST", "/v1/branches/migration-test/checkpoints/Bad%20Name/restore").status).toBe(400);
   });
-  it("never refuses a restore for the checkpoint limit, and the automatic ones do not count toward it", () => {
+  it("never refuses a restore for the checkpoint limit", () => {
     call("PUT", "/v1/settings/core", { values: { "branch.max_checkpoints": "2" } }); // migration-test holds two of its own
     expect(call("POST", "/v1/branches/migration-test/checkpoints/before-migration/restore").status).toBe(202);
     settle(800);
     expect(branch("migration-test")!.status).toBe("ready");
-    expect(names("migration-test")).toHaveLength(3);
+    expect(names("migration-test")).toHaveLength(2);
     expect(call("POST", "/v1/branches/migration-test/checkpoints", { name: "third" }).status).toBe(409); // two of its own
     call("DELETE", "/v1/branches/migration-test/checkpoints/after-schema-change");
-    expect(call("POST", "/v1/branches/migration-test/checkpoints", { name: "third" }).status).toBe(201); // the automatic one is not counted
-  });
-  it("keeps the newest five automatic checkpoints, deleting the oldest when a restore adds a sixth", () => {
-    const autos = () => list("migration-test").filter((c) => c.auto).map((c) => c.name);
-    const seen: string[] = [];
-    for (let i = 0; i < 7; i++) {
-      vi.setSystemTime(Date.now() + 5000);
-      expect(call("POST", `/v1/branches/migration-test/checkpoints/${i % 2 ? "after-schema-change" : "before-migration"}/restore`).status).toBe(202);
-      settle(800);
-      for (const n of autos()) if (!seen.includes(n)) seen.push(n);
-      expect(autos().length).toBeLessThanOrEqual(5);
-    }
-    expect(seen).toHaveLength(7);
-    expect(autos()).toEqual(seen.slice(2));
-    expect(names("migration-test")).toEqual(expect.arrayContaining(["before-migration", "after-schema-change"]));
+    expect(call("POST", "/v1/branches/migration-test/checkpoints", { name: "third" }).status).toBe(201);
   });
   it("deletes one without touching the others", () => {
     expect(call("DELETE", "/v1/branches/migration-test/checkpoints/before-migration").status).toBe(204);
@@ -642,8 +626,9 @@ describe("history graph and module", () => {
     settle(2000);
     expect(events("alex-orders-report").status).toBe(404);
   });
-  it("restores to a transaction: the checkpoint before it, a new line from it, and the old state kept", () => {
+  it("restores to a transaction: the checkpoint before it and a new line from it; the state it leaves is not saved", () => {
     const tx = (events("alex-orders-report", "?line=2&limit=1").body as any).items[0];
+    const autosBefore = graph("alex-orders-report").items.filter((c) => c.auto).length;
     const r = call("POST", "/v1/ext/history/branches/alex-orders-report/restore", { line: 2, gtid: tx.gtid });
     expect(r.status).toBe(202);
     expect((r.body as Operation).kind).toBe("history.restore");
@@ -653,7 +638,7 @@ describe("history graph and module", () => {
     expect(branch("alex-orders-report")!.status).toBe("ready");
     expect(g.live).toBe(3);
     expect(g.lines.find((l) => l.line === 3)).toMatchObject({ parent: 2, from: "fixed-totals", live: true });
-    expect(g.items.some((c) => c.auto && c.line === 2)).toBe(true);
+    expect(g.items.filter((c) => c.auto)).toHaveLength(autosBefore); // none was added
   });
   it("restores to a transaction before the line's first checkpoint from the creation state", () => {
     const first = (events("alex-orders-report", "?line=0&limit=500").body as any).items.at(-1);

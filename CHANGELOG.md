@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- **A restore no longer saves the current state automatically.** Restoring a checkpoint (`POST /v1/branches/{name}/checkpoints/{checkpoint}/restore`, `branch restore`, MCP `restore_checkpoint`, and a module's restore through the core) replaces the branch's current state and takes no `before-restore-<time>` checkpoint any more; the work after the last checkpoint is gone unless the person saved a checkpoint first. Every checkpoint taken so far stays and can be restored as often as before, `before-upgrade-<time>` is unchanged, and `before-restore-*` checkpoints made by older versions stay (listed, restorable, deletable) and are still not counted toward `branch.max_checkpoints`. The product only nudges: the console's restore confirmation (checkpoint and recorded transaction, also inside the Expand modal) says the state is replaced and not saved and has a **Save a checkpoint first** button; `db-branch branch restore` prints one note on standard error before it starts (no question, exit status unchanged); the MCP instructions and the `restore_checkpoint` description tell the agent to call `create_checkpoint` first. The operation no longer has the phase `checkpointing`. No API field and no Raft command changed. A failed restore before the swap still leaves the branch as it was, running.
+
 ### Added
 
 - Web console: an Expand button on the Checkpoints graph opens the whole Checkpoints panel (graph, selected node and its actions, save, list, confirmations, messages) in a modal. It shares its state with the panel on the page, locks page scroll, traps focus, closes with Esc, Close or a click outside, and is full screen on a phone.

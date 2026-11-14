@@ -87,8 +87,7 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
       .finally(() => setWorking(false));
   };
 
-  const save = (e: FormEvent) => {
-    e.preventDefault();
+  const saveNow = () => {
     if (problem || saveWhy) return;
     const label = name.trim();
     setWarning("");
@@ -96,6 +95,10 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
       api.createCheckpoint(b.name, label || undefined).then((cp) => setWarning(spaceWarning(cp))),
       label ? t(savedLabel(label)) : t("Saved checkpoint"),
     ).then(() => setName(""));
+  };
+  const save = (e: FormEvent) => {
+    e.preventDefault();
+    saveNow();
   };
 
   const rows = graph ? newestFirst(graph.items) : [];
@@ -119,6 +122,8 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
     deleteWhy,
     txRestoreWhy: !allow("ext.history.write") ? noRole : !ready ? t("Available once it is ready.") : undefined,
     save,
+    // saveFirst: the button of a restore confirmation, which saves a checkpoint (named as typed in the form, or by time).
+    saveFirst: saveNow,
     selected,
     select: (n: GNode) => (setSelected(n), setAsking(null), setAskingTx(false)),
     asking,
@@ -147,7 +152,7 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
 export type Panel = ReturnType<typeof usePanel>;
 
 // CheckpointPanel: save the branch's state, see the saved states, go back to
-// one or delete it. Restoring loses nothing, and the panel says so before it
+// one or delete it. A restore saves nothing by itself, and the panel says so before it
 // asks to confirm. allow tells which actions the signed-in person may do. The
 // graph has an Expand button that opens the whole panel in a modal.
 export function CheckpointPanel(props: { branch: Branch; ready: boolean; allow: (action: string) => boolean; onChange?: () => void }) {
@@ -185,7 +190,7 @@ export function PanelBody({ p, modal, onExpand, expandRef }: { p: Panel; modal?:
   return (
     <>
       {!modal && <h3 className="cps-title">Checkpoints</h3>}
-      <p className="muted small">{t("Save the state of this Branch before risky work. Restoring one loses nothing.")}</p>
+      <p className="muted small">{t("Save the state of this Branch before risky work. A restore replaces the current state and saves nothing.")}</p>
       <form className="cps-save" onSubmit={p.save}>
         <input
           className="mono"
@@ -247,6 +252,7 @@ export function PanelBody({ p, modal, onExpand, expandRef }: { p: Panel; modal?:
                   branch={b.name}
                   onAsk={p.setAskingTx}
                   onRestore={() => p.restoreTx(selected.line, selected.tx!.gtid)}
+                  saveFirst={{ onSave: p.saveFirst, why: p.saveWhy }}
                 />
               ) : selected.kind === "checkpoint" && selected.checkpoint ? (
                 <CheckpointDetail
@@ -258,6 +264,7 @@ export function PanelBody({ p, modal, onExpand, expandRef }: { p: Panel; modal?:
                   why={p.restoreWhy}
                   onAsk={(on) => p.setAsking(on ? { what: "restore", name: selected.checkpoint!.name, from: "graph" } : null)}
                   onRestore={() => p.restoreCheckpoint(selected.checkpoint!.name)}
+                  saveFirst={{ onSave: p.saveFirst, why: p.saveWhy }}
                 />
               ) : (
                 <p className="small">{t("The branch's creation state. Reset returns here.")}</p>
@@ -291,13 +298,18 @@ export function PanelBody({ p, modal, onExpand, expandRef }: { p: Panel; modal?:
                 <div className="confirm" role="group" aria-label={asking.what === "restore" ? `Restore ${c.name}` : `Delete ${c.name}`} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), p.setAsking(null))}>
                   <span role="alert">
                     {asking.what === "restore"
-                      ? t("Restore {name} to {checkpoint}? Nothing is lost: the current state is saved first as a before-restore checkpoint (the newest five are kept), and every other checkpoint stays.", { name: b.name, checkpoint: c.name })
+                      ? t("Restore {name} to {checkpoint}? The current state of {name} is replaced and is not saved. Save a checkpoint first if you may need it. Every checkpoint you already have stays.", { name: b.name, checkpoint: c.name })
                       : t("Delete checkpoint {checkpoint}? The other checkpoints are not affected.", { checkpoint: c.name })}
                   </span>
                   <span className="confirm-buttons">
                     <button type="button" autoFocus onClick={() => p.setAsking(null)}>
                       {t("Cancel")}
                     </button>
+                    {asking.what === "restore" && (
+                      <button type="button" disabled={p.working || !!p.saveWhy} title={p.saveWhy} onClick={p.saveFirst}>
+                        Save a checkpoint first
+                      </button>
+                    )}
                     <button
                       type="button"
                       className={asking.what === "delete" ? "danger-button" : "primary"}
@@ -310,7 +322,7 @@ export function PanelBody({ p, modal, onExpand, expandRef }: { p: Panel; modal?:
                 </div>
               ) : (
                 <span className="cp-actions">
-                  <button type="button" disabled={!!p.restoreWhy || working} title={p.restoreWhy ?? t("Go back to this state; nothing is lost")} onClick={() => p.setAsking({ what: "restore", name: c.name, from: "list" })}>
+                  <button type="button" disabled={!!p.restoreWhy || working} title={p.restoreWhy ?? t("Go back to this state")} onClick={() => p.setAsking({ what: "restore", name: c.name, from: "list" })}>
                     Restore
                   </button>
                   <button type="button" className="text-button danger" disabled={!!p.deleteWhy || working} title={p.deleteWhy} onClick={() => p.setAsking({ what: "delete", name: c.name, from: "list" })}>
@@ -327,7 +339,7 @@ export function PanelBody({ p, modal, onExpand, expandRef }: { p: Panel; modal?:
 }
 
 // The confirmation of a restore: what it does, in a sentence, before it is done.
-function Confirm({ label, text, action, danger, working, onCancel, onConfirm }: { label: string; text: string; action: string; danger?: boolean; working: boolean; onCancel: () => void; onConfirm: () => void }) {
+function Confirm({ label, text, action, danger, working, onCancel, onConfirm, saveFirst }: { label: string; text: string; action: string; danger?: boolean; working: boolean; onCancel: () => void; onConfirm: () => void; saveFirst?: { onSave: () => void; why?: string } }) {
   return (
     <div className="confirm" role="group" aria-label={label} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), onCancel())}>
       <span role="alert">{text}</span>
@@ -335,6 +347,11 @@ function Confirm({ label, text, action, danger, working, onCancel, onConfirm }: 
         <button type="button" autoFocus onClick={onCancel}>
           {t("Cancel")}
         </button>
+        {saveFirst && (
+          <button type="button" disabled={working || !!saveFirst.why} title={saveFirst.why} onClick={saveFirst.onSave}>
+            Save a checkpoint first
+          </button>
+        )}
         <button type="button" className={danger ? "danger-button" : "primary"} disabled={working} onClick={onConfirm}>
           {action}
         </button>
@@ -343,7 +360,7 @@ function Confirm({ label, text, action, danger, working, onCancel, onConfirm }: 
   );
 }
 
-function CheckpointDetail({ c, line, branch, asking, working, why, onAsk, onRestore }: { c: import("../api").Checkpoint; line: number; branch: string; asking: boolean; working: boolean; why?: string; onAsk: (on: boolean) => void; onRestore: () => void }) {
+function CheckpointDetail({ c, line, branch, asking, working, why, onAsk, onRestore, saveFirst }: { c: import("../api").Checkpoint; line: number; branch: string; asking: boolean; working: boolean; why?: string; onAsk: (on: boolean) => void; onRestore: () => void; saveFirst: { onSave: () => void; why?: string } }) {
   return (
     <div className="hg-detail-body">
       <div className="cp-main">
@@ -362,14 +379,15 @@ function CheckpointDetail({ c, line, branch, asking, working, why, onAsk, onRest
       {asking ? (
         <Confirm
           label={`Restore ${c.name}`}
-          text={t("Restore {name} to {checkpoint}? Nothing is lost: the current state is saved first as a before-restore checkpoint (the newest five are kept), and every other checkpoint stays.", { name: branch, checkpoint: c.name })}
+          text={t("Restore {name} to {checkpoint}? The current state of {name} is replaced and is not saved. Save a checkpoint first if you may need it. Every checkpoint you already have stays.", { name: branch, checkpoint: c.name })}
           action="Confirm restore"
           working={working}
           onCancel={() => onAsk(false)}
           onConfirm={onRestore}
+          saveFirst={saveFirst}
         />
       ) : (
-        <button type="button" disabled={!!why || working} title={why ?? t("Go back to this state; nothing is lost")} onClick={() => onAsk(true)}>
+        <button type="button" disabled={!!why || working} title={why ?? t("Go back to this state")} onClick={() => onAsk(true)}>
           Restore
         </button>
       )}
@@ -377,7 +395,7 @@ function CheckpointDetail({ c, line, branch, asking, working, why, onAsk, onRest
   );
 }
 
-function TxDetail({ tx, line, branch, asking, working, why, onAsk, onRestore }: { tx: HistoryTx; line: number; branch: string; asking: boolean; working: boolean; why?: string; onAsk: (on: boolean) => void; onRestore: () => void }) {
+function TxDetail({ tx, line, branch, asking, working, why, onAsk, onRestore, saveFirst }: { tx: HistoryTx; line: number; branch: string; asking: boolean; working: boolean; why?: string; onAsk: (on: boolean) => void; onRestore: () => void; saveFirst: { onSave: () => void; why?: string } }) {
   return (
     <div className="hg-detail-body">
       <div className="cp-main">
@@ -401,14 +419,15 @@ function TxDetail({ tx, line, branch, asking, working, why, onAsk, onRestore }: 
       {asking ? (
         <Confirm
           label="Restore to here"
-          text={t("Restore {name} to just after this transaction? Nothing is lost: the branch continues on a new line, the current state is saved first as a before-restore checkpoint, and every checkpoint stays.", { name: branch })}
+          text={t("Restore {name} to just after this transaction? The branch continues on a new line. The current state of {name} is replaced and is not saved: save a checkpoint first if you may need it. Every checkpoint you already have stays.", { name: branch })}
           action="Confirm restore"
           working={working}
           onCancel={() => onAsk(false)}
           onConfirm={onRestore}
+          saveFirst={saveFirst}
         />
       ) : (
-        <button type="button" disabled={!!why || working} title={why ?? t("Go back to just after this transaction; nothing is lost")} onClick={() => onAsk(true)}>
+        <button type="button" disabled={!!why || working} title={why ?? t("Go back to just after this transaction")} onClick={() => onAsk(true)}>
           Restore to here
         </button>
       )}
