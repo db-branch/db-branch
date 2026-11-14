@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { api, Branch } from "../api";
 import { t } from "../lib/i18n";
-import { canForce, countLevel, Finding, installHint, PHASES, resultTone, stepReducer, UpgradeResult, upgradeTargets } from "../lib/upgrade";
+import { canForce, countLevel, Finding, installHint, PHASES, resultTone, stepReducer, UpgradeResult, upgradeChoices } from "../lib/upgrade";
 import { ErrorLine } from "./ui";
 
 const POLL_MS = 1000;
@@ -73,6 +73,7 @@ export function UpgradeResultView({ result: r }: { result: UpgradeResult }) {
 export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready: boolean; allow: (action: string) => boolean; onChange: () => void }) {
   const [step, dispatch] = useReducer(stepReducer, { kind: "closed" });
   const [installed, setInstalled] = useState<string[] | null>(null);
+  const [available, setAvailable] = useState<string[]>([]);
   const [target, setTarget] = useState("");
   const [error, setError] = useState<string | null>(null);
   const alive = useRef(true);
@@ -84,12 +85,17 @@ export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Br
 
   useEffect(() => {
     if (step.kind !== "choose" || installed) return;
+    // The catalog is what could be installed; without it the panel still lists what is installed.
+    api.availableRuntimes().then(
+      (rs) => alive.current && setAvailable(rs.map((r) => r.runtime)),
+      () => undefined,
+    );
     api.runtimes().then(
       (rs) => alive.current && setInstalled(rs.map((r) => r.runtime)),
       (e: Error) => alive.current && setError(e.message),
     );
   }, [step.kind, installed]);
-  const targets = installed ? upgradeTargets(b.runtime, installed) : [];
+  const { targets, toInstall } = installed ? upgradeChoices(b.runtime, installed, available) : { targets: [], toInstall: [] };
   useEffect(() => {
     if (!targets.includes(target)) setTarget(targets[targets.length - 1] ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -131,11 +137,7 @@ export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Br
       {step.kind === "choose" && (
         <div className="upgrade-box" role="group" aria-label={t("Upgrade {name}", { name: b.name })} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), dispatch({ type: "close" }))}>
           {!installed && !error && <p className="muted small">{t("Looking for installed versions…")}</p>}
-          {installed && targets.length === 0 && (
-            <p className="small">
-              {t("No newer version that {runtime} can move to is installed on this node. Install one with:", { runtime: b.runtime })} <code className="mono">{installHint(b.runtime.split("@")[0] + "@<version>")}</code>
-            </p>
-          )}
+          {installed && <NotInstalled runtime={b.runtime} targets={targets} toInstall={toInstall} />}
           {targets.length > 0 && (
             <>
               <label className="field-label" htmlFor={`up-${b.name}`}>
@@ -206,5 +208,25 @@ export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Br
       )}
       <ErrorLine error={error} />
     </span>
+  );
+}
+
+// NotInstalled says which runtimes the branch could move to that are not installed
+// on this node yet, with the command that installs each, or that there is none.
+export function NotInstalled({ runtime, targets, toInstall }: { runtime: string; targets: string[]; toInstall: string[] }) {
+  if (toInstall.length === 0) {
+    return targets.length === 0 ? <p className="small">{t("No version newer than {runtime} can be reached in one step.", { runtime })}</p> : null;
+  }
+  return (
+    <div className="small upgrade-install">
+      <p>{targets.length === 0 ? t("None of the versions {runtime} can move to is installed on this node. Install one with:", { runtime }) : t("Can also be installed:")}</p>
+      <ul>
+        {toInstall.map((r) => (
+          <li key={r}>
+            <code className="mono">{installHint(r)}</code>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

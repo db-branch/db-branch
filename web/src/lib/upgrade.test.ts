@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canForce, countLevel, installHint, isUpgraded, resultTone, stepReducer, upgradeProblem, upgradeTargets, type Step, type UpgradeResult } from "./upgrade";
+import { canForce, countLevel, installHint, isUpgraded, resultTone, stepReducer, upgradeChoices, upgradeProblem, upgradeTargets, type Step, type UpgradeResult } from "./upgrade";
 
 const result = (over: Partial<UpgradeResult> = {}): UpgradeResult => ({ branch: "x", from: "mysql@8.0.46", to: "mysql@8.4.13", status: "upgraded", check_only: false, pre_check: [], log: [], ...over });
 
@@ -16,7 +16,15 @@ describe("which runtimes a Branch may move to (the server's rules)", () => {
     expect(upgradeProblem("mysql@8.4.13", "mysql@8.0.46")).toContain("Downgrades");
     expect(upgradeProblem("mysql@8.4.13", "mysql@8.4.13")).toContain("already");
     expect(upgradeProblem("mysql@8.4.13", "postgres@18.6")).toContain("one engine");
-    expect(upgradeProblem("mysql@5.7.44", "mysql@8.0.46")).toContain("8.0");
+    expect(upgradeProblem("mysql@5.5.62", "mysql@5.7.44")).toContain("start from MySQL 5.6");
+  });
+  it("allows 5.6 to 5.7 and 5.7 to 8.0, and never skips a series (5.7 is one)", () => {
+    expect(upgradeProblem("mysql@5.6.51", "mysql@5.7.44")).toBe("");
+    expect(upgradeProblem("mysql@5.7.44", "mysql@8.0.46")).toBe("");
+    expect(upgradeProblem("mysql@5.7.30", "mysql@5.7.44")).toBe("");
+    expect(upgradeProblem("mysql@5.6.51", "mysql@8.0.46")).toContain("5.7");
+    expect(upgradeProblem("mysql@5.7.44", "mysql@8.4.13")).toContain("8.0");
+    expect(upgradeProblem("mysql@8.0.46", "mysql@5.7.44")).toContain("Downgrades");
   });
   it("refuses a PostgreSQL major upgrade", () => {
     expect(upgradeProblem("postgres@17.11", "postgres@18.6")).toContain("not supported yet");
@@ -80,5 +88,25 @@ describe("the steps of the dialog", () => {
     const choose: Step = { kind: "choose" };
     expect(stepReducer(choose, { type: "open" })).toBe(choose);
     expect(stepReducer(choose, { type: "run", target: "x", checkOnly: true })).toMatchObject({ kind: "running", checkOnly: true });
+  });
+});
+
+describe("upgradeChoices", () => {
+  const available = ["mysql@9.6.0", "mysql@8.4.13", "mysql@8.0.46", "mysql@5.7.44", "mysql@5.6.51", "postgres@18.6"];
+  it("separates the targets that are installed from the ones that could be installed, oldest first", () => {
+    const c = upgradeChoices("mysql@5.7.44", ["mysql@5.7.44", "mysql@8.4.13", "postgres@18.6"], available);
+    expect(c.targets).toEqual([]); // 8.4 is installed but cannot be reached from 5.7
+    expect(c.toInstall).toEqual(["mysql@8.0.46"]);
+  });
+  it("offers an installed target and lists the next ones to install behind it", () => {
+    const c = upgradeChoices("mysql@5.6.51", ["mysql@5.6.51", "mysql@5.7.44"], available);
+    expect(c.targets).toEqual(["mysql@5.7.44"]);
+    expect(c.toInstall).toEqual([]); // 8.0 would skip 5.7
+  });
+  it("lists a target once, even when it is both installed and in the catalog, and ignores other engines", () => {
+    const c = upgradeChoices("mysql@8.0.46", ["mysql@8.0.46", "mysql@8.4.13"], available);
+    expect(c.targets).toEqual(["mysql@8.4.13"]);
+    expect(c.toInstall).toEqual([]);
+    expect(upgradeChoices("mysql@9.6.0", ["mysql@9.6.0"], available)).toEqual({ targets: [], toInstall: [] });
   });
 });

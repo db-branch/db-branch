@@ -34,8 +34,9 @@ function cmp(a: Version, b: Version): number {
   return 0;
 }
 
-// The long-term-support series of MySQL; an upgrade may not jump over one.
+// The series of MySQL an upgrade may not jump over (5.7 is one: 5.6 goes to 5.7 before 8.0).
 const MYSQL_LTS: Version[] = [
+  [5, 7, 0],
   [8, 0, 0],
   [8, 4, 0],
   [9, 7, 0],
@@ -53,7 +54,7 @@ export function upgradeProblem(from: string, to: string): string {
   if (c === 0) return "The branch already runs this version.";
   if (c > 0) return "Downgrades are not supported; restore a Checkpoint taken on the older version instead.";
   if (b.engine === "postgres") return cmp(pgMajor(a.v), pgMajor(b.v)) === 0 ? "" : "PostgreSQL major version upgrades are not supported yet.";
-  if (a.v[0] < 8) return "Upgrades start from MySQL 8.0.";
+  if (a.v[0] < 5 || (a.v[0] === 5 && a.v[1] < 6)) return "Upgrades start from MySQL 5.6.";
   for (const l of MYSQL_LTS) if (cmp(series(a.v), l) < 0 && cmp(l, series(b.v)) < 0) return `This would skip the long-term-support series ${l[0]}.${l[1]}.`;
   return "";
 }
@@ -63,6 +64,15 @@ export function upgradeTargets(current: string, installed: string[]): string[] {
   return installed
     .filter((r) => upgradeProblem(current, r) === "")
     .sort((x, y) => cmp(parts(x).v, parts(y).v));
+}
+
+// upgradeChoices splits the runtimes a branch could move to: the targets already
+// installed on the node, and the ones the catalog has that could be installed
+// first. Both oldest first.
+export function upgradeChoices(current: string, installed: string[], available: string[]): { targets: string[]; toInstall: string[] } {
+  const targets = upgradeTargets(current, installed);
+  const toInstall = upgradeTargets(current, available).filter((r) => !installed.includes(r));
+  return { targets, toInstall };
 }
 
 // installHint is the command that installs a runtime.

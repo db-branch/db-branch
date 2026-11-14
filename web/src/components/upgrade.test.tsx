@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Branch } from "../api";
-import { Findings, headline, UpgradePanel, UpgradeResultView } from "./upgrade";
+import { Findings, headline, NotInstalled, UpgradePanel, UpgradeResultView } from "./upgrade";
 import type { UpgradeResult } from "../lib/upgrade";
 
 const html = (node: React.ReactElement) => renderToStaticMarkup(node);
@@ -54,5 +54,23 @@ describe("the Upgrade button", () => {
     expect(panel({ allow: () => false })).toContain("Your role cannot do this.");
     expect(panel({ ready: false })).toContain("Available once it is ready.");
     expect(panel({ b: { checkpoints: false } })).toContain("own ZFS");
+  });
+});
+
+describe("NotInstalled", () => {
+  it("lists the runtimes that could be installed, each with its command, when none is installed", () => {
+    const h = renderToStaticMarkup(<NotInstalled runtime="mysql@5.7.44" targets={[]} toInstall={["mysql@8.0.46"]} />);
+    expect(h).toContain("None of the versions mysql@5.7.44 can move to is installed on this node");
+    expect(h).toContain("db-branch runtime install mysql@8.0.46");
+  });
+  it("lists them behind an installed target as well", () => {
+    const h = renderToStaticMarkup(<NotInstalled runtime="mysql@8.0.46" targets={["mysql@8.4.13"]} toInstall={["mysql@8.4.14", "mysql@8.4.15"]} />);
+    expect(h).toContain("Can also be installed:");
+    expect(h).toContain("db-branch runtime install mysql@8.4.14");
+    expect(h).toContain("db-branch runtime install mysql@8.4.15");
+  });
+  it("says there is nothing when there is neither, and says nothing when an installed target is enough", () => {
+    expect(renderToStaticMarkup(<NotInstalled runtime="mysql@9.6.0" targets={[]} toInstall={[]} />)).toContain("No version newer than mysql@9.6.0 can be reached in one step.");
+    expect(renderToStaticMarkup(<NotInstalled runtime="mysql@8.0.46" targets={["mysql@8.4.13"]} toInstall={[]} />)).toBe("");
   });
 });

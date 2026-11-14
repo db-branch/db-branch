@@ -12,6 +12,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- Web console: the Upgrade panel of a branch now follows the server's upgrade rules (5.6 to 5.7 to 8.0; it still said upgrades start from 8.0, so a 5.7 branch had no target), and it lists the runtimes the branch could move to that are not installed on the node yet, each with its `db-branch runtime install` command.
 - Web console: a lane that forked off another now starts right next to the node it forked from and its checkpoints follow one slot apart, instead of being placed where they fall in time against all the other lanes, which pushed new lines far to the right.
 - Web console: the branch drawn for a restore from the middle of a line now leaves its lane at a steep, nearly right angle and then runs straight (dashed) along the new lane, instead of a long curve.
 - Web console: recorded transactions made less than a second apart (for example the rows of one save) are drawn as one group in the Checkpoints graph, with a count, instead of several dots on top of each other. Selecting the group lists its transactions in time order as a table, and each row can be chosen to restore to (a single Restore to #N button below the table). A DDL statement or a checkpoint ends a group. When a stretch between two nodes is too short for all its dots, the closest neighbours are merged into groups (a DDL statement never is) instead of overlapping or being left out; the Busy-stretches sampling is gone.
