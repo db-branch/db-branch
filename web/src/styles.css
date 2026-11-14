@@ -718,7 +718,10 @@ li.brow.skeleton { height: 56px; border-radius: 0; border-bottom: 2px solid var(
 
 /* Branch upgrade */
 .runtime-line { display: inline-flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
-.upgrade { display: inline-flex; flex-direction: column; gap: var(--s2); align-items: flex-start; }
+.upgrade { position: relative; display: inline-flex; flex-direction: column; gap: var(--s2); align-items: flex-start; }
+/* Its boxes float over the page under the button, so opening one moves nothing else. */
+.upgrade > .upgrade-box, .upgrade > .confirm { position: absolute; top: 100%; right: 0; z-index: 30; box-sizing: border-box; width: max-content; max-width: min(60ch, calc(100vw - 2 * var(--s4))); max-height: 70vh; overflow: auto; margin-top: var(--s1); padding: var(--s3); border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); }
+@media (max-width: 640px) { .upgrade > .upgrade-box, .upgrade > .confirm { right: auto; left: 0; } }
 .upgrade-box { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s3); border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); max-width: 60ch; }
 .upgrade-buttons { display: inline-flex; gap: var(--s2); flex-wrap: wrap; }
 .upgrade-headline { margin: 0; font-weight: 600; }
