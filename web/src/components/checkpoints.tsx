@@ -464,14 +464,16 @@ function GroupDetail({ group, line, branch, asking, working, why, onAsk, onResto
           </tbody>
         </table>
       </div>
-      <TxDetail tx={chosen} line={line} asking={asking} working={working} why={why} branch={branch} onAsk={onAsk} onRestore={() => onRestore(chosen.gtid)} saveFirst={saveFirst} />
+      <TxDetail brief tx={chosen} line={line} asking={asking} working={working} why={why} branch={branch} onAsk={onAsk} onRestore={() => onRestore(chosen.gtid)} saveFirst={saveFirst} />
     </div>
   );
 }
 
-function TxDetail({ tx, line, branch, asking, working, why, onAsk, onRestore, saveFirst }: { tx: HistoryTx; line: number; branch: string; asking: boolean; working: boolean; why?: string; onAsk: (on: boolean) => void; onRestore: () => void; saveFirst: { onSave: () => void; why?: string } }) {
+function TxDetail({ tx, line, branch, asking, working, why, onAsk, onRestore, saveFirst, brief }: { brief?: boolean; tx: HistoryTx; line: number; branch: string; asking: boolean; working: boolean; why?: string; onAsk: (on: boolean) => void; onRestore: () => void; saveFirst: { onSave: () => void; why?: string } }) {
   return (
     <div className="hg-detail-body">
+      {!brief && (
+        <>
       <div className="cp-main">
         <span className="mono strong">#{txNumber(tx.gtid)}</span>
         <span className="muted small">line {line}</span>
@@ -490,6 +492,8 @@ function TxDetail({ tx, line, branch, asking, working, why, onAsk, onRestore, sa
           {tx.tables.map((x) => `${x.name} ${rowsLabel({ ...x, ddl: false })}`).join(" · ")}
         </p>
       )}
+        </>
+      )}
       {asking ? (
         <Confirm
           label="Restore to here"
@@ -502,7 +506,7 @@ function TxDetail({ tx, line, branch, asking, working, why, onAsk, onRestore, sa
         />
       ) : (
         <button type="button" disabled={!!why || working} title={why ?? t("Go back to just after this transaction")} onClick={() => onAsk(true)}>
-          Restore to here
+          {brief ? `Restore to #${txNumber(tx.gtid)}` : "Restore to here"}
         </button>
       )}
     </div>

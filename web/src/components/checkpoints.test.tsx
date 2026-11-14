@@ -121,9 +121,11 @@ describe("PanelBody in the modal", () => {
     expect(h).toMatch(/<table/);
     for (const n of [1, 2, 3]) expect(h).toContain(`insert ${n}`);
     expect(h.indexOf("insert 1")).toBeLessThan(h.indexOf("insert 3"));
-    // the last row is chosen first, and has the restore button
-    expect(h).toContain("Restore to here");
+    // the last row is chosen first; below the table is only the restore button, not the statement again
+    expect(h).toContain("Restore to #3");
     expect(h).toMatch(/aria-pressed="true"[^>]*>[^<]*#3/);
+    expect(h.match(/insert 3/g)).toHaveLength(1);
+    expect(h).not.toContain("hg-sql");
   });
   it("does not offer to save when saving is not allowed, and says why", () => {
     const h = body(panel({ selected: selectedNode("checkpoint:c1"), asking: { what: "restore", name: "c1", from: "graph" }, saveWhy: "No permission" }), true);
