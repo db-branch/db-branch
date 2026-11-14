@@ -82,6 +82,17 @@ describe("layoutGraph", () => {
     expect(a.x).toBeLessThan(b.x);
   });
 
+  it("keeps dots of transactions made within milliseconds apart from lying on top of each other", () => {
+    const burst = [1, 2, 3].map((n) => ({ ...tx(n, 5), time: new Date(Date.UTC(2026, 10, 12, 10, 5, 0, n * 40)).toISOString() }));
+    const g = layoutGraph({ lines, checkpoints: cps, head: null, events: { 0: [tx(9, 1), ...burst] } });
+    const xs = g.nodes.filter((n) => n.kind === "tx" && n.line === 0).map((n) => n.x).sort((a, b) => a - b);
+    expect(xs).toHaveLength(4);
+    for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBeGreaterThanOrEqual(12);
+    // and they stay between their neighbours: after the checkpoint before and before the one after
+    const c1 = g.nodes.find((n) => n.id === "checkpoint:c1")!.x;
+    const c2 = g.nodes.find((n) => n.id === "checkpoint:c2")!.x;
+    expect(xs.filter((x) => x > c1 && x < c2).length).toBeGreaterThanOrEqual(1);
+  });
   it("samples a stretch with too many transactions and says how many were left out", () => {
     const many = Array.from({ length: MAX_DOTS + 14 }, (_, i) => tx(i + 1, 1 + (i % 8)));
     const g = layoutGraph({ lines, checkpoints: cps, head: null, events: { 0: many } });

@@ -15,6 +15,8 @@ export const LEFT = 76;
 export const TOP = 30;
 // Most transaction dots drawn between two neighbours; a busier stretch is sampled.
 export const MAX_DOTS = 36;
+// MIN_DOT_GAP is the least distance between two transaction dots on a lane.
+export const MIN_DOT_GAP = 14;
 
 export type GNode = {
   id: string;
@@ -226,9 +228,21 @@ export function layoutGraph(input: LayoutInput): GLayout {
         const b = anchors[i + 1] ?? { x: a.x + SLOT_W * 0.6, t: a.t + 1 };
         const kept = sample(list, MAX_DOTS);
         sampled += list.length - kept.length;
-        for (const tx of kept) {
+        // Dots lie by time, but transactions made within a moment of each other
+        // (one save of several rows) would sit on top of each other: keep a
+        // minimum gap, spread evenly when the stretch is too short for it.
+        const lo = a.x + 12;
+        const hi = Math.max(lo, b.x - 12);
+        const gap = kept.length > 1 ? Math.min(MIN_DOT_GAP, (hi - lo) / (kept.length - 1)) : 0;
+        const xs = kept.map((tx) => {
           const f = b.t > a.t ? Math.min(1, Math.max(0, (ms(tx.time) - a.t) / (b.t - a.t))) : 0.5;
-          const x = a.x + 12 + (b.x - a.x - 24) * f;
+          return lo + (hi - lo) * f;
+        });
+        for (let k = 1; k < xs.length; k++) xs[k] = Math.max(xs[k], xs[k - 1] + gap);
+        if (xs.length > 0) xs[xs.length - 1] = Math.min(xs[xs.length - 1], hi);
+        for (let k = xs.length - 2; k >= 0; k--) xs[k] = Math.min(xs[k], xs[k + 1] - gap);
+        for (const [k, tx] of kept.entries()) {
+          const x = xs[k];
           nodes.push({ id: nodeId("tx", `${l.line}:${tx.gtid}`), kind: "tx", x, y, lane, line: l.line, shown, time: ms(tx.time), tx });
         }
       }

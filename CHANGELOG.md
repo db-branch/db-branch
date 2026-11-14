@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- Web console: recorded transactions made within a moment of each other (for example the several rows of one save) no longer sit on top of each other in the Checkpoints graph and look like one dot. Dots keep a minimum distance.
 - Web console: a branch that records its transactions now shows the Checkpoints graph as soon as it has a recorded transaction, also right after a reset when it has no checkpoint yet. The graph used to appear only with a checkpoint or a second line.
 
 ## [0.2.2] - 2026-11-14
