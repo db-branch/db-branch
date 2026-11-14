@@ -139,10 +139,13 @@ func (a *App) restoreCheckpoint(noWait *bool) func(*cobra.Command, []string) err
 		if err != nil {
 			return err
 		}
+		// The restore replaces the current state and saves nothing by itself: say so,
+		// and how to keep it. A note only: it asks nothing and changes no exit status.
+		fmt.Fprintf(a.Stderr, "The current state of %s is replaced and is not saved. To keep it, save a checkpoint first: db-branch branch checkpoint %s\n", n, n)
 		if err := a.start(cmd.Context(), c, "POST", checkpointPath(n, cp, "restore"), nil, *noWait); err != nil || *noWait {
 			return err
 		}
-		fmt.Fprintf(a.Stdout, "Restored %s to %s. Nothing was lost: the state it left is kept as a before-restore checkpoint (the newest five of those are kept).\n", n, cp)
+		fmt.Fprintf(a.Stdout, "Restored %s to %s.\n", n, cp)
 		return nil
 	}))
 }

@@ -85,8 +85,9 @@ type LayoutInput = {
 //     (lines numbered below N; later lines did not exist yet). Later nodes are
 //     the checkpoints (in the order of the graph: time, then name) and the
 //     recorded transactions (time) of those lines, except the automatic
-//     before-restore-* checkpoints: a restore takes one of the line it leaves,
-//     right after the restored point, so it never counts as progress. A
+//     before-restore-* checkpoints (older versions took one of the line a
+//     restore left, right after the restored point; it was never progress,
+//     and checkpoints made that way still exist). A
 //     checkpoint made by hand, by an upgrade (before-upgrade-*) or any other
 //     way counts. The creation state ("reset") is the tip only of a lane with
 //     no checkpoint and no transaction;

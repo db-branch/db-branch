@@ -67,7 +67,7 @@ func TestBranchCheckpoints_一覧を表とJSONで出す(t *testing.T) {
 	}
 }
 
-func TestBranchRestore_段階を表示して戻し何も失われないと伝える(t *testing.T) {
+func TestBranchRestore_段階を表示して戻し今の状態は保存されないと先に伝える(t *testing.T) {
 	api := newFakeAPI()
 	api.answers["POST /v1/branches/x/checkpoints/c1/restore"] = accepted("op_5", "branch.restore")
 	api.opStates = []map[string]any{
@@ -78,12 +78,17 @@ func TestBranchRestore_段階を表示して戻し何も失われないと伝え
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
-	if !strings.Contains(errOut, "stopping") || !strings.Contains(out, "Restored x to c1") || !strings.Contains(out, "before-restore") {
+	if !strings.Contains(errOut, "stopping") || !strings.Contains(out, "Restored x to c1") || strings.Contains(out, "before-restore") {
 		t.Errorf("out %q err %q", out, errOut)
 	}
-	code, out, _ = runAPI(t, api, "branch", "restore", "x", "c1", "--no-wait")
-	if code != 0 || strings.TrimSpace(out) != "op_5" {
-		t.Errorf("no-wait: %d %q", code, out)
+	// The note comes before the work, on standard error only, and says how to keep the state.
+	note := "The current state of x is replaced and is not saved. To keep it, save a checkpoint first: db-branch branch checkpoint x"
+	if !strings.Contains(errOut, note) || strings.Index(errOut, note) > strings.Index(errOut, "stopping") || strings.Contains(out, "not saved") {
+		t.Errorf("the note is missing, late or on standard output: out %q err %q", out, errOut)
+	}
+	code, out, errOut = runAPI(t, api, "branch", "restore", "x", "c1", "--no-wait")
+	if code != 0 || strings.TrimSpace(out) != "op_5" || !strings.Contains(errOut, note) {
+		t.Errorf("no-wait: %d %q %q", code, out, errOut)
 	}
 }
 
@@ -129,6 +134,14 @@ func TestCheckpoint_ストレージが対応しないときは一行で伝える
 		api := newFakeAPI()
 		api.errors[c.method+" "+c.path] = unavailable
 		code, _, errOut := runAPI(t, api, c.args...)
+		// The note a restore prints before it starts is not part of the error.
+		var kept []string
+		for _, l := range strings.Split(strings.TrimSpace(errOut), "\n") {
+			if !strings.HasPrefix(l, "The current state of") {
+				kept = append(kept, l)
+			}
+		}
+		errOut = strings.Join(kept, "\n")
 		if code == 0 || !strings.Contains(errOut, "Checkpoints are not available on this storage") || strings.Count(strings.TrimSpace(errOut), "\n") != 0 {
 			t.Errorf("%v: exit %d, stderr %q", c.args, code, errOut)
 		}
@@ -144,15 +157,5 @@ func TestBranchCheckpoint_空き容量の警告は標準エラーに出す(t *te
 	}
 	if !strings.Contains(errOut, "Warning: This branch uses more than half") {
 		t.Errorf("stderr = %q", errOut)
-	}
-}
-
-func TestBranchRestore_自動チェックポイントは新しい5件だけ残ると伝える(t *testing.T) {
-	api := newFakeAPI()
-	api.answers["POST /v1/branches/x/checkpoints/c1/restore"] = accepted("op_7", "branch.restore")
-	api.answers["GET /v1/operations/op_7"] = map[string]any{"id": "op_7", "state": "succeeded"}
-	code, out, errOut := runAPI(t, api, "branch", "restore", "x", "c1")
-	if code != 0 || !strings.Contains(out, "newest five") {
-		t.Errorf("exit %d out %q err %q", code, out, errOut)
 	}
 }

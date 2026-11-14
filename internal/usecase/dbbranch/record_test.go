@@ -114,7 +114,7 @@ func TestRestoreCheckpointWith_データを戻した直後に保守モードで�
 	if s := lastStart(z); s.Maintenance || !z.server.running["branch-x"] {
 		t.Errorf("the branch should end up in normal mode: %+v", s)
 	}
-	if got := strings.Join(phases, " "); got != "cloning stopping checkpointing swapping promoting starting replaying" {
+	if got := strings.Join(phases, " "); got != "cloning stopping swapping promoting starting replaying" {
 		t.Errorf("phases = %q", got)
 	}
 	if p, _ := z.sim.Props(ctx, history); p[domain.PropNote] != "" {
@@ -160,7 +160,7 @@ func TestRestoreCheckpointWith_クラッシュしても再起動後に保守モ�
 		z.tick()
 		_, err := z.svc.RestoreCheckpointWith(ctx, name("x"), "c1", "n", nil)
 		if err == nil {
-			if at < 20 {
+			if at < 10 {
 				t.Fatalf("at=%d: no crash happened", at)
 			}
 			if z.data() != "v1" || calls != 1 {
@@ -198,19 +198,11 @@ func TestRestoreCheckpointWith_作成時の状態を復元しても今の状態�
 	if len(calls) != 1 || z.j.has("zfs rollback tank/db-branch/branches/x@reset") || z.data() != "" {
 		t.Errorf("calls=%v data=%q journal=%v", calls, z.data(), z.j.entries)
 	}
-	auto := z.autoName(t)
-	if h := z.sim.ds[history+"/0"]; h == nil {
-		t.Fatal("the old line must be kept")
+	if h := z.sim.ds[history+"/0"]; h != nil {
+		t.Error("the old line held no checkpoint, so nothing keeps it: the restore saves nothing by itself")
 	}
 	if g, _ := z.svc.CheckpointGraph(ctx, name("x")); g.Head != "" || g.Lines[len(g.Lines)-1].From != "reset" {
 		t.Errorf("graph = %+v", g)
-	}
-	z.tick()
-	if _, err := z.svc.RestoreCheckpoint(ctx, name("x"), auto, nil); err != nil {
-		t.Fatal(err)
-	}
-	if z.data() != "v1" {
-		t.Errorf("data = %q, want the kept v1", z.data())
 	}
 }
 
@@ -248,7 +240,7 @@ func TestRestoreCheckpointWith_作成時の状態への復元はクラッシュ�
 		switch z.data() {
 		case "v3": // crashed before the swap: nothing changed
 		case "":
-			if calls < 1 || len(z.names(t)) != 3 {
+			if calls < 1 || len(z.names(t)) != 2 {
 				t.Fatalf("at=%d: calls=%d checkpoints=%v", at, calls, z.names(t))
 			}
 		default:

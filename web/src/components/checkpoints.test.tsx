@@ -32,6 +32,7 @@ function panel(over: Partial<Panel> = {}): Panel {
     deleteWhy: undefined,
     txRestoreWhy: undefined,
     save: noop,
+    saveFirst: noop,
     selected: null,
     select: noop,
     asking: null,
@@ -82,6 +83,25 @@ describe("PanelBody in the modal", () => {
     const h = body(panel({ selected: selectedNode("checkpoint:c1"), asking: { what: "restore", name: "c1", from: "graph" } }), true);
     expect(h).toContain("Confirm restore");
     expect(h).toContain('aria-label="Restore c1"');
+  });
+  it("says plainly that a restore replaces the state and saves nothing, and offers to save a checkpoint first", () => {
+    for (const asking of [{ what: "restore" as const, name: "c1", from: "graph" as const }, { what: "restore" as const, name: "c1", from: "list" as const }]) {
+      const h = body(panel({ selected: selectedNode("checkpoint:c1"), asking }), true);
+      expect(h).toContain("is replaced and is not saved");
+      expect(h).toContain("Save a checkpoint first");
+      expect(h).not.toContain("Nothing is lost");
+      expect(h).not.toContain("before-restore checkpoint (the newest");
+    }
+  });
+  it("offers the same for a restore to a recorded transaction", () => {
+    const g = layoutGraph({ lines, checkpoints: items, head: null, events: { 0: [tx(7, 5)] } });
+    const h = body(panel({ events: { 0: [tx(7, 5)] }, selected: g.nodes.find((n) => n.kind === "tx")!, askingTx: true }), true);
+    expect(h).toContain("is not saved");
+    expect(h).toContain("Save a checkpoint first");
+  });
+  it("does not offer to save when saving is not allowed, and says why", () => {
+    const h = body(panel({ selected: selectedNode("checkpoint:c1"), asking: { what: "restore", name: "c1", from: "graph" }, saveWhy: "No permission" }), true);
+    expect(h).toMatch(/<button[^>]*disabled[^>]*title="No permission"[^>]*>Save a checkpoint first/);
   });
   it("shows a recorded transaction with its statements and the restore to it", () => {
     const g = layoutGraph({ lines, checkpoints: items, head: null, events: { 0: [tx(7, 5)] } });

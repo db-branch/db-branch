@@ -23,7 +23,8 @@ reset it to start over, and delete it when done. Branches are isolated: nothing
 you do reaches the base or other branches. Prefer a short ttl (e.g. "4h").
 Before risky work (a migration, a bulk update) take a checkpoint with
 create_checkpoint; if it goes wrong, restore_checkpoint puts the branch back.
-Restoring loses nothing: the state you leave is kept as another checkpoint.
+Restoring replaces the current state and saves nothing: call create_checkpoint first
+if the current state may be needed.
 A branch can be moved to a newer database version (upgrade_branch; check_upgrade
 only checks). A checkpoint is saved first and a failed upgrade rolls back by itself.`
 
@@ -308,7 +309,7 @@ func (s *Server) mcpServer(r *http.Request) *mcp.Server {
 			}
 			return text(out["items"]), nil, nil
 		})
-	mcp.AddTool(srv, &mcp.Tool{Name: "restore_checkpoint", Description: "Put a branch back to a checkpoint (it restarts briefly). Nothing is lost: the state it leaves is saved as an automatic checkpoint and every other checkpoint stays restorable."},
+	mcp.AddTool(srv, &mcp.Tool{Name: "restore_checkpoint", Description: "Put a branch back to a checkpoint (it restarts briefly). The current state is replaced and not saved: call create_checkpoint first if it may be needed. Every checkpoint already taken stays restorable."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in restoreIn) (*mcp.CallToolResult, any, error) {
 			path := "/v1/branches/" + url.PathEscape(in.Branch) + "/checkpoints/" + url.PathEscape(in.Checkpoint) + "/restore"
 			if err := s.startAndWait(ctx, r, http.MethodPost, path, nil); err != nil {

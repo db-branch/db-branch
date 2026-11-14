@@ -123,7 +123,7 @@ tags:
     description: 'A branch is a writable clone of a base snapshot with a database server of its own. It is ready in seconds and costs only the space of what changes. Branches have an owner and an access mode: `private` (own password; owner and admins) or `open` (the cluster''s shared password; anyone may connect and query). A branch expires at `expires_at` and is deleted automatically. Status: `provisioning`, `ready`, `resetting`, `restoring`, `upgrading`, `deleting`, `failed`, `lost` (its node is gone; see recreate).'
   - name: checkpoints
     x-displayName: Checkpoints
-    description: 'A checkpoint saves a running branch''s state (a ZFS snapshot: instant, the server keeps running) so the branch can be put back to it later. Restoring loses nothing: the state the branch leaves is saved as a `before-restore-<time>` checkpoint and every other checkpoint stays restorable. Reset keeps the checkpoints; deleting the branch removes them. The setting `branch.max_checkpoints` (default 20) limits the ones you take. Needs the node''s own ZFS pool: a branch''s `checkpoints` field says whether it is possible, and the endpoints answer `409 checkpoints_unavailable` elsewhere.'
+    description: 'A checkpoint saves a running branch''s state (a ZFS snapshot: instant, the server keeps running) so the branch can be put back to it later. Restoring replaces the current state and does not save it: take a checkpoint first if it may be needed. Every checkpoint already taken stays restorable. Reset keeps the checkpoints; deleting the branch removes them. The setting `branch.max_checkpoints` (default 20) limits the ones you take. Needs the node''s own ZFS pool: a branch''s `checkpoints` field says whether it is possible, and the endpoints answer `409 checkpoints_unavailable` elsewhere.'
   - name: upgrades
     x-displayName: Branch upgrade
     description: Move one branch to a newer runtime of its engine (mainly MySQL 8.0 to 8.4) to test a migration, with a pre-check, an automatic checkpoint and a rollback if it fails. The base and other branches are untouched. The operation's `result` is an UpgradeResult.
@@ -669,7 +669,7 @@ paths:
       x-dbb-action: branch.restore
       x-dbb-token-scopes: [full, branches]
       description: |-
-        Puts the branch back to the checkpoint, in the background; the server restarts briefly. Nothing is lost: the state the branch leaves is saved as an automatic `before-restore-<time>` checkpoint (the newest five are kept), and every other checkpoint stays restorable. Restoring a checkpoint taken on another runtime switches the branch back to that runtime. Answers `202` with an operation of kind `branch.restore`; phases include `cloning`, `stopping`, `checkpointing`, `swapping`, `promoting`, `starting`.
+        Puts the branch back to the checkpoint, in the background; the server restarts briefly. The current state is replaced and is not saved: take a checkpoint first if it may be needed. Every checkpoint already taken stays restorable. Restoring a checkpoint taken on another runtime switches the branch back to that runtime. Answers `202` with an operation of kind `branch.restore`; phases include `cloning`, `stopping`, `checkpointing`, `swapping`, `promoting`, `starting`.
 
         **Action:** `branch.restore`. Allowed for `full` and `branches` tokens. Allowed for the branch's owner and admins.
       parameters:
@@ -3515,7 +3515,7 @@ components:
           description: 'The line of history it was taken on (0: the branch''s first). Every restore starts a new line.'
         auto:
           type: boolean
-          description: Taken by the system before a restore (`before-restore-<time>`) or an upgrade (`before-upgrade-<time>`).
+          description: Taken by the system before an upgrade (`before-upgrade-<time>`), or before a restore by older versions (`before-restore-<time>`).
         current: {type: boolean, description: The branch's data descends from this checkpoint.}
         runtime:
           $ref: '#/components/schemas/RuntimeRef'

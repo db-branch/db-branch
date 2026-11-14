@@ -16,9 +16,9 @@ import (
 // taken since stay restorable:
 //
 //  1. record the intent on the history container (what to restore, which
-//     line number the new data gets, the name of the automatic checkpoint)
+//     line number the new data gets)
 //  2. clone the checkpoint to history/<n>/new (not mounted)
-//  3. stop the server, take the automatic checkpoint "before-restore-<time>"
+//  3. stop the server
 //  4. unmount the live dataset and rename it to history/<n>/<its line>
 //  5. rename history/<n>/new to the live name, mount it
 //  6. promote it, so the lines set aside are clones of it and can be destroyed
@@ -42,7 +42,10 @@ type restoreIntent struct {
 	Source string
 	// NewLine is the line number the restored data carries.
 	NewLine int
-	// Auto is the checkpoint taken before the swap ("" for reset).
+	// Auto is the automatic checkpoint taken before the swap. A restore and a
+	// reset take none: the state they replace is not saved (the user saves a
+	// checkpoint first if it matters). Only a rollback after a failed upgrade
+	// names one. "" for none.
 	Auto string
 	// Note is a module's: handed to AfterRestore once the data is in place.
 	Note string
@@ -139,9 +142,10 @@ func (s *Service) clearIntent(ctx context.Context, n domain.Name) error {
 	return s.Lineage.Unset(ctx, root, domain.PropOp, domain.PropSource, domain.PropNewLine, domain.PropAutoName, domain.PropNote, domain.PropRuntime)
 }
 
-// RestoreCheckpoint sets the branch back to checkpoint name. Nothing is lost:
-// the data as it is now is kept as an automatic checkpoint and every other
-// checkpoint stays restorable.
+// RestoreCheckpoint sets the branch back to checkpoint name. The data as it
+// is now is replaced and nothing saves it automatically: every checkpoint
+// taken so far stays restorable, and a user who may need the current state
+// takes a checkpoint first.
 func (s *Service) RestoreCheckpoint(ctx context.Context, n domain.Name, name string, report Reporter) (domain.Branch, error) {
 	return s.RestoreCheckpointWith(ctx, n, name, "", report)
 }
@@ -150,7 +154,7 @@ func (s *Service) RestoreCheckpoint(ctx context.Context, n domain.Name, name str
 // to its RestoreFinisher once the checkpoint's data is in place and before
 // anyone can connect, so it can bring the branch forward from there. The name
 // domain.ResetPoint restores the branch's creation state the same way (a
-// restore, not a reset: what the branch holds now is kept).
+// restore, not a reset: the checkpoints are kept).
 func (s *Service) RestoreCheckpointWith(ctx context.Context, n domain.Name, name, note string, report Reporter) (domain.Branch, error) {
 	if len(note) > maxNote {
 		return domain.Branch{}, fmt.Errorf("%w: the note of a restore is at most %d bytes", domain.ErrInvalidName, maxNote)
@@ -208,8 +212,7 @@ func (s *Service) beginRestore(ctx context.Context, n domain.Name, name, note st
 		return br, restoreIntent{}, err
 	}
 	in := restoreIntent{
-		Op: opRestore, Source: source, NewLine: domain.NextLine(lines),
-		Auto: domain.UniqueCheckpointName(lines, domain.AutoCheckpointName("restore", s.Clock())), Note: note, Runtime: rt,
+		Op: opRestore, Source: source, NewLine: domain.NextLine(lines), Note: note, Runtime: rt,
 	}
 	br.Status = domain.BranchRestoring
 	return br, in, s.Store.PutBranch(ctx, br)
@@ -355,7 +358,7 @@ func (s *Service) stopServer(ctx context.Context, srv domain.DBServer, spec doma
 	return nil
 }
 
-// setAside is steps 2 to 5: clone, stop, automatic checkpoint, swap.
+// setAside is steps 2 to 5: clone, stop, (the automatic checkpoint of an upgrade's rollback), swap.
 func (s *Service) setAside(ctx context.Context, br domain.Branch, in restoreIntent, srv domain.DBServer, liveExists bool, report Reporter) error {
 	liveDS, pending := s.branchDataset(br.Name), s.pendingDataset(br.Name)
 	havePending, err := s.Storage.Exists(ctx, pending)
@@ -389,8 +392,9 @@ func (s *Service) setAside(ctx context.Context, br domain.Branch, in restoreInte
 	return s.Lineage.Rename(ctx, pending, liveDS)
 }
 
-// hideLive stops the server, takes the automatic checkpoint and moves the
-// live dataset into the history container.
+// hideLive stops the server, takes the automatic checkpoint when the intent
+// names one (a rollback after a failed upgrade) and moves the live dataset
+// into the history container.
 func (s *Service) hideLive(ctx context.Context, br domain.Branch, in restoreIntent, srv domain.DBServer, report Reporter) error {
 	liveDS := s.branchDataset(br.Name)
 	props, err := s.Lineage.Props(ctx, liveDS)

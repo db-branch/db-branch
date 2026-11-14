@@ -156,6 +156,35 @@ func callText(t *testing.T, s *mcp.ClientSession, name string, args any) (string
 	return res.Content[0].(*mcp.TextContent).Text, res.IsError
 }
 
+func TestMCP_復元は今の状態を保存しないと先に伝える(t *testing.T) {
+	httpapi.MCPPoll = time.Millisecond
+	f := checkpointFixture(t)
+	f.srv.TokenAuth = &fakeTokens{}
+	s, err := mcpSession(t, f, "t-branches")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	text := s.InitializeResult().Instructions
+	for _, bad := range []string{"loses nothing", "Nothing is lost", "saved as an automatic checkpoint", "kept as another checkpoint"} {
+		if strings.Contains(text, bad) {
+			t.Errorf("the instructions still say %q", bad)
+		}
+	}
+	if !strings.Contains(text, "Restoring replaces the current state and saves nothing") || !strings.Contains(text, "create_checkpoint first") {
+		t.Errorf("the instructions do not tell the agent to save first: %s", text)
+	}
+	tools, err := s.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name == "restore_checkpoint" && (strings.Contains(tool.Description, "Nothing is lost") || !strings.Contains(tool.Description, "create_checkpoint first")) {
+			t.Errorf("restore_checkpoint says %q", tool.Description)
+		}
+	}
+}
+
 func TestMCP_トークンで接続しブランチを作って使える(t *testing.T) {
 	httpapi.MCPPoll = time.Millisecond
 	f := newFixture(t)
