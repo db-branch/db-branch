@@ -305,11 +305,6 @@ export function Portal() {
           >
             ← {t("Your branches")}
           </a>
-          {diffOn && branchName && (
-            <a className="button compare-link" href={`/diff?a=${encodeURIComponent(branchName)}`} onClick={link(`/diff?a=${encodeURIComponent(branchName)}`)}>
-              Compare
-            </a>
-          )}
           <ErrorLine error={mine.error} />
           {!mine.data && !mine.error && <ul className="brows" aria-hidden="true"><li className="brow skeleton" /></ul>}
           {mine.data && !rows.some((x) => x.name === branchName) && <Empty line={t("No such branch.")} />}
@@ -328,6 +323,7 @@ export function Portal() {
                     snapshot={bases.data?.snaps[b.base]?.[b.snapshot]}
                     fresh={b.name === fresh}
                     mode="page"
+                    onCompare={diffOn ? () => go(`/diff?a=${encodeURIComponent(b.name)}`) : undefined}
                     onChange={mine.reload}
                     onDismiss={job ? () => setJobs((js) => js.filter((j) => j.name !== b.name)) : undefined}
                     extra={session && b.record && hasHistoryModule(caps) && allowed(session.can, "ext.history.read") ? <BranchHistory name={b.name} /> : undefined}
@@ -399,6 +395,7 @@ export function Portal() {
                     snapshot={bases.data?.snaps[b.base]?.[b.snapshot]}
                     fresh={b.name === fresh}
                     mode="list"
+                    onCompare={diffOn ? () => go(`/diff?a=${encodeURIComponent(b.name)}`) : undefined}
                     href={pageOf(b.name)}
                     onOpen={() => go(pageOf(b.name))}
                     onChange={mine.reload}

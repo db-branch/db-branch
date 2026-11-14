@@ -789,4 +789,3 @@ a.brow-id { color: inherit; text-decoration: none; cursor: pointer; }
 .filterbar select { max-width: 14em; }
 .filterbar select.on { border-color: var(--accent); }
 .portal-diff .module-frame { height: calc(100vh - 160px); min-height: 480px; }
-.compare-link { align-self: flex-start; }
