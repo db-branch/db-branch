@@ -2,7 +2,8 @@
 // pick a base, get a branch and its connection, manage your own branches.
 // It works without logging in for public snapshots.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, Branch, PublicBase, Session, ssoReturn } from "../api";
+import { api, ApiError, Branch, can, PublicBase, Session, ssoReturn } from "../api";
+import { diffFrame, showDiff } from "../lib/diffpage";
 import { Login, Mark } from "../App";
 import { AccountMenu, AccountPage, LanguagePicker } from "../components/account";
 import { allowed, BranchRow, Job, SnapInfo } from "../components/branchcard";
@@ -11,7 +12,7 @@ import { hasHistoryModule } from "../lib/history";
 import { Empty, ErrorLine } from "../components/ui";
 import { Limits, NewBranch, NewBranchSkeleton } from "../components/newbranch";
 import { Choice } from "../lib/bases";
-import { chooseLanguage, remembered as rememberedLanguage, setLanguage, t } from "../lib/i18n";
+import { chooseLanguage, language, remembered as rememberedLanguage, setLanguage, t } from "../lib/i18n";
 import { useCapabilities } from "../lib/caps";
 import { useNow } from "../lib/live";
 import { sortBranches } from "../lib/branches";
@@ -104,6 +105,13 @@ export function Portal() {
   const me = session ? session.user.name || session.user.id : null;
 
   const caps = useCapabilities(!!session);
+  const diffOn = !!session && showDiff(caps, can);
+  const onDiffPage = path === "/diff";
+  const link = (href: string) => (e: React.MouseEvent) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+    go(href);
+  };
   const bases = usePoll<Offer>(
     async () => {
       if (session) {
@@ -249,6 +257,11 @@ export function Portal() {
           <Mark /> db-branch
         </a>
         <span className="spacer" />
+        {diffOn && (
+          <a className="text-button" href="/diff" onClick={link("/diff")}>
+            Diff
+          </a>
+        )}
         {canTour && (
           <button type="button" className="text-button" onClick={() => setTouring(true)}>
             {t("Tour")}
@@ -273,6 +286,13 @@ export function Portal() {
             </p>
           )}
         </main>
+      ) : onDiffPage && diffOn ? (
+        <main className="portal-main portal-diff">
+          <a className="text-button back-link" href="/" onClick={link("/")}>
+            ← {t("Your branches")}
+          </a>
+          <iframe className="module-frame" title="Diff" {...diffFrame(location.search, language())} />
+        </main>
       ) : branchName ? (
         <main className="portal-main portal-branch">
           <a
@@ -285,6 +305,11 @@ export function Portal() {
           >
             ← {t("Your branches")}
           </a>
+          {diffOn && branchName && (
+            <a className="button compare-link" href={`/diff?a=${encodeURIComponent(branchName)}`} onClick={link(`/diff?a=${encodeURIComponent(branchName)}`)}>
+              Compare
+            </a>
+          )}
           <ErrorLine error={mine.error} />
           {!mine.data && !mine.error && <ul className="brows" aria-hidden="true"><li className="brow skeleton" /></ul>}
           {mine.data && !rows.some((x) => x.name === branchName) && <Empty line={t("No such branch.")} />}

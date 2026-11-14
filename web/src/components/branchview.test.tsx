@@ -71,4 +71,8 @@ describe("BranchView", () => {
     expect(h.indexOf("CONNECT BODY")).toBeLessThan(h.indexOf("CP BODY"));
     expect(h).toContain('id="x"');
   });
+  it("offers Compare only when the page is given a way to open it", () => {
+    expect(view(branch())).not.toContain("Compare");
+    expect(view(branch(), { onCompare: noop })).toContain("Compare");
+  });
 });
