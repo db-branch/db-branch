@@ -157,6 +157,9 @@ export function mergeLines(input: LayoutInput): Map<number, number> {
 
 const sortedCheckpoints = (list: Checkpoint[]) => [...list].sort((a, b) => ms(a.created_at) - ms(b.created_at) || (a.name < b.name ? -1 : 1));
 
+// FORK_START is how far right of the node it forked from a new lane starts.
+export const FORK_START = 24;
+
 // FORK_SLANT is how far across a fork leaves its lane while it drops to the next one.
 const FORK_SLANT = 14;
 
@@ -210,11 +213,36 @@ export function layoutGraph(input: LayoutInput): GLayout {
   const laneOfRoot = new Map(roots.map((r, i) => [r, i]));
   const laneOf = new Map(lines.map((l) => [l.line, laneOfRoot.get(merged.get(l.line)!)!]));
   const cps = sortedCheckpoints(input.checkpoints);
-  // Chronological slots: the reset point is slot 0, then every checkpoint in time order.
-  const slot = new Map<string, number>(cps.map((c, i) => [c.name, i + 1]));
-  const xOf = (s: number) => LEFT + s * SLOT_W;
   const yOf = (lane: number) => TOP + lane * LANE_H;
-  const lastSlot = cps.length + 1; // where "now" is
+  // Positions run left to right along a lane in time order, but a lane that
+  // forked starts right next to where it forked, not where it falls in time
+  // against the other lanes. Lines are placed in order, so a parent's nodes are
+  // placed before the lines that fork off them.
+  const cx = new Map<string, number>(); // checkpoint name to x
+  const startOf = new Map<number, number>(); // line to where its lane starts
+  const laneEnd = new Map<number, number>(); // lane (its first line) to the x of its last node
+  for (const l of lines) {
+    const root = merged.get(l.line)!;
+    let from = LEFT;
+    let next: number; // x of the next node of the lane, before adding the slot
+    if (l.line === 0) {
+      startOf.set(0, LEFT);
+      next = LEFT;
+    } else if (root !== l.line) {
+      next = laneEnd.get(root) ?? LEFT; // the lane runs on
+    } else {
+      from = l.from === "" || l.from === "reset" ? LEFT : (cx.get(l.from) ?? LEFT);
+      startOf.set(l.line, from + FORK_START);
+      next = from + FORK_START - SLOT_W * 0.5;
+    }
+    let end = laneEnd.get(root) ?? startOf.get(l.line) ?? LEFT;
+    for (const c of cps.filter((c) => c.line === l.line)) {
+      next += SLOT_W;
+      cx.set(c.name, next);
+      end = next;
+    }
+    laneEnd.set(root, Math.max(end, laneEnd.get(root) ?? 0));
+  }
 
   const firstOnLine = new Map<number, Checkpoint>();
   const lastOnLine = new Map<number, Checkpoint>();
@@ -228,17 +256,16 @@ export function layoutGraph(input: LayoutInput): GLayout {
   const forks: GFork[] = [];
   let now: GLayout["now"] = null;
 
-  nodes.push({ id: nodeId("reset", "0"), kind: "reset", x: xOf(0), y: yOf(laneOf.get(0) ?? 0), lane: laneOf.get(0) ?? 0, line: 0, shown: 0, time: 0 });
+  nodes.push({ id: nodeId("reset", "0"), kind: "reset", x: LEFT, y: yOf(laneOf.get(0) ?? 0), lane: laneOf.get(0) ?? 0, line: 0, shown: 0, time: 0 });
 
   for (const l of lines) {
     const lane = laneOf.get(l.line)!;
     const y = yOf(lane);
-    const first = firstOnLine.get(l.line);
     const last = lastOnLine.get(l.line);
     // Where the lane starts: line 0 at the reset point; others just before
     // their first checkpoint, or at the right end while they have none.
-    const startX = l.line === 0 ? xOf(0) : first ? xOf(slot.get(first.name)!) - SLOT_W * 0.5 : xOf(lastSlot) - SLOT_W * 0.5;
-    const endX = l.live ? xOf(lastSlot) : last ? xOf(slot.get(last.name)!) : startX;
+    const startX = startOf.get(l.line) ?? LEFT;
+    const endX = l.live ? (laneEnd.get(merged.get(l.line)!) ?? startX) + SLOT_W : last ? cx.get(last.name)! : startX;
     const shown = merged.get(l.line)!;
     const end = Math.max(endX, startX);
     const drawn = lanes.find((x) => x.lane === lane);
@@ -253,12 +280,12 @@ export function layoutGraph(input: LayoutInput): GLayout {
 
     if (shown === l.line && l.line !== 0 && l.from !== "") {
       const parentLane = laneOf.get(l.parent ?? 0) ?? 0;
-      const fromSlot = l.from === "reset" ? 0 : slot.get(l.from);
-      if (fromSlot !== undefined) forks.push({ line: l.line, x1: xOf(fromSlot), y1: yOf(parentLane), x2: startX, y2: y });
+      const fromX = l.from === "reset" ? LEFT : cx.get(l.from);
+      if (fromX !== undefined) forks.push({ line: l.line, x1: fromX, y1: yOf(parentLane), x2: startX, y2: y });
     }
 
     for (const c of cps.filter((c) => c.line === l.line)) {
-      nodes.push({ id: nodeId("checkpoint", c.name), kind: "checkpoint", x: xOf(slot.get(c.name)!), y, lane, line: l.line, shown, time: ms(c.created_at), checkpoint: c, head: c.name === input.head });
+      nodes.push({ id: nodeId("checkpoint", c.name), kind: "checkpoint", x: cx.get(c.name)!, y, lane, line: l.line, shown, time: ms(c.created_at), checkpoint: c, head: c.name === input.head });
     }
 
     // Transactions between the lane's neighbours, by time.
@@ -266,7 +293,7 @@ export function layoutGraph(input: LayoutInput): GLayout {
     const cuts = cps.filter((c) => c.line === l.line).map((c) => ms(c.created_at));
     const txs = groupTxs(own, cuts);
     if (txs.length > 0) {
-      const anchors: { x: number; t: number }[] = cps.filter((c) => c.line === l.line).map((c) => ({ x: xOf(slot.get(c.name)!), t: ms(c.created_at) }));
+      const anchors: { x: number; t: number }[] = cps.filter((c) => c.line === l.line).map((c) => ({ x: cx.get(c.name)!, t: ms(c.created_at) }));
       const t0 = ms(txs[0].tx.time) - 1000;
       const tEnd = Math.max(ms(txs[txs.length - 1].tx.time), anchors.length ? anchors[anchors.length - 1].t : 0) + 1000;
       anchors.unshift({ x: startX + 14, t: Math.min(t0, anchors[0]?.t ?? t0) });
@@ -307,7 +334,7 @@ export function layoutGraph(input: LayoutInput): GLayout {
   }
 
   nodes.sort((a, b) => a.lane - b.lane || a.x - b.x);
-  return { width: xOf(lastSlot) + SLOT_W * 0.9, height: yOf(Math.max(roots.length - 1, 0)) + 46, lanes, forks, nodes, now };
+  return { width: Math.max(...lanes.map((x) => x.x2), ...nodes.map((n) => n.x), LEFT) + SLOT_W * 0.9, height: yOf(Math.max(roots.length - 1, 0)) + 46, lanes, forks, nodes, now };
 }
 
 // Moving around the graph with the arrow keys: the node next to this one on

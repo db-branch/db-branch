@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Checkpoint, HistoryTx, Line } from "../api";
-import { describe as say, forkPath, GROUP_W, layoutGraph, LANE_H, LEFT, MIN_DOT_GAP, mergeLines, neighbour, SLOT_W } from "./historygraph";
+import { describe as say, FORK_START, forkPath, GROUP_W, layoutGraph, LANE_H, LEFT, MIN_DOT_GAP, mergeLines, neighbour, SLOT_W } from "./historygraph";
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 12, 10, min)).toISOString();
 const cp = (name: string, min: number, line: number, extra: Partial<Checkpoint> = {}): Checkpoint => ({ name, created_at: at(min), size: 1, line, auto: false, current: false, ...extra });
@@ -14,11 +14,11 @@ const lines: Line[] = [
 const cps = [cp("c1", 0, 0), cp("c2", 10, 0), cp("before-restore-x", 20, 0, { auto: true }), cp("d1", 30, 1, { current: true })];
 
 describe("layoutGraph", () => {
-  it("puts each line on its own lane and the checkpoints in time order from left to right", () => {
+  it("puts each line on its own lane and the checkpoints of a lane in time order from left to right", () => {
     const g = layoutGraph({ lines, checkpoints: cps, head: "d1" });
     expect(g.lanes.map((l) => [l.line, l.y])).toEqual([[0, 30], [1, 30 + LANE_H]]);
     const xs = g.nodes.filter((n) => n.kind === "checkpoint").map((n) => [n.checkpoint!.name, n.x]);
-    expect(xs).toEqual([["c1", LEFT + SLOT_W], ["c2", LEFT + 2 * SLOT_W], ["before-restore-x", LEFT + 3 * SLOT_W], ["d1", LEFT + 4 * SLOT_W]]);
+    expect(xs).toEqual([["c1", LEFT + SLOT_W], ["c2", LEFT + 2 * SLOT_W], ["before-restore-x", LEFT + 3 * SLOT_W], ["d1", LEFT + SLOT_W + FORK_START + SLOT_W / 2]]);
     expect(g.nodes.find((n) => n.kind === "reset")).toMatchObject({ x: LEFT, lane: 0 });
     expect(g.nodes.find((n) => n.head)?.checkpoint?.name).toBe("d1");
   });
@@ -28,17 +28,17 @@ describe("layoutGraph", () => {
     expect(g.forks).toHaveLength(1);
     const f = g.forks[0];
     expect(f).toMatchObject({ line: 1, x1: LEFT + SLOT_W, y1: 30, y2: 30 + LANE_H });
-    // The new lane starts just before its first checkpoint, and the live lane ends at "now".
-    expect(f.x2).toBe(LEFT + 4 * SLOT_W - SLOT_W / 2);
-    expect(g.now).toEqual({ x: LEFT + 5 * SLOT_W, y: 30 + LANE_H, lane: 1 });
+    // The new lane starts a short way right of where it forked, and the live lane ends at "now".
+    expect(f.x2).toBe(LEFT + SLOT_W + FORK_START);
+    expect(g.now).toEqual({ x: LEFT + SLOT_W + FORK_START + SLOT_W / 2 + SLOT_W, y: 30 + LANE_H, lane: 1 });
     expect(g.lanes[0].x2).toBe(LEFT + 3 * SLOT_W); // the set-aside line ends at its last checkpoint
   });
 
-  it("starts a live line that has no checkpoint yet at the right end, and a restore of the creation state at the reset point", () => {
+  it("starts a live line that has no checkpoint yet next to where it forked, and a restore of the creation state next to the reset point", () => {
     const l: Line[] = [{ line: 0, live: false, parent: null, from: "" }, { line: 1, live: true, parent: 0, from: "reset" }];
     const g = layoutGraph({ lines: l, checkpoints: [cp("a", 0, 0)], head: null });
-    expect(g.forks[0]).toMatchObject({ x1: LEFT, y1: 30, x2: LEFT + 2 * SLOT_W - SLOT_W / 2 });
-    expect(g.lanes[1].x1).toBe(LEFT + 2 * SLOT_W - SLOT_W / 2);
+    expect(g.forks[0]).toMatchObject({ x1: LEFT, y1: 30, x2: LEFT + FORK_START });
+    expect(g.lanes[1].x1).toBe(LEFT + FORK_START);
     expect(g.now?.lane).toBe(1);
   });
 
@@ -66,7 +66,7 @@ describe("layoutGraph", () => {
     expect(dot(0, 2).x).toBeGreaterThan(LEFT + 2 * SLOT_W);
     expect(dot(0, 2).x).toBeLessThan(LEFT + 3 * SLOT_W);
     expect(dot(0, 3).x).toBeGreaterThan(LEFT + 3 * SLOT_W - 1); // after the last checkpoint: to its right (not past the lane)
-    expect(dot(1, 9).x).toBeGreaterThan(LEFT + 4 * SLOT_W);
+    expect(dot(1, 9).x).toBeGreaterThan(LEFT + SLOT_W + FORK_START + SLOT_W / 2);
     expect(dot(1, 9).y).toBe(30 + LANE_H);
   });
 
@@ -151,7 +151,11 @@ describe("neighbour", () => {
   });
   it("moves to the closest node of the lane above or below", () => {
     expect(neighbour(g.nodes, byId("checkpoint:c2"), "ArrowDown")?.lane).toBe(1);
-    expect(neighbour(g.nodes, byId("checkpoint:d1"), "ArrowUp")?.id).toBe("checkpoint:before-restore-x");
+    const up = neighbour(g.nodes, byId("checkpoint:d1"), "ArrowUp")!;
+    expect(up.lane).toBe(0);
+    // it is the closest of the lane above, whatever its kind
+    const d1 = byId("checkpoint:d1").x;
+    for (const n of g.nodes.filter((n) => n.lane === 0)) expect(Math.abs(up.x - d1)).toBeLessThanOrEqual(Math.abs(n.x - d1));
     expect(neighbour(g.nodes, byId("checkpoint:c1"), "ArrowUp")).toBeUndefined();
   });
 });
@@ -362,5 +366,33 @@ describe("forkPath", () => {
   it("goes up to a lane above the same way, and shortens the slant when there is little room", () => {
     expect(forkPath({ line: 1, x1: 180, y1: 82, x2: 440, y2: 30 })).toBe("M 180 82 L 194 30 L 440 30");
     expect(forkPath({ line: 1, x1: 180, y1: 30, x2: 188, y2: 82 })).toBe("M 180 30 L 188 82");
+  });
+});
+
+describe("layoutGraph: a forked lane starts next to where it forked", () => {
+  const forked: Line[] = [{ line: 0, live: false, parent: null, from: "" }, { line: 1, live: true, parent: 0, from: "c1" }];
+  // c1, c2, c3 on line 0 (c1 restored); line 1 has d1, d2 made much later.
+  const cpsF = [cp("c1", 0, 0), cp("c2", 10, 0), cp("c3", 20, 0), cp("d1", 60, 1), cp("d2", 70, 1, { current: true })];
+  it("puts the first checkpoint of the new line a short way right of the fork, not at its place in time", () => {
+    const g = layoutGraph({ lines: forked, checkpoints: cpsF, head: "d2" });
+    const x = (id: string) => g.nodes.find((n) => n.id === id)!.x;
+    const fork = g.forks[0];
+    expect(fork.x1).toBe(x("checkpoint:c1"));
+    expect(fork.x2).toBe(fork.x1 + FORK_START);
+    expect(x("checkpoint:d1")).toBe(fork.x2 + SLOT_W * 0.5);
+    expect(x("checkpoint:d2")).toBe(x("checkpoint:d1") + SLOT_W);
+    expect(x("checkpoint:d1")).toBeLessThan(x("checkpoint:c3")); // earlier than c3 on the other lane's scale
+  });
+  it("runs the live lane on to now one slot after its last checkpoint, and sizes the picture to the widest lane", () => {
+    const g = layoutGraph({ lines: forked, checkpoints: cpsF, head: "d2" });
+    const d2 = g.nodes.find((n) => n.id === "checkpoint:d2")!.x;
+    expect(g.now).toEqual({ x: d2 + SLOT_W, y: LANE_H + 30, lane: 1 });
+    const c3 = g.nodes.find((n) => n.id === "checkpoint:c3")!.x;
+    expect(g.width).toBe(Math.max(d2 + SLOT_W, c3) + SLOT_W * 0.9);
+  });
+  it("places a fork from the creation state right next to the reset point", () => {
+    const g = layoutGraph({ lines: [forked[0], { line: 1, live: true, parent: 0, from: "reset" }], checkpoints: [cp("c1", 0, 0), cp("d1", 60, 1)], head: null });
+    expect(g.forks[0].x1).toBe(LEFT);
+    expect(g.forks[0].x2).toBe(LEFT + FORK_START);
   });
 });
