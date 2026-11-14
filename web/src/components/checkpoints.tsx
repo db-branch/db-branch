@@ -247,7 +247,20 @@ export function PanelBody({ p, modal, onExpand, expandRef }: { p: Panel; modal?:
           <p className="muted small hg-legend">{dots ? t("Dots are recorded transactions. Select a checkpoint or a dot.") : t("Select a checkpoint.")}</p>
           {selected && (
             <div className="hg-detail" role="region" aria-label="Selected" aria-live="polite">
-              {selected.kind === "tx" && selected.tx ? (
+              {selected.kind === "group" && selected.group ? (
+                <GroupDetail
+                  key={selected.id}
+                  group={selected.group}
+                  line={selected.shown}
+                  asking={p.askingTx}
+                  working={working}
+                  why={p.txRestoreWhy}
+                  branch={b.name}
+                  onAsk={p.setAskingTx}
+                  onRestore={(gtid) => p.restoreTx(selected.line, gtid)}
+                  saveFirst={{ onSave: p.saveFirst, why: p.saveWhy }}
+                />
+              ) : selected.kind === "tx" && selected.tx ? (
                 <TxDetail
                   tx={selected.tx}
                   line={selected.shown}
@@ -396,6 +409,62 @@ function CheckpointDetail({ c, line, branch, asking, working, why, onAsk, onRest
           Restore
         </button>
       )}
+    </div>
+  );
+}
+
+// GroupDetail lists the transactions of a group in time order as a table; the
+// chosen row (the last one at first) is shown below it with its restore.
+function GroupDetail({ group, line, branch, asking, working, why, onAsk, onRestore, saveFirst }: { group: HistoryTx[]; line: number; branch: string; asking: boolean; working: boolean; why?: string; onAsk: (on: boolean) => void; onRestore: (gtid: string) => void; saveFirst: { onSave: () => void; why?: string } }) {
+  const [pick, setPick] = useState(group[group.length - 1].gtid);
+  const chosen = group.find((x) => x.gtid === pick) ?? group[group.length - 1];
+  return (
+    <div className="hg-detail-body">
+      <div className="cp-main">
+        <span className="strong">{group.length} transactions</span>
+        <span className="muted small">line {line}</span>
+        <span className="muted small" title={new Date(group[0].time).toLocaleString()}>
+          {relative(group[group.length - 1].time)}
+        </span>
+      </div>
+      <p className="muted small">{t("Made within a second of each other. Choose the point to go back to.")}</p>
+      <div className="hg-table-wrap">
+        <table className="hg-table small">
+          <thead>
+            <tr>
+              <th scope="col">#</th>
+              <th scope="col">Time</th>
+              <th scope="col">Rows</th>
+              <th scope="col">Statement</th>
+            </tr>
+          </thead>
+          <tbody>
+            {group.map((x) => (
+              <tr key={x.gtid} className={x.gtid === chosen.gtid ? "chosen" : ""}>
+                <td>
+                  <button
+                    type="button"
+                    className="link-button mono"
+                    aria-pressed={x.gtid === chosen.gtid}
+                    onClick={() => {
+                      setPick(x.gtid);
+                      onAsk(false);
+                    }}
+                  >
+                    #{txNumber(x.gtid)}
+                  </button>
+                </td>
+                <td className="mono muted" title={new Date(x.time).toLocaleString()}>
+                  {new Date(x.time).toLocaleTimeString()}
+                </td>
+                <td className="mono">{rowsLabel(x)}</td>
+                <td className="mono hg-stmt">{x.sql ? x.sql.replace(/\s+/g, " ").slice(0, 120) : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <TxDetail tx={chosen} line={line} asking={asking} working={working} why={why} branch={branch} onAsk={onAsk} onRestore={() => onRestore(chosen.gtid)} saveFirst={saveFirst} />
     </div>
   );
 }

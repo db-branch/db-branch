@@ -48,8 +48,13 @@ describe("HistoryGraph", () => {
     expect(h).toContain('aria-label="Transaction 1, line 0"');
     expect(h).toContain("<title>insert 1</title>");
     expect(h).not.toContain("hg-note");
-    const busy = Array.from({ length: 80 }, (_, i) => tx(i + 1, 1));
+    const busy = Array.from({ length: 80 }, (_, i) => ({ ...tx(i + 1, 1), time: new Date(Date.UTC(2026, 10, 12, 10, 1, 3 * i)).toISOString() }));
     expect(html({ events: { 0: busy } })).toContain("Busy stretches");
+    // transactions within a second of each other are one group, not many dots
+    const burst = Array.from({ length: 5 }, (_, i) => ({ ...tx(i + 1, 1), time: new Date(Date.UTC(2026, 10, 12, 10, 1, 0, 40 * i)).toISOString() }));
+    const grouped = html({ events: { 0: burst } });
+    expect(grouped).toContain("×5");
+    expect(grouped).toContain('aria-label="5 transactions, #1 to #5, line 0"');
   });
 });
 

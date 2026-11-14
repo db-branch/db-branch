@@ -241,6 +241,8 @@ export const ja: Record<string, string> = {
   "Space only this checkpoint holds": "このチェックポイントだけが持っている容量",
   "Go back to this state": "この状態に戻します",
   "Busy stretches show a sample of their transactions.": "取引が多い区間は、その一部だけを点で表示しています。",
+  "Made within a second of each other. Choose the point to go back to.":
+    "1秒以内に続けて行われたものです。戻す地点を選んでください。",
   "Dots are recorded transactions. Select a checkpoint or a dot.": "点は記録したトランザクションです。チェックポイントか点を選んでください。",
   "Show the Checkpoints larger": "Checkpoint を大きく表示します",
   "Select a checkpoint.": "チェックポイントを選んでください。",

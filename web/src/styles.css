@@ -686,6 +686,14 @@ li.brow.skeleton { height: 56px; border-radius: 0; border-bottom: 2px solid var(
 .hg-checkpoint:hover .hg-cp, .hg-checkpoint.selected .hg-cp, .hg-reset.selected .hg-cp { fill: currentColor; }
 .hg-dot { fill: currentColor; opacity: 0.8; }
 .hg-hit { fill: transparent; }
+.hg-group .hg-dot, .hg-dot.hg-grp { opacity: 1; }
+.hg-count { font-size: 10px; fill: var(--muted); pointer-events: none; }
+.hg-group.selected .hg-dot { stroke: var(--ink); stroke-width: 1.5; }
+.hg-table-wrap { max-width: 100%; max-height: 14em; overflow: auto; }
+.hg-table { width: 100%; border-collapse: collapse; }
+.hg-table th, .hg-table td { text-align: left; padding: 2px var(--s2); border-bottom: 1px solid var(--line); vertical-align: top; }
+.hg-table tr.chosen td { background: var(--paper); }
+.hg-stmt { overflow-wrap: anywhere; }
 .hg-tx:hover .hg-dot, .hg-tx.selected .hg-dot { opacity: 1; r: 5; }
 .hg-tx.selected .hg-dot { stroke: var(--ink); stroke-width: 1.5; }
 .hg-head { fill: none; stroke: var(--ink); stroke-width: 1.5; }

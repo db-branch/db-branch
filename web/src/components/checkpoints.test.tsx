@@ -111,6 +111,20 @@ describe("PanelBody in the modal", () => {
     expect(h).toContain("is not saved");
     expect(h).toContain("Save a checkpoint first");
   });
+  it("shows a group of transactions as a table in time order and restores the chosen row", () => {
+    const burst = [1, 2, 3].map((n) => ({ ...tx(n, 5), time: new Date(Date.UTC(2026, 10, 12, 10, 5, 0, n * 40)).toISOString(), sql: `insert ${n}` }));
+    const g = layoutGraph({ lines, checkpoints: items, head: null, events: { 0: burst } });
+    const grp = g.nodes.find((n) => n.kind === "group")!;
+    expect(grp.group).toHaveLength(3);
+    const h = body(panel({ events: { 0: burst }, selected: grp }), true);
+    expect(h).toContain("3 transactions");
+    expect(h).toMatch(/<table/);
+    for (const n of [1, 2, 3]) expect(h).toContain(`insert ${n}`);
+    expect(h.indexOf("insert 1")).toBeLessThan(h.indexOf("insert 3"));
+    // the last row is chosen first, and has the restore button
+    expect(h).toContain("Restore to here");
+    expect(h).toMatch(/aria-pressed="true"[^>]*>[^<]*#3/);
+  });
   it("does not offer to save when saving is not allowed, and says why", () => {
     const h = body(panel({ selected: selectedNode("checkpoint:c1"), asking: { what: "restore", name: "c1", from: "graph" }, saveWhy: "No permission" }), true);
     expect(h).toMatch(/<button[^>]*disabled[^>]*title="No permission"[^>]*>Save a checkpoint first/);

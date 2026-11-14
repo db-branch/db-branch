@@ -82,19 +82,38 @@ describe("layoutGraph", () => {
     expect(a.x).toBeLessThan(b.x);
   });
 
-  it("keeps dots of transactions made within milliseconds apart from lying on top of each other", () => {
-    const burst = [1, 2, 3].map((n) => ({ ...tx(n, 5), time: new Date(Date.UTC(2026, 10, 12, 10, 5, 0, n * 40)).toISOString() }));
-    const g = layoutGraph({ lines, checkpoints: cps, head: null, events: { 0: [tx(9, 1), ...burst] } });
+  const tsAt = (n: number, sec: number, extra: Partial<HistoryTx> = {}): HistoryTx => ({ ...tx(n, 5), time: new Date(Date.UTC(2026, 10, 12, 10, 5, 0, sec * 1000)).toISOString(), ...extra });
+  it("draws transactions made within a second of each other as one group, in time order", () => {
+    const g = layoutGraph({ lines, checkpoints: cps, head: null, events: { 0: [tsAt(1, 0), tsAt(2, 0.04), tsAt(3, 0.08), tsAt(4, 30)] } });
+    const dots = g.nodes.filter((n) => n.kind === "group" || n.kind === "tx").filter((n) => n.line === 0);
+    expect(dots.map((n) => n.kind).sort()).toEqual(["group", "tx"]);
+    const grp = dots.find((n) => n.kind === "group")!;
+    expect(grp.group!.map((x) => x.gtid)).toEqual(["u:1", "u:2", "u:3"]);
+    expect(grp.tx!.gtid).toBe("u:3"); // the last one: the state after the group
+    expect(say(grp)).toBe("3 transactions, #1 to #3, line 0");
+  });
+  it("chains a group while each step is within a second, and splits a longer pause", () => {
+    const g = layoutGraph({ lines, checkpoints: cps, head: null, events: { 0: [tsAt(1, 0), tsAt(2, 0.9), tsAt(3, 1.8), tsAt(4, 3.5), tsAt(5, 3.6)] } });
+    expect(g.nodes.filter((n) => n.kind === "group").map((n) => n.group!.length).sort()).toEqual([2, 3]);
+  });
+  it("keeps a DDL statement on its own and splits a group around it", () => {
+    const g = layoutGraph({ lines, checkpoints: cps, head: null, events: { 0: [tsAt(1, 0), tsAt(2, 0.1, { ddl: true, inserted: 0 }), tsAt(3, 0.2), tsAt(4, 0.3)] } });
+    expect(g.nodes.filter((n) => n.kind === "tx").map((n) => n.tx!.gtid).sort()).toEqual(["u:1", "u:2"]);
+    expect(g.nodes.filter((n) => n.kind === "group").map((n) => n.group!.map((x) => x.gtid))).toEqual([["u:3", "u:4"]]);
+  });
+  it("does not group across a checkpoint of the line", () => {
+    const at5 = [cp("k1", 5, 0)];
+    const g = layoutGraph({ lines: [lines[0]], checkpoints: at5, head: null, events: { 0: [tsAt(1, -0.2), tsAt(2, 0.2)] } });
+    expect(g.nodes.filter((n) => n.kind === "group")).toHaveLength(0);
+    expect(g.nodes.filter((n) => n.kind === "tx")).toHaveLength(2);
+  });
+  it("keeps a minimum gap between dots and groups", () => {
+    const g = layoutGraph({ lines, checkpoints: cps, head: null, events: { 0: [tsAt(1, 0), tsAt(2, 1.5), tsAt(3, 3), tsAt(4, 4.5)] } });
     const xs = g.nodes.filter((n) => n.kind === "tx" && n.line === 0).map((n) => n.x).sort((a, b) => a - b);
-    expect(xs).toHaveLength(4);
     for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBeGreaterThanOrEqual(12);
-    // and they stay between their neighbours: after the checkpoint before and before the one after
-    const c1 = g.nodes.find((n) => n.id === "checkpoint:c1")!.x;
-    const c2 = g.nodes.find((n) => n.id === "checkpoint:c2")!.x;
-    expect(xs.filter((x) => x > c1 && x < c2).length).toBeGreaterThanOrEqual(1);
   });
   it("samples a stretch with too many transactions and says how many were left out", () => {
-    const many = Array.from({ length: MAX_DOTS + 14 }, (_, i) => tx(i + 1, 1 + (i % 8)));
+    const many = Array.from({ length: MAX_DOTS + 14 }, (_, i) => ({ ...tx(i + 1, 1), time: new Date(Date.UTC(2026, 10, 12, 10, 1, 5 * i)).toISOString() }));
     const g = layoutGraph({ lines, checkpoints: cps, head: null, events: { 0: many } });
     expect(g.nodes.filter((n) => n.kind === "tx")).toHaveLength(MAX_DOTS);
     expect(g.sampled).toBe(14);

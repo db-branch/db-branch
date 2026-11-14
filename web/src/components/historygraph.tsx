@@ -92,13 +92,20 @@ export function HistoryGraph({
               onClick={() => onSelect(n)}
               onKeyDown={(e) => key(e, n)}
             >
-              <title>{n.kind === "tx" ? n.tx!.sql || n.tx!.gtid : label}</title>
+              <title>{n.kind === "tx" ? n.tx!.sql || n.tx!.gtid : n.kind === "group" ? `${n.group!.length} transactions` : label}</title>
               {n.kind === "tx" ? <circle cx={n.x} cy={n.y} r={3.2} className="hg-dot" /> : null}
               {n.kind === "tx" ? <circle cx={n.x} cy={n.y} r={9} className="hg-hit" /> : null}
+              {n.kind === "group" ? <circle cx={n.x} cy={n.y} r={5.2} className="hg-dot hg-grp" /> : null}
+              {n.kind === "group" ? (
+                <text x={n.x} y={n.y - 10} textAnchor="middle" className="hg-count">
+                  ×{n.group!.length}
+                </text>
+              ) : null}
+              {n.kind === "group" ? <circle cx={n.x} cy={n.y} r={11} className="hg-hit" /> : null}
               {n.kind === "checkpoint" ? <circle cx={n.x} cy={n.y} r={n.checkpoint!.auto ? 5 : 6.5} className="hg-cp" /> : null}
               {n.kind === "reset" ? <rect x={n.x - 5} y={n.y - 5} width={10} height={10} className="hg-cp" /> : null}
               {n.head ? <circle cx={n.x} cy={n.y} r={11} className="hg-head" /> : null}
-              <circle cx={n.x} cy={n.y} r={n.kind === "tx" ? 8 : 14} className="hg-focus" />
+              <circle cx={n.x} cy={n.y} r={n.kind === "tx" ? 8 : n.kind === "group" ? 12 : 14} className="hg-focus" />
               {label ? (
                 <text x={n.x} y={n.y + 25} textAnchor="middle" className="hg-name">
                   {shorten(label)}

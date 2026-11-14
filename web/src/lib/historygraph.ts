@@ -17,10 +17,33 @@ export const TOP = 30;
 export const MAX_DOTS = 36;
 // MIN_DOT_GAP is the least distance between two transaction dots on a lane.
 export const MIN_DOT_GAP = 14;
+// GROUP_MS: transactions less than this apart (for example the rows of one save) are drawn as one group.
+export const GROUP_MS = 1000;
+
+// groupTxs puts transactions (oldest first) that follow each other within
+// GROUP_MS into groups. A DDL statement stays alone and ends a group, and so
+// does a checkpoint time in between (cuts).
+export function groupTxs(txs: HistoryTx[], cuts: number[]): { tx: HistoryTx; group?: HistoryTx[] }[] {
+  const out: { tx: HistoryTx; group?: HistoryTx[] }[] = [];
+  let run: HistoryTx[] = [];
+  const flush = () => {
+    if (run.length === 1) out.push({ tx: run[0] });
+    else if (run.length > 1) out.push({ tx: run[run.length - 1], group: run });
+    run = [];
+  };
+  for (const x of txs) {
+    const last = run[run.length - 1];
+    const apart = last && (x.ddl || last.ddl || ms(x.time) - ms(last.time) >= GROUP_MS || cuts.some((c) => c > ms(last.time) && c <= ms(x.time)));
+    if (apart) flush();
+    run.push(x);
+  }
+  flush();
+  return out;
+}
 
 export type GNode = {
   id: string;
-  kind: "reset" | "checkpoint" | "tx";
+  kind: "reset" | "checkpoint" | "tx" | "group";
   x: number;
   y: number;
   lane: number;
@@ -31,7 +54,10 @@ export type GNode = {
   shown: number;
   time: number;
   checkpoint?: Checkpoint;
+  // tx is the transaction of a dot; of a group, its last one (the state after it).
   tx?: HistoryTx;
+  // group: transactions made within GROUP_MS of each other, oldest first (at least two).
+  group?: HistoryTx[];
   head?: boolean;
 };
 // line of a lane is the first line drawn on it; live is true when the branch runs on any line of it.
@@ -209,41 +235,42 @@ export function layoutGraph(input: LayoutInput): GLayout {
     }
 
     // Transactions between the lane's neighbours, by time.
-    const txs = [...(input.events?.[l.line] ?? [])].sort((a, b) => ms(a.time) - ms(b.time));
+    const own = [...(input.events?.[l.line] ?? [])].sort((a, b) => ms(a.time) - ms(b.time));
+    const cuts = cps.filter((c) => c.line === l.line).map((c) => ms(c.created_at));
+    const txs = groupTxs(own, cuts);
     if (txs.length > 0) {
       const anchors: { x: number; t: number }[] = cps.filter((c) => c.line === l.line).map((c) => ({ x: xOf(slot.get(c.name)!), t: ms(c.created_at) }));
-      const t0 = ms(txs[0].time) - 1000;
-      const tEnd = Math.max(ms(txs[txs.length - 1].time), anchors.length ? anchors[anchors.length - 1].t : 0) + 1000;
+      const t0 = ms(txs[0].tx.time) - 1000;
+      const tEnd = Math.max(ms(txs[txs.length - 1].tx.time), anchors.length ? anchors[anchors.length - 1].t : 0) + 1000;
       anchors.unshift({ x: startX + 14, t: Math.min(t0, anchors[0]?.t ?? t0) });
       if (l.live || anchors[anchors.length - 1].t < tEnd - 1000) anchors.push({ x: Math.max(endX, anchors[anchors.length - 1].x + SLOT_W * 0.6) - 14, t: tEnd });
-      const perInterval = new Map<number, HistoryTx[]>();
-      for (const tx of txs) {
-        const t = ms(tx.time);
+      const perInterval = new Map<number, typeof txs>();
+      for (const item of txs) {
+        const t = ms(item.tx.time);
         let i = 0;
         while (i < anchors.length - 2 && t >= anchors[i + 1].t) i++;
-        perInterval.set(i, [...(perInterval.get(i) ?? []), tx]);
+        perInterval.set(i, [...(perInterval.get(i) ?? []), item]);
       }
       for (const [i, list] of perInterval) {
         const a = anchors[i];
         const b = anchors[i + 1] ?? { x: a.x + SLOT_W * 0.6, t: a.t + 1 };
         const kept = sample(list, MAX_DOTS);
         sampled += list.length - kept.length;
-        // Dots lie by time, but transactions made within a moment of each other
-        // (one save of several rows) would sit on top of each other: keep a
-        // minimum gap, spread evenly when the stretch is too short for it.
+        // Dots lie by time; keep a minimum gap between them, and spread them
+        // evenly when the stretch is too short for it.
         const lo = a.x + 12;
         const hi = Math.max(lo, b.x - 12);
         const gap = kept.length > 1 ? Math.min(MIN_DOT_GAP, (hi - lo) / (kept.length - 1)) : 0;
-        const xs = kept.map((tx) => {
-          const f = b.t > a.t ? Math.min(1, Math.max(0, (ms(tx.time) - a.t) / (b.t - a.t))) : 0.5;
+        const xs = kept.map((item) => {
+          const f = b.t > a.t ? Math.min(1, Math.max(0, (ms(item.tx.time) - a.t) / (b.t - a.t))) : 0.5;
           return lo + (hi - lo) * f;
         });
         for (let k = 1; k < xs.length; k++) xs[k] = Math.max(xs[k], xs[k - 1] + gap);
         if (xs.length > 0) xs[xs.length - 1] = Math.min(xs[xs.length - 1], hi);
         for (let k = xs.length - 2; k >= 0; k--) xs[k] = Math.min(xs[k], xs[k + 1] - gap);
-        for (const [k, tx] of kept.entries()) {
-          const x = xs[k];
-          nodes.push({ id: nodeId("tx", `${l.line}:${tx.gtid}`), kind: "tx", x, y, lane, line: l.line, shown, time: ms(tx.time), tx });
+        for (const [k, item] of kept.entries()) {
+          const kind = item.group ? "group" : "tx";
+          nodes.push({ id: nodeId(kind, `${l.line}:${(item.group ?? [item.tx])[0].gtid}`), kind, x: xs[k], y, lane, line: l.line, shown, time: ms(item.tx.time), tx: item.tx, group: item.group });
         }
       }
     }
@@ -270,5 +297,6 @@ export function neighbour(nodes: GNode[], from: GNode, key: "ArrowLeft" | "Arrow
 export function describe(n: GNode): string {
   if (n.kind === "reset") return "Creation state";
   if (n.kind === "checkpoint") return `Checkpoint ${n.checkpoint!.name}, line ${n.shown}`;
+  if (n.kind === "group") return `${n.group!.length} transactions, #${n.group![0].gtid.split(":").pop()} to #${n.tx!.gtid.split(":").pop()}, line ${n.shown}`;
   return `Transaction ${n.tx!.gtid.split(":").pop()}, line ${n.shown}`;
 }
