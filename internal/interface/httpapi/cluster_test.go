@@ -715,3 +715,32 @@ func TestCluster_クラスタのdbbranchのidと食い違うノードを理由�
 		t.Errorf("n2 = %v", n2)
 	}
 }
+
+func TestStorage_ノードの使用量を返し_別のノードへは転送する(t *testing.T) {
+	f := newFixture(t)
+	if resp, body := f.do(t, "GET", "/v1/nodes/node1/storage", nil); resp.StatusCode != 501 || body["error"].(map[string]any)["code"] != "not_implemented" {
+		t.Errorf("a server without storage: %d %v", resp.StatusCode, body)
+	}
+	f.srv.Storage = func(context.Context) (domain.StorageReport, error) {
+		return domain.StorageReport{Pool: "tank", PoolSize: 100, PoolFree: 60, Root: "tank/db-branch",
+			Nodes: []domain.SpaceNode{{Name: "tank/db-branch/bases/orders", Kind: "filesystem", Used: 30}}}, nil
+	}
+	resp, body := f.do(t, "GET", "/v1/nodes/node1/storage", nil)
+	if resp.StatusCode != 200 || body["node"] != "node1" || body["pool_free"] != 60.0 || len(body["nodes"].([]any)) != 1 {
+		t.Errorf("report = %d %v", resp.StatusCode, body)
+	}
+	if resp, _ := f.do(t, "GET", "/v1/nodes/other/storage", nil); resp.StatusCode != 404 {
+		t.Errorf("unknown node: %d", resp.StatusCode)
+	}
+	f.srv.Storage = func(context.Context) (domain.StorageReport, error) {
+		return domain.StorageReport{}, errors.New("zfs is gone")
+	}
+	if resp, _ := f.do(t, "GET", "/v1/nodes/node1/storage", nil); resp.StatusCode != 500 {
+		t.Errorf("a failing zfs: %d", resp.StatusCode)
+	}
+	g, c := remoteFixture(t)
+	g.do(t, "GET", "/v1/nodes/n2/storage", nil)
+	if len(c.forwarded) != 1 || !strings.HasPrefix(c.forwarded[0], "n2 GET /v1/nodes/n2/storage") {
+		t.Errorf("forwarded %v", c.forwarded)
+	}
+}

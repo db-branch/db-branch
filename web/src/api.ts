@@ -56,6 +56,22 @@ export type HistoryTx = {
 };
 export type HistoryEvents = { line: number; recorded: boolean; items: HistoryTx[]; next_before: string | null; retention: string; from_tx?: string };
 
+// SpaceNode and StorageReport: what a node's storage holds (see the API's getNodeStorage).
+export type SpaceNode = {
+  name: string;
+  kind: "filesystem" | "snapshot";
+  used: number;
+  referenced: number;
+  used_by_snapshots?: number;
+  origin?: string;
+  clones?: string[];
+  created: string;
+};
+export type StorageReport = { node: string; pool: string; pool_size: number; pool_free: number; root: string; nodes: SpaceNode[] };
+
+// QueryResult is what one SQL statement on a branch returned (see the API's queryBranch).
+export type QueryResult = { columns?: string[]; rows?: (string | null)[][]; truncated?: boolean; affected?: number; millis: number };
+
 export type Holder = { node: string; state: "held" | "pulling" | "draining" | "skipped"; origin: boolean; reason?: string; distro?: string };
 
 export type Base = {
@@ -365,6 +381,9 @@ export const api = {
   createBranch: (b: { name: string; base: string; ttl?: string; init_sql?: string; owner?: string; access?: string; record?: boolean; runtime?: string }) => call<Operation>("POST", "/v1/branches", b),
   recreateBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/recreate`),
   resetBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/reset`),
+  query: (name: string, sql: string, maxRows?: number) => call<QueryResult>("POST", `/v1/branches/${name}/query`, { sql, max_rows: maxRows }),
+  pauseBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/pause`),
+  resumeBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/resume`),
   deleteBranch: (name: string) => call<Operation>("DELETE", `/v1/branches/${name}`),
   checkpoints: (name: string) => call<{ items: Checkpoint[] }>("GET", `/v1/branches/${name}/checkpoints`).then((r) => r.items),
   checkpointGraph: (name: string) => call<CheckpointList>("GET", `/v1/branches/${name}/checkpoints`),
@@ -402,6 +421,7 @@ export const api = {
   deleteSnapshot: (name: string, snapshot: string) => call<void>("DELETE", `/v1/bases/${name}/snapshots/${snapshot}`),
 
   runtimes: () => call<{ items: Runtime[] }>("GET", "/v1/runtimes").then((r) => r.items),
+  nodeStorage: (node: string) => call<StorageReport>("GET", `/v1/nodes/${encodeURIComponent(node)}/storage`),
   availableRuntimes: () => call<{ items: Runtime[] }>("GET", "/v1/runtimes/available").then((r) => r.items),
   installRuntime: (runtime: string) => call<Operation>("POST", "/v1/runtimes", { runtime }),
   removeRuntime: (runtime: string) => call<void>("DELETE", `/v1/runtimes/${runtime.replace("@", "/")}`),

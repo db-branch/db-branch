@@ -88,7 +88,7 @@ func (a *App) named(f func(cmd *cobra.Command, c Client, n domain.Name) error) f
 }
 
 func (a *App) branchCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "branch", Aliases: []string{"br"}, Short: "Create, reset and delete branches"}
+	cmd := &cobra.Command{Use: "branch", Aliases: []string{"br"}, Short: "Create, reset, pause and delete branches"}
 	var noWait bool
 
 	var base, snapshot, initSQL, initFile, ttl, node, owner, access string
@@ -213,6 +213,20 @@ func (a *App) branchCommand() *cobra.Command {
 			return a.start(cmd.Context(), c, "POST", "/v1/branches/"+n.String()+"/reset", nil, noWait)
 		}),
 	}
+	pause := &cobra.Command{
+		Use:   "pause <name>",
+		Short: "Stop the branch's database server, keeping its data (no memory is held; resume starts it again)",
+		Args:  cobra.ExactArgs(1),
+		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+			return a.start(cmd.Context(), c, "POST", "/v1/branches/"+n.String()+"/pause", nil, noWait)
+		}),
+	}
+	resume := &cobra.Command{
+		Use: "resume <name>", Short: "Start a paused branch's database server again (same port and credentials)", Args: cobra.ExactArgs(1),
+		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+			return a.start(cmd.Context(), c, "POST", "/v1/branches/"+n.String()+"/resume", nil, noWait)
+		}),
+	}
 	var recreateNode string
 	recreate := &cobra.Command{
 		Use:   "recreate <name>",
@@ -255,12 +269,12 @@ func (a *App) branchCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE:  a.restoreCheckpoint(&noWait),
 	}
-	for _, c := range []*cobra.Command{create, reset, recreate, del, restore} {
+	for _, c := range []*cobra.Command{create, reset, pause, resume, recreate, del, restore} {
 		c.Flags().BoolVar(&noWait, "no-wait", false, "print the operation ID and return immediately")
 	}
 	upgrade := a.upgradeCommand(&noWait)
 	upgrade.Flags().BoolVar(&noWait, "no-wait", false, "print the operation ID and return immediately")
-	cmd.AddCommand(create, list, show, dsn, reset, recreate, del, extend, a.checkpointCommand(), a.checkpointsCommand(), restore, upgrade)
+	cmd.AddCommand(create, list, show, dsn, reset, pause, resume, recreate, del, extend, a.checkpointCommand(), a.checkpointsCommand(), restore, upgrade)
 	return cmd
 }
 

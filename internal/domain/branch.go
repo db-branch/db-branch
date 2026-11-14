@@ -216,6 +216,12 @@ const (
 	BranchLost BranchStatus = "lost"
 	// BranchUpgrading: the branch is moving to another runtime (see upgrade.go).
 	BranchUpgrading BranchStatus = "upgrading"
+	// BranchPausing, BranchPaused, BranchResuming: the branch's server is being
+	// stopped, is stopped with the data kept (nothing runs, no memory is held),
+	// or is being started again (see pause.go).
+	BranchPausing  BranchStatus = "pausing"
+	BranchPaused   BranchStatus = "paused"
+	BranchResuming BranchStatus = "resuming"
 )
 
 // Branch is a writable clone of a base snapshot served by its own database server.
@@ -284,10 +290,26 @@ func (b Branch) CanReset() error {
 // CanDelete reports whether a delete may start.
 func (b Branch) CanDelete() error {
 	switch b.Status {
-	case BranchReady, BranchFailed, BranchLost:
+	case BranchReady, BranchPaused, BranchFailed, BranchLost:
 		return nil
 	}
 	return fmt.Errorf("%w: branch %s is %s", ErrConflict, b.Name, b.Status)
+}
+
+// CanPause reports whether the branch's server may be stopped (keeping the data).
+func (b Branch) CanPause() error {
+	if b.Status != BranchReady {
+		return fmt.Errorf("%w: branch %s is %s; only a ready branch can be paused", ErrConflict, b.Name, b.Status)
+	}
+	return nil
+}
+
+// CanResume reports whether the branch's server may be started again.
+func (b Branch) CanResume() error {
+	if b.Status != BranchPaused {
+		return fmt.Errorf("%w: branch %s is %s; only a paused branch can be resumed", ErrConflict, b.Name, b.Status)
+	}
+	return nil
 }
 
 // CanRecreate reports whether the branch may be built again elsewhere: only

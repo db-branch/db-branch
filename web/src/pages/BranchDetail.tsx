@@ -5,6 +5,7 @@ import { CheckpointPanel } from "../components/checkpoints";
 import { ConnectPanel } from "../components/connect";
 import { UpgradePanel } from "../components/upgrade";
 import { BranchHistory } from "../components/branchhistory";
+import { SqlRunner } from "../components/sqlrunner";
 import { hasHistoryModule } from "../lib/history";
 import { useCapabilities } from "../lib/caps";
 import { Empty, ErrorLine } from "../components/ui";
@@ -41,6 +42,7 @@ export function BranchDetail({ name }: { name: string }) {
   if (["ready", "restoring"].includes(b.status) && showCheckpoints(b, can)) {
     sections.push({ id: "checkpoints", title: "Checkpoints", body: <CheckpointPanel branch={b} ready={ready} allow={can} /> });
   }
+  if (ready && can("branch.query")) sections.push({ id: "sql", title: "SQL", body: <SqlRunner name={b.name} /> });
   if (b.record && hasHistoryModule(caps) && can("ext.history.read")) sections.push({ id: "history", title: t("Transactions"), body: <BranchHistory name={b.name} /> });
   if (ready && can("branch.upgrade")) sections.push({ id: "upgrade", title: t("Upgrade"), body: <UpgradePanel branch={b} ready={ready} allow={can} onChange={() => undefined} /> });
   const max = Math.max(1, ...branches.map((x) => x.storage?.referenced ?? 0));
@@ -55,6 +57,8 @@ export function BranchDetail({ name }: { name: string }) {
         onBack={back}
         onExtend={(ttl) => run(api.extendBranch(b.name, ttl))}
         onReset={() => run(api.resetBranch(b.name))}
+        onPause={() => run(api.pauseBranch(b.name))}
+        onResume={() => run(api.resumeBranch(b.name))}
         onRecreate={() => run(api.recreateBranch(b.name))}
         onDelete={() => setDeleting(true)}
         onCopyProxy={() => run(api.dsn(b.name, "proxy").then((d) => navigator.clipboard.writeText(d)))}

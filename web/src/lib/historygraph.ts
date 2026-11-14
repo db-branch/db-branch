@@ -230,6 +230,7 @@ export function layoutGraph(input: LayoutInput): GLayout {
       next = LEFT;
     } else if (root !== l.line) {
       next = laneEnd.get(root) ?? LEFT; // the lane runs on
+      startOf.set(l.line, next); // where the lane has got to: its transactions start here
     } else {
       from = l.from === "" || l.from === "reset" ? LEFT : (cx.get(l.from) ?? LEFT);
       startOf.set(l.line, from + FORK_START);

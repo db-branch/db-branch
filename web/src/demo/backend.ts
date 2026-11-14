@@ -35,7 +35,7 @@ export type Listener = (type: string, data: unknown) => void;
 
 // How long each simulated operation takes (ms).
 // A restore stops the server and starts it again: PostgreSQL stops faster than MySQL (measured on real ZFS: 0.7 s and 2.2 s).
-export const TIMING = { branchCreate: 2000, branchReset: 1300, branchDelete: 800, restorePostgres: 700, restoreMysql: 2200, baseCreate: 2500, baseSnapshot: 1500, baseDelete: 1200, refresh: 3500, runtime: 4000, module: 2000 };
+export const TIMING = { branchCreate: 2000, branchReset: 1300, branchPause: 1200, branchDelete: 800, restorePostgres: 700, restoreMysql: 2200, baseCreate: 2500, baseSnapshot: 1500, baseDelete: 1200, refresh: 3500, runtime: 4000, module: 2000 };
 
 const MAX_NAME = 32;
 const NAME = /^[a-z]([a-z0-9]|-[a-z0-9])*$/;
@@ -180,6 +180,14 @@ export class DemoBackend {
           b.reset_at = new Date(now).toISOString();
           this.resetCheckpoints(b.name);
         }
+        this.emit("branch.updated", { name: b.name });
+        return;
+      }
+      case "branch.paused": {
+        const b = s.branches.find((x) => x.name === fx.name);
+        if (!b) return;
+        b.status = "paused";
+        b.operation = null;
         this.emit("branch.updated", { name: b.name });
         return;
       }
@@ -412,6 +420,22 @@ export class DemoBackend {
     });
     a("DELETE", "/v1/branches/:name", "user", (c) => this.branchAction(c, "branch.delete", "deleting", TIMING.branchDelete, { k: "branch.delete", name: c.p.name }, true));
     a("POST", "/v1/branches/:name/reset", "user", (c) => this.branchAction(c, "branch.reset", "resetting", TIMING.branchReset, { k: "branch.ready", name: c.p.name, reset: true }));
+    a("POST", "/v1/branches/:name/query", "user", (c) => {
+      const br = this.branchFor(c);
+      if (!br) return notFound("branch");
+      if (br.status !== "ready") return fail(409, "conflict", `branch ${br.name} is ${br.status}`);
+      const sql = String(c.body.sql ?? "").trim();
+      if (!sql) return fail(422, "query_failed", "empty statement");
+      if (!/^(select|show|describe|explain)\b/i.test(sql)) return ok({ affected: 1, millis: 3 });
+      const rows = Array.from({ length: 5 }, (_, i) => [String(i + 1), `user${i + 1}@example.com`, i === 3 ? null : `User ${i + 1}`]);
+      return ok({ columns: ["id", "email", "name"], rows, millis: 4 });
+    });
+    a("POST", "/v1/branches/:name/pause", "user", (c) => this.branchAction(c, "branch.pause", "pausing", TIMING.branchPause, { k: "branch.paused", name: c.p.name }));
+    a("POST", "/v1/branches/:name/resume", "user", (c) => {
+      const br = this.branchFor(c);
+      if (br && br.status !== "paused") return fail(409, "conflict", `branch ${br.name} is ${br.status}; only a paused branch can be resumed`);
+      return this.branchAction(c, "branch.resume", "resuming", TIMING.branchPause, { k: "branch.ready", name: c.p.name }, true);
+    });
     a("POST", "/v1/branches/:name/recreate", "user", (c) => this.branchAction(c, "branch.create", "provisioning", TIMING.branchCreate, { k: "branch.ready", name: c.p.name }));
     a("GET", "/v1/branches/:name/dsn", "anon", (c) => {
       const b = this.branchFor(c);
@@ -928,6 +952,33 @@ export class DemoBackend {
           },
         })),
       });
+    });
+    a("GET", "/v1/nodes/:name/storage", "admin", (c) => {
+      const i = NODES.indexOf(c.p.name);
+      if (i < 0) return notFound("node");
+      const root = "tank/db-branch";
+      const MIB = 1024 * 1024;
+      const nodes: Record<string, unknown>[] = [];
+      let total = 0;
+      for (const [n, b] of this.state.bases.entries()) {
+        const snaps = b.snapshots.map((s, k) => ({ name: s.name, used: (40 + ((n * 37 + k * 53) % 400)) * MIB, created: s.created_at }));
+        const snapsUsed = snaps.reduce((sum, s) => sum + s.used, 0);
+        const own = (900 + n * 700) * MIB;
+        const used = own + snapsUsed;
+        total += used;
+        nodes.push({ name: `${root}/bases/${b.name}`, kind: "filesystem", used, referenced: own, used_by_snapshots: snapsUsed, created: b.created_at });
+        for (const s of snaps) {
+          const clones = this.state.branches.filter((x) => x.base === b.name && x.snapshot === s.name).map((x) => `${root}/branches/${x.name}`);
+          nodes.push({ name: `${root}/bases/${b.name}@${s.name}`, kind: "snapshot", used: s.used, referenced: own, clones: clones.length ? clones : undefined, created: s.created });
+        }
+      }
+      for (const [n, br] of this.state.branches.entries()) {
+        const used = (20 + ((n * 61) % 300)) * MIB;
+        total += used;
+        nodes.push({ name: `${root}/branches/${br.name}`, kind: "filesystem", used, referenced: used + 500 * MIB, origin: `${root}/bases/${br.base}@${br.snapshot}`, created: br.created_at });
+      }
+      nodes.unshift({ name: root, kind: "filesystem", used: total, referenced: 0, created: new Date().toISOString() });
+      return ok({ node: c.p.name, pool: "tank", pool_size: 200 * GIB, pool_free: 200 * GIB - total - 6 * GIB, root, nodes });
     });
     a("GET", "/v1/nodes/:name/metrics", "admin", (c) => {
       const i = NODES.indexOf(c.p.name);

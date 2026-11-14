@@ -87,7 +87,7 @@ export function elapsed(since: number, now: number): string {
 
 // isBusy: the branch is being made, reset or changed (not at rest).
 export function isBusy(status: string): boolean {
-  return !["ready", "failed", "lost"].includes(status);
+  return !["ready", "failed", "lost", "paused"].includes(status);
 }
 
 export type Confirm = null | "reset" | "delete";

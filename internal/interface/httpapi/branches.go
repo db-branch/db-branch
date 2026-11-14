@@ -378,6 +378,22 @@ func (s *Server) resetBranch(w http.ResponseWriter, r *http.Request, svc Branche
 		})
 }
 
+func (s *Server) pauseBranch(w http.ResponseWriter, r *http.Request, svc Branches, n domain.Name) {
+	s.branchAction(w, r, svc, n, "branch.pause", domain.Branch.CanPause,
+		func(ctx context.Context, svc Branches, n domain.Name, report func(string)) error {
+			_, err := svc.PauseBranch(ctx, n, report)
+			return err
+		})
+}
+
+func (s *Server) resumeBranch(w http.ResponseWriter, r *http.Request, svc Branches, n domain.Name) {
+	s.branchAction(w, r, svc, n, "branch.resume", domain.Branch.CanResume,
+		func(ctx context.Context, svc Branches, n domain.Name, report func(string)) error {
+			_, err := svc.ResumeBranch(ctx, n, report)
+			return err
+		})
+}
+
 func (s *Server) deleteBranch(w http.ResponseWriter, r *http.Request, svc Branches, n domain.Name) {
 	s.branchAction(w, r, svc, n, "branch.delete", domain.Branch.CanDelete,
 		func(ctx context.Context, svc Branches, n domain.Name, report func(string)) error {

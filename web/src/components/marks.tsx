@@ -13,6 +13,12 @@ export function Status({ status, reason, tone }: { status: string; reason?: stri
       {shape === "ring" && <circle cx="6" cy="6" r="4" pathLength="100" strokeDasharray="70 30" />}
       {shape === "triangle" && <path d="M6 1.5 L10.5 10 H1.5 Z" />}
       {shape === "dashed" && <circle cx="6" cy="6" r="4" strokeDasharray="2 2" />}
+      {shape === "pause" && (
+        <>
+          <rect x="2.5" y="2" width="2.5" height="8" />
+          <rect x="7" y="2" width="2.5" height="8" />
+        </>
+      )}
     </svg>
   );
 }

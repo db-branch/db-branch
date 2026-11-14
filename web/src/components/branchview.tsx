@@ -22,6 +22,8 @@ export function BranchView({
   onRecreate,
   onDelete,
   onCopyProxy,
+  onPause,
+  onResume,
 }: {
   b: Branch;
   clustered: boolean;
@@ -33,6 +35,8 @@ export function BranchView({
   onRecreate: () => void;
   onDelete: () => void;
   onCopyProxy: () => void;
+  onPause: () => void;
+  onResume: () => void;
 }): ReactNode {
   const ready = b.status === "ready";
   return (
@@ -90,13 +94,15 @@ export function BranchView({
       <div className="branch-actions" role="group" aria-label={t("Actions")}>
         {b.status === "lost" && <button onClick={onRecreate}>{t("Recreate")}</button>}
         {b.proxy && <button onClick={onCopyProxy}>{t("Copy proxy URL")}</button>}
+        {b.status === "ready" && <button onClick={onPause}>Pause</button>}
+        {b.status === "paused" && <button onClick={onResume}>Resume</button>}
         <button onClick={() => onExtend("1h")}>{t("Extend 1h")}</button>
         <button onClick={() => onExtend("24h")}>{t("Extend 24h")}</button>
         <button onClick={() => onExtend("168h")}>{t("Extend 7d")}</button>
         <button onClick={onReset} disabled={!ready}>
           {t("Reset")}
         </button>
-        <button className="danger-button" onClick={onDelete} disabled={!["ready", "failed", "lost"].includes(b.status)}>
+        <button className="danger-button" onClick={onDelete} disabled={!["ready", "paused", "failed", "lost"].includes(b.status)}>
           {t("Delete")}
         </button>
       </div>

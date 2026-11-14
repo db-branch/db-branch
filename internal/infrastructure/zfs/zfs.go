@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/execx"
@@ -274,4 +275,65 @@ func (d *Driver) Snapshots(ctx context.Context, dataset string) ([]string, error
 		}
 	}
 	return names, nil
+}
+
+// Tree lists every dataset and snapshot under root with its space use, in
+// one call (zfs list -r), as a flat list.
+func (d *Driver) Tree(ctx context.Context, root string) ([]domain.SpaceNode, error) {
+	if err := checkDataset(root); err != nil {
+		return nil, err
+	}
+	out, err := d.zfs(ctx, "list", "-Hp", "-r", "-t", "filesystem,snapshot", "-o", "name,type,used,referenced,usedbysnapshots,origin,creation,clones", root)
+	if err != nil {
+		return nil, err
+	}
+	var nodes []domain.SpaceNode
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		f := strings.Split(line, "\t")
+		if len(f) != 8 {
+			return nil, fmt.Errorf("zfs list %s: unexpected line %q", root, line)
+		}
+		used, e1 := strconv.ParseUint(f[2], 10, 64)
+		ref, e2 := strconv.ParseUint(f[3], 10, 64)
+		created, e3 := strconv.ParseInt(f[6], 10, 64)
+		if e1 != nil || e2 != nil || e3 != nil {
+			return nil, fmt.Errorf("zfs list %s: unexpected line %q", root, line)
+		}
+		n := domain.SpaceNode{Name: f[0], Kind: f[1], Used: used, Referenced: ref, Created: time.Unix(created, 0).UTC()}
+		if v, err := strconv.ParseUint(f[4], 10, 64); err == nil {
+			n.UsedBySnapshots = v
+		}
+		if f[5] != "-" {
+			n.Origin = f[5]
+		}
+		if f[7] != "-" {
+			n.Clones = strings.Split(f[7], ",")
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes, nil
+}
+
+// Space returns the size and the free space of a pool (its root dataset's use plus what is available).
+func (d *Driver) Space(ctx context.Context, pool string) (size, free uint64, err error) {
+	if err := checkDataset(pool); err != nil {
+		return 0, 0, err
+	}
+	out, err := d.zfs(ctx, "list", "-Hp", "-o", "used,available", pool)
+	if err != nil {
+		return 0, 0, err
+	}
+	f := strings.Fields(string(out))
+	if len(f) != 2 {
+		return 0, 0, fmt.Errorf("zfs list %s: unexpected output %q", pool, strings.TrimSpace(string(out)))
+	}
+	used, e1 := strconv.ParseUint(f[0], 10, 64)
+	avail, e2 := strconv.ParseUint(f[1], 10, 64)
+	if e1 != nil || e2 != nil {
+		return 0, 0, fmt.Errorf("zfs list %s: unexpected output %q", pool, strings.TrimSpace(string(out)))
+	}
+	return used + avail, avail, nil
 }
