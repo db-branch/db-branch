@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 
 - Web console: every branch has a page of its own at `/admin/branches/<name>`, with its facts, its actions (recreate, copy proxy URL, extend, reset, delete), the connection details, the Checkpoints graph, the recorded transactions as a searchable table (history module) and the upgrade. The Branches list is now a light table (status, name, base) whose names open the page; its action menu and the Connect and Checkpoints dialogs moved to the page.
+- Web console, user side (the portal): a branch row in "Your branches" is a summary that opens the branch's own page at `/branch/<name>` instead of expanding in place; the details it showed, the Checkpoints graph, and (history module, recorded branches) the transactions table are on that page. A new branch opens its page once it is ready.
 
 ### Fixed
 

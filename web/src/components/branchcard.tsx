@@ -1,4 +1,4 @@
-import { useEffect, useId, useReducer, useRef, useState } from "react";
+import { ReactNode, useEffect, useId, useReducer, useRef, useState } from "react";
 import { api, Branch } from "../api";
 import { confirmReducer, countdown, elapsed, expiryState, extendTtl, isBusy, longerChoices, ttlChoices } from "../lib/branches";
 import { bytes, relative } from "../lib/format";
@@ -9,7 +9,7 @@ import { CheckpointPanel } from "./checkpoints";
 import { UpgradePanel } from "./upgrade";
 import { isUpgraded } from "../lib/upgrade";
 import { ConnectPanel } from "./connect";
-import { CopyButton, Engine, Icon, Status, StorageBar, TtlBar } from "./marks";
+import { CopyButton, Engine, Status, StorageBar, TtlBar } from "./marks";
 import { RecordingBadge, RecordingValue } from "./recording";
 import { ErrorLine } from "./ui";
 
@@ -44,8 +44,10 @@ export function BranchRow({
   can,
   snapshot,
   fresh,
-  open,
-  onToggle,
+  mode,
+  href,
+  onOpen,
+  extra,
   onChange,
   onDismiss,
   tourAnchor,
@@ -57,8 +59,12 @@ export function BranchRow({
   can?: Record<string, boolean>;
   snapshot?: SnapInfo;
   fresh?: boolean;
-  open: boolean;
-  onToggle: () => void;
+  // mode "list" is the summary in the list (a link to the branch's page); "page" is the branch's own page with its details.
+  mode: "list" | "page";
+  href?: string;
+  onOpen?: () => void;
+  // extra is a section of the page under its details (the transactions).
+  extra?: ReactNode;
   onChange: () => void;
   onDismiss?: () => void;
   tourAnchor?: boolean;
@@ -70,6 +76,7 @@ export function BranchRow({
   const detailsId = useId();
   const cancelButton = useRef<HTMLButtonElement>(null);
   const triggers = useRef<Record<string, HTMLButtonElement | null>>({});
+  const open = mode === "page";
 
   // An armed Confirm goes back by itself; focus moves to Cancel, the safe choice.
   useEffect(() => {
@@ -136,7 +143,16 @@ export function BranchRow({
   return (
     <li className={`brow ${soon ? "soon" : ""} ${expired ? "expired" : ""} ${failed ? "failed" : ""} ${fresh ? "fresh" : ""} ${open ? "open" : ""}`} data-tour={tourAnchor ? "branch" : undefined}>
       <div className="brow-main">
-        <button type="button" className="brow-id" aria-expanded={open} aria-controls={detailsId} onClick={onToggle}>
+        {mode === "list" ? (
+          <a
+            className="brow-id"
+            href={href}
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+              e.preventDefault();
+              onOpen?.();
+            }}
+          >
           <span className="brow-line">
             <Status status={failed ? "failed" : b.status} reason={b.status_reason} tone={soon ? "soon" : expired ? "expired" : undefined} />
             <span className="mono strong brow-name">
@@ -153,7 +169,27 @@ export function BranchRow({
             <span className="mono muted" title={t("Base")}>{b.base}</span>
             {b.storage && <span className="muted small" title={t("{own} own writes of {total} referenced", { own: bytes(b.storage.used), total: bytes(b.storage.referenced) })}>{bytes(b.storage.used)}</span>}
           </span>
-        </button>
+          </a>
+        ) : (
+          <div className="brow-id">
+          <span className="brow-line">
+            <Status status={failed ? "failed" : b.status} reason={b.status_reason} tone={soon ? "soon" : expired ? "expired" : undefined} />
+            <span className="mono strong brow-name">
+              {prefix && <span className="muted">{prefix}</span>}
+              {rest}
+            </span>
+            {b.access === "open" && <span className="badge">{t("open")}</span>}
+            <RecordingBadge record={b.record} />
+            {chip}
+          </span>
+          <span className="brow-meta">
+            <Engine runtime={b.runtime} />
+            {isUpgraded(b.runtime, b.base_runtime) && <span className="badge" title={t("Upgraded: the Base runs {runtime}", { runtime: b.base_runtime ?? "" })}>{t("upgraded")}</span>}
+            <span className="mono muted" title={t("Base")}>{b.base}</span>
+            {b.storage && <span className="muted small" title={t("{own} own writes of {total} referenced", { own: bytes(b.storage.used), total: bytes(b.storage.referenced) })}>{bytes(b.storage.used)}</span>}
+          </span>
+          </div>
+        )}
         <div className="brow-side">
           <span className="brow-actions">
             <CopyButton text={t("Copy URL")} label={t("Copy connection URL")} load={() => api.dsn(b.name)} disabled={!ready} />
@@ -168,9 +204,6 @@ export function BranchRow({
                 {t("Extend +4h")}
               </button>
             )}
-            <button type="button" className="icon-button toggle" aria-expanded={open} aria-controls={detailsId} aria-label={open ? t("Hide details") : t("Show details")} title={open ? t("Hide details") : t("Show details")} onClick={onToggle}>
-              <Icon name={open ? "up" : "down"} />
-            </button>
           </span>
         </div>
       </div>
@@ -310,6 +343,12 @@ export function BranchRow({
             </div>
           ) : (
             <p className="muted small">{t("Sign in to extend, reset or delete.")}</p>
+          )}
+          {extra && (
+            <section className="branch-section">
+              <h2>{t("Transactions")}</h2>
+              {extra}
+            </section>
           )}
         </div>
       )}

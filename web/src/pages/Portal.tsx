@@ -5,7 +5,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, Branch, PublicBase, Session, ssoReturn } from "../api";
 import { Login, Mark } from "../App";
 import { AccountMenu, AccountPage, LanguagePicker } from "../components/account";
-import { BranchRow, Job, SnapInfo } from "../components/branchcard";
+import { allowed, BranchRow, Job, SnapInfo } from "../components/branchcard";
+import { BranchHistory } from "../components/branchhistory";
+import { hasHistoryModule } from "../lib/history";
 import { Empty, ErrorLine } from "../components/ui";
 import { Limits, NewBranch, NewBranchSkeleton } from "../components/newbranch";
 import { Choice } from "../lib/bases";
@@ -65,7 +67,22 @@ export function Portal() {
   const [fresh, setFresh] = useState<string | null>(null);
   const [touring, setTouring] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [openName, setOpenName] = useState<string | null>(null);
+  // The branch's own page is /branch/<name>; anything else is the list.
+  const [path, setPath] = useState(location.pathname);
+  const pathRef = useRef(path);
+  pathRef.current = path;
+  useEffect(() => {
+    const onPop = () => setPath(location.pathname);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  const go = useCallback((href: string) => {
+    history.pushState(null, "", href);
+    setPath(location.pathname);
+    window.scrollTo(0, 0);
+  }, []);
+  const branchName = path.startsWith("/branch/") ? decodeURIComponent(path.slice("/branch/".length).split("/")[0]) : null;
+  const pageOf = (name: string) => `/branch/${encodeURIComponent(name)}`;
   const [announce, setAnnounce] = useState("");
   const now = useNow(15000);
   const alive = useRef(true);
@@ -156,7 +173,6 @@ export function Portal() {
     }
     setJobs((js) => [job, ...js.filter((j) => j.name !== job.name)]);
     setFresh(job.name);
-    setOpenName(null);
     setAnnounce(t("Creating {name}…", { name: job.name }));
     mine.reload();
     try {
@@ -170,7 +186,8 @@ export function Portal() {
       await mine.reload();
       if (!alive.current) return;
       setJobs((js) => js.filter((j) => j.name !== job.name));
-      setOpenName(job.name);
+      // Its connection is on its page: go there unless the person went elsewhere meanwhile.
+      if (pathRef.current === "/") go(pageOf(job.name));
       setAnnounce(t("{name} is ready. Its connection is open.", { name: job.name }));
     } catch (err) {
       if (!alive.current) return;
@@ -256,6 +273,44 @@ export function Portal() {
             </p>
           )}
         </main>
+      ) : branchName ? (
+        <main className="portal-main portal-branch">
+          <a
+            className="text-button back-link"
+            href="/"
+            onClick={(e) => {
+              e.preventDefault();
+              go("/");
+            }}
+          >
+            ← {t("Your branches")}
+          </a>
+          <ErrorLine error={mine.error} />
+          {!mine.data && !mine.error && <ul className="brows" aria-hidden="true"><li className="brow skeleton" /></ul>}
+          {mine.data && !rows.some((x) => x.name === branchName) && <Empty line={t("No such branch.")} />}
+          {rows
+            .filter((x) => x.name === branchName)
+            .map((b) => {
+              const job = jobs.find((j) => j.name === b.name);
+              return (
+                <ul className="brows" key={b.name}>
+                  <BranchRow
+                    branch={b}
+                    job={job}
+                    now={now}
+                    manage={!!session}
+                    can={session?.can}
+                    snapshot={bases.data?.snaps[b.base]?.[b.snapshot]}
+                    fresh={b.name === fresh}
+                    mode="page"
+                    onChange={mine.reload}
+                    onDismiss={job ? () => setJobs((js) => js.filter((j) => j.name !== b.name)) : undefined}
+                    extra={session && b.record && hasHistoryModule(caps) && allowed(session.can, "ext.history.read") ? <BranchHistory name={b.name} /> : undefined}
+                  />
+                </ul>
+              );
+            })}
+        </main>
       ) : (
       <main className={`portal-main portal-two ${rows.length > 0 ? "has-mine" : ""}`}>
         <section className="portal-get">
@@ -318,8 +373,9 @@ export function Portal() {
                     can={session?.can}
                     snapshot={bases.data?.snaps[b.base]?.[b.snapshot]}
                     fresh={b.name === fresh}
-                    open={openName === b.name}
-                    onToggle={() => setOpenName(openName === b.name ? null : b.name)}
+                    mode="list"
+                    href={pageOf(b.name)}
+                    onOpen={() => go(pageOf(b.name))}
                     onChange={mine.reload}
                     onDismiss={job ? () => setJobs((js) => js.filter((j) => j.name !== b.name)) : undefined}
                     tourAnchor={i === 0}

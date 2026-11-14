@@ -772,3 +772,7 @@ li.brow.skeleton { height: 56px; border-radius: 0; border-bottom: 2px solid var(
 .tx-filter input[type="search"] { flex: 1 1 14em; min-width: 0; }
 .tx-wrap { max-height: 32em; }
 .tx-table details > summary { cursor: pointer; }
+a.brow-id { color: inherit; text-decoration: none; cursor: pointer; }
+.portal-branch .brows { max-width: 920px; }
+.portal-branch .back-link { align-self: flex-start; }
+
