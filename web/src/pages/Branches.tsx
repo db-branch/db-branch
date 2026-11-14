@@ -7,6 +7,9 @@ import { useLive, useNow } from "../lib/live";
 import { t } from "../lib/i18n";
 import { RecordingBadge } from "../components/recording";
 import { BranchName } from "../components/branchname";
+import { FilterBar } from "../components/filterbar";
+import { engineOf, filterBranches, optionsOf } from "../lib/filter";
+import { useFilter } from "../lib/usefilter";
 import { GoContext } from "../lib/gocontext";
 import { ADMIN } from "../lib/nav";
 
@@ -15,8 +18,17 @@ export function Branches() {
   const { data: branches, error } = useLive(api.branches, ["branch", "operation"]);
   const { data: bases } = useLive(api.bases, ["base"]);
   const [creating, setCreating] = useState(false);
+  const [filter, setFilter] = useFilter(["q", "status", "engine", "base", "owner"]);
   useNow();
   const ready = (bases ?? []).filter((b) => b.latest_snapshot);
+  const all = branches ?? [];
+  const shown = filterBranches(all, filter);
+  const facets = [
+    { key: "status", label: "Status", options: optionsOf(all.map((b) => b.status)) },
+    { key: "engine", label: "Engine", options: optionsOf(all.map((b) => engineOf(b.runtime))) },
+    { key: "base", label: "Base", options: optionsOf(all.map((b) => b.base)) },
+    { key: "owner", label: "Owner", options: optionsOf(all.map((b) => b.owner)) },
+  ];
 
   return (
     <section className="page">
@@ -33,7 +45,9 @@ export function Branches() {
           action={ready.length > 0 && <button onClick={() => setCreating(true)}>{t("Create a branch")}</button>}
         />
       )}
-      {branches && branches.length > 0 && (
+      {branches && branches.length > 0 && <FilterBar values={filter} onChange={setFilter} facets={facets} shown={shown.length} total={all.length} />}
+      {branches && branches.length > 0 && shown.length === 0 && <p className="muted">{t("No match")}</p>}
+      {branches && shown.length > 0 && (
         <div className="table-wrap">
           <table className="rows">
             <thead>
@@ -44,7 +58,7 @@ export function Branches() {
               </tr>
             </thead>
             <tbody>
-              {branches.map((b) => (
+              {shown.map((b) => (
                 <tr key={b.name} className={b.operation ? "busy" : ""}>
                   <td className="col-status">
                     <Status status={b.status} reason={b.status_reason} />

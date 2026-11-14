@@ -3,6 +3,9 @@ import { api, Base, Branch, canBase } from "../api";
 import { Engine, Icon, Status } from "../components/marks";
 import { Dialog, Drawer, Empty, ErrorLine, Field, Info } from "../components/ui";
 import { skippedReasons } from "../lib/bases";
+import { FilterBar } from "../components/filterbar";
+import { engineOf, filterBases, optionsOf } from "../lib/filter";
+import { useFilter } from "../lib/usefilter";
 import { GoContext } from "../lib/gocontext";
 import { ADMIN } from "../lib/nav";
 import { relative } from "../lib/format";
@@ -19,10 +22,18 @@ export function Bases() {
   const { data: branches } = useLive(api.branches, ["branch"]);
   const { data: cluster } = useLive(api.cluster, ["node"]);
   const [creating, setCreating] = useState(false);
+  const [filter, setFilter] = useFilter(["q", "status", "engine", "node"]);
   useNow();
 
   const nodes = cluster?.mode === "cluster" ? cluster.nodes.map((n) => n.name) : [];
   const usedBy = (n: string) => (branches ?? []).filter((x) => x.base === n);
+  const all = bases ?? [];
+  const shown = filterBases(all, filter);
+  const facets = [
+    { key: "status", label: "Status", options: optionsOf(all.map((b) => b.status)) },
+    { key: "engine", label: "Engine", options: optionsOf(all.map((b) => engineOf(b.runtime))) },
+    { key: "node", label: "Node", options: nodes.length > 1 ? optionsOf(all.map((b) => b.node)) : [] },
+  ];
 
   return (
     <section className="page">
@@ -34,8 +45,10 @@ export function Bases() {
       </header>
       <ErrorLine error={error} />
       {bases && bases.length === 0 && <Empty line={t("No bases.")} action={<button onClick={() => setCreating(true)}>{t("Create a base")}</button>} />}
+      {all.length > 0 && <FilterBar values={filter} onChange={setFilter} facets={facets} shown={shown.length} total={all.length} />}
+      {all.length > 0 && shown.length === 0 && <p className="muted">{t("No match")}</p>}
       <div className="bases">
-        {bases?.map((b) => (
+        {shown.map((b) => (
           <BaseLine key={b.name} base={b} branches={usedBy(b.name)} nodes={nodes} href={`${ADMIN}/bases/${encodeURIComponent(b.name)}`} onOpen={() => go(`${ADMIN}/bases/${encodeURIComponent(b.name)}`)} />
         ))}
       </div>
