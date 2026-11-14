@@ -95,3 +95,55 @@ describe("analyze: the branches", () => {
   });
 });
 
+describe("analyze: the tree of bases, snapshots and branches", () => {
+  const a = analyze(report(nodes), bases, branches, now);
+  const shape = (n: { kind: string; name: string; used: number; total: number; children: unknown[] }): unknown => ({ kind: n.kind, name: n.name, used: n.used, total: n.total, children: (n.children as (typeof n)[]).map(shape) });
+  it("puts each snapshot under its base and each branch under the snapshot it was cloned from", () => {
+    const orders = a.tree.find((n) => n.name === "orders")!;
+    expect(shape(orders)).toEqual({
+      kind: "base",
+      name: "orders",
+      used: 900,
+      total: 900 + 50 + 30,
+      children: [
+        { kind: "data", name: "data", used: 800, total: 800, children: [] },
+        {
+          kind: "snapshot",
+          name: "s3",
+          used: 10,
+          total: 10,
+          children: [],
+        },
+        { kind: "snapshot", name: "s2", used: 30, total: 30, children: [] },
+        {
+          kind: "snapshot",
+          name: "s1",
+          used: 60,
+          total: 60 + 50 + 30,
+          children: [
+            { kind: "branch", name: "x", used: 50, total: 50, children: [] },
+            { kind: "branch", name: "y", used: 30, total: 30, children: [] },
+          ],
+        },
+      ],
+    });
+  });
+  it("lists the bases biggest first, and a base without snapshots has only its data", () => {
+    expect(a.tree.map((n) => [n.name, n.total])).toEqual([["orders", 980], ["shop", 300]]);
+    const shop = a.tree.find((n) => n.name === "shop")!;
+    expect(shop.children.map((c) => [c.kind, c.name, c.total])).toEqual([["data", "data", 280], ["snapshot", "s1", 20]]);
+  });
+  it("shows a branch whose snapshot is gone under its base, and one with no base in a group of its own", () => {
+    const more = analyze(report([...nodes, fs("branches/lost", 7), fs("branches/stray", 9)]), bases, [...branches, { name: "lost", base: "orders", snapshot: "s9", expires_at: null }], now);
+    const orders = more.tree.find((n) => n.name === "orders")!;
+    expect(orders.children.some((c) => c.kind === "branch" && c.name === "lost")).toBe(true);
+    const stray = more.tree.find((n) => n.kind === "group")!;
+    expect(stray).toMatchObject({ name: "No base", used: 0, total: 9 });
+    expect(stray.children.map((c) => c.name)).toEqual(["stray"]);
+  });
+  it("gives every node its share of the pool", () => {
+    const orders = a.tree.find((n) => n.name === "orders")!;
+    expect(orders.share).toBeCloseTo(980 / 10_000);
+  });
+});
+

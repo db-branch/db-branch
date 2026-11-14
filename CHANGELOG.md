@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
-- Web console (admin): a **Storage** page (`/admin/storage`) shows how much of a node's pool each base (with its snapshots and the branches cloned from it) and each branch uses, as bars and sizes, biggest first. The API gets `GET /v1/nodes/{name}/storage`, a flat list of the datasets and snapshots under db-branch's root with their space use.
+- Web console (admin): a **Storage** page (`/admin/storage`) shows how much of a node's pool is used as a tree: each base with its data and snapshots, and under each snapshot the branches cloned from it, every line with its size and its share of the pool (branches whose snapshot is gone sit under their base, branches without a base in a "No base" group). The API gets `GET /v1/nodes/{name}/storage`, a flat list of the datasets and snapshots under db-branch's root with their space use.
 
 ## [0.2.3] - 2026-11-14
 
