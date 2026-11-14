@@ -439,6 +439,76 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/branches/{name}/pause:
+    post:
+      tags: [branches]
+      operationId: pauseBranch
+      summary: Pause a branch
+      x-dbb-action: branch.update
+      x-dbb-token-scopes: [full, branches]
+      description: |-
+        Stops the branch's database server cleanly and keeps its data: the dataset, the port and the credentials stay, nothing runs and no memory is held. Connections are refused until the branch is resumed. The expiry keeps running: a paused branch that expires is deleted. Answers `202` with an operation of kind `branch.pause`.
+
+        Only a `ready` branch can be paused. The request is refused with `cluster_upgrading` until every node runs the version that knows the `paused` status.
+
+        **Action:** `branch.update`. Allowed for `full` and `branches` tokens. Allowed for the branch's owner and admins.
+      parameters:
+        - {$ref: '#/components/parameters/BranchName'}
+      responses:
+        '202':
+          description: Accepted. Poll the operation or follow the event stream.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Operation'}
+          headers:
+            Location: {$ref: '#/components/headers/Location'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: not_found.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: 'conflict: the branch is not `ready`.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/branches/{name}/resume:
+    post:
+      tags: [branches]
+      operationId: resumeBranch
+      summary: Resume a paused branch
+      x-dbb-action: branch.update
+      x-dbb-token-scopes: [full, branches]
+      description: |-
+        Starts a paused branch's database server again, on the same port and with the same credentials. Answers `202` with an operation of kind `branch.resume`. If the server cannot start, the branch stays `paused` with the reason in `status_reason`, and the request can be repeated.
+
+        **Action:** `branch.update`. Allowed for `full` and `branches` tokens. Allowed for the branch's owner and admins.
+      parameters:
+        - {$ref: '#/components/parameters/BranchName'}
+      responses:
+        '202':
+          description: Accepted. Poll the operation or follow the event stream.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Operation'}
+          headers:
+            Location: {$ref: '#/components/headers/Location'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: not_found.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: 'conflict: the branch is not `paused`.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503': {$ref: '#/components/responses/Unavailable'}
   /v1/branches/{name}/recreate:
     post:
       tags: [branches]
@@ -3277,6 +3347,8 @@ components:
           enum:
             - branch.create
             - branch.reset
+            - branch.pause
+            - branch.resume
             - branch.recreate
             - branch.delete
             - branch.restore
@@ -3355,8 +3427,8 @@ components:
           description: '`private`: the branch has its own password; owner and admins connect. `open`: it uses the cluster''s shared password and anyone may connect and query.'
         status:
           type: string
-          enum: [provisioning, ready, resetting, restoring, upgrading, deleting, failed, lost]
-          description: '`lost` means the node holding the branch is gone (see recreate). `restoring` and `upgrading` are shown while a checkpoint restore or a runtime upgrade runs.'
+          enum: [provisioning, ready, resetting, restoring, upgrading, pausing, paused, resuming, deleting, failed, lost]
+          description: '`lost` means the node holding the branch is gone (see recreate). `restoring` and `upgrading` are shown while a checkpoint restore or a runtime upgrade runs. `paused` means the database server is stopped and the data kept (see pause); `pausing` and `resuming` are shown while it is stopped or started.'
         status_reason:
           type: [string, 'null']
           description: 'Why a branch is `failed` or `lost`. After an upgrade kept with `no_rollback` it starts with `upgrade failed: `.'

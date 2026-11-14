@@ -1083,3 +1083,23 @@ func TestBranchShow_記録は作成時に決まったことを読み取り専用
 		}
 	}
 }
+
+func TestBranchPauseとResume_メモリを解放して止め_同じ接続情報で再開する(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["POST /v1/branches/x/pause"] = accepted("op_p", "branch.pause")
+	api.answers["POST /v1/branches/x/resume"] = accepted("op_r", "branch.resume")
+	for _, c := range []struct{ cmd, want string }{{"pause", "op_p"}, {"resume", "op_r"}} {
+		code, out, errOut := runAPI(t, api, "branch", c.cmd, "x", "--no-wait")
+		if code != 0 || strings.TrimSpace(out) != c.want {
+			t.Errorf("%s: exit %d out %q err %q", c.cmd, code, out, errOut)
+		}
+	}
+	// the help says what it does
+	code, out, _ := runAPI(t, api, "branch", "pause", "--help")
+	if code != 0 || !strings.Contains(out, "keeping its data") {
+		t.Errorf("help = %q", out)
+	}
+	if code, _, _ := runAPI(t, api, "branch", "pause"); code == 0 {
+		t.Error("a name is needed")
+	}
+}

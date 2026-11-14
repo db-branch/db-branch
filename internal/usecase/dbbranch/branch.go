@@ -362,7 +362,8 @@ func (s *Service) Expire(ctx context.Context) ([]domain.Name, error) {
 }
 
 // Recover brings branches back to a steady state after the agent restarts:
-// ready branches are started, interrupted resets and deletes are finished,
+// ready branches are started (paused ones are left stopped), interrupted
+// resets, deletes, pauses and resumes are finished,
 // and interrupted creates are marked failed.
 func (s *Service) Recover(ctx context.Context) error {
 	branches, err := s.Store.ListBranches(ctx)
@@ -390,6 +391,12 @@ func (s *Service) Recover(ctx context.Context) error {
 			errs = append(errs, err)
 		case domain.BranchRestoring:
 			errs = append(errs, s.resumeRestore(ctx, br))
+		case domain.BranchPausing:
+			_, err := s.doPause(ctx, br, nil)
+			errs = append(errs, err)
+		case domain.BranchResuming:
+			_, err := s.doResume(ctx, br, nil)
+			errs = append(errs, err)
 		case domain.BranchUpgrading:
 			errs = append(errs, s.resumeUpgrade(ctx, br))
 		case domain.BranchFailed:

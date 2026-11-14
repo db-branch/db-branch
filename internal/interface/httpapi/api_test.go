@@ -128,6 +128,16 @@ func (f *fakeBranches) ResetBranch(_ context.Context, n domain.Name, _ dbbranch.
 	return f.GetBranch(context.Background(), n)
 }
 
+func (f *fakeBranches) PauseBranch(_ context.Context, n domain.Name, _ dbbranch.Reporter) (domain.Branch, error) {
+	f.record("pause " + n.String())
+	return f.GetBranch(context.Background(), n)
+}
+
+func (f *fakeBranches) ResumeBranch(_ context.Context, n domain.Name, _ dbbranch.Reporter) (domain.Branch, error) {
+	f.record("resume " + n.String())
+	return f.GetBranch(context.Background(), n)
+}
+
 func (f *fakeBranches) DeleteBranch(_ context.Context, n domain.Name, _ dbbranch.Reporter) error {
 	f.record("delete " + n.String())
 	f.mu.Lock()
@@ -790,4 +800,35 @@ func (f *fakeBranches) SetAnonymous(_ context.Context, n domain.Name, l domain.A
 	b.Anonymous = l
 	f.bases[n.String()] = b
 	return b, nil
+}
+
+func TestPauseとResume_状態を確かめてから受け付ける(t *testing.T) {
+	f := newFixture(t)
+	f.branches.branches["run"] = domain.Branch{Name: name("run"), Runtime: mysql84, Status: domain.BranchReady}
+	f.branches.branches["idle"] = domain.Branch{Name: name("idle"), Runtime: mysql84, Status: domain.BranchPaused}
+	f.branches.branches["busy"] = domain.Branch{Name: name("busy"), Runtime: mysql84, Status: domain.BranchProvisioning}
+
+	resp, body := f.do(t, "POST", "/v1/branches/run/pause", nil)
+	if resp.StatusCode != 202 || body["kind"] != "branch.pause" {
+		t.Fatalf("pause: %d %v", resp.StatusCode, body)
+	}
+	f.waitOp(t, body["id"].(string))
+	resp, body = f.do(t, "POST", "/v1/branches/idle/resume", nil)
+	if resp.StatusCode != 202 || body["kind"] != "branch.resume" {
+		t.Fatalf("resume: %d %v", resp.StatusCode, body)
+	}
+	f.waitOp(t, body["id"].(string))
+	for _, c := range []struct{ path string }{{"/v1/branches/busy/pause"}, {"/v1/branches/run/resume"}, {"/v1/branches/idle/pause"}} {
+		if resp, body := f.do(t, "POST", c.path, nil); resp.StatusCode != 409 || errCode(body) != "conflict" {
+			t.Errorf("%s: %d %v", c.path, resp.StatusCode, body)
+		}
+	}
+	for _, path := range []string{"/v1/branches/nope/pause", "/v1/branches/nope/resume"} {
+		if resp, _ := f.do(t, "POST", path, nil); resp.StatusCode != 404 {
+			t.Errorf("%s: %d", path, resp.StatusCode)
+		}
+	}
+	if got := f.branches.calls; len(got) < 2 || got[len(got)-2] != "pause run" || got[len(got)-1] != "resume idle" {
+		t.Errorf("calls = %q", got)
+	}
 }

@@ -13,6 +13,11 @@ import (
 // reset such a branch on the base runtime's binaries without noticing.
 const ProtocolBranchRuntime = 16
 
+// ProtocolBranchPause is the cluster protocol from which a branch may be
+// paused. A paused branch is a status inside put_branch (no new command), but a
+// node that does not know it would not start or reap it correctly.
+const ProtocolBranchPause = 18
+
 // ErrUpgradeRefused is returned for an upgrade db-branch does not do.
 var ErrUpgradeRefused = errors.New("upgrade not allowed")
 

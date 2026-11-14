@@ -96,6 +96,11 @@ type Command struct {
 // Protocol is the cluster protocol this binary speaks. Raise it whenever a
 // command is added or changes meaning, and list the command in opProtocol.
 //
+// 18: a branch may be paused: its status is paused (pausing, resuming) inside
+// put_branch, so there is no new command; nodes at 17 would not know the
+// status, so the feature waits for protocol 18 everywhere
+// (domain.ProtocolBranchPause, checked by the use case).
+//
 // 17: init_cluster_id records the cluster's anonymous identifier (sent to the
 // licence service with a key renewal). The id is drawn when it is first
 // needed, so an existing cluster gets it lazily once every node is at 17.
@@ -105,7 +110,7 @@ type Command struct {
 // so there is no new command; nodes at 15 would reset or recreate such a
 // branch on the base's runtime, so the feature waits for protocol 16
 // everywhere (domain.ProtocolBranchRuntime, checked by the use case).
-const Protocol = 17
+const Protocol = 18
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a
