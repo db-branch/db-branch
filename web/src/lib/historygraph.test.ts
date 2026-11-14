@@ -282,6 +282,16 @@ describe("layoutGraph: a restore of the tip extends its lane", () => {
     expect(dots[0].x).toBeLessThan(dots[1].x);
   });
 
+  it("starts the dots of a merged line where the lane has got to, not at the left edge", () => {
+    // line 1 continues line 0's lane (tip restore): its transactions come before its first checkpoint d1.
+    const g = layoutGraph({ lines: tipLines, checkpoints: tipCps, head: null, events: { 1: [tx(2, 21), tx(3, 22)] }, recorded: true });
+    const lane = g.nodes.filter((n) => n.lane === 0 && n.kind === "checkpoint" && n.line === 0).map((n) => n.x);
+    const dots = g.nodes.filter((n) => n.kind === "tx" || n.kind === "group");
+    expect(dots.length).toBeGreaterThan(0);
+    // all of them are to the right of the last node line 0 left on the lane
+    for (const d of dots) expect(d.x).toBeGreaterThan(Math.max(...lane));
+  });
+
   it("leaves a set-aside lane that ends in a fork where it was", () => {
     // After the tip restore, line 1 was left by a restore of c1: line 2 forks, and lane 0 now stops at the last checkpoint of line 1.
     const l: Line[] = [root, { line: 1, live: false, parent: 0, from: "c2" }, { line: 2, live: true, parent: 0, from: "c1" }];

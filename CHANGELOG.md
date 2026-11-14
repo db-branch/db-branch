@@ -20,6 +20,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- Web console: the transaction dots (and groups) of a line that continues another one's lane started at the left edge of the graph, apart from the lane, instead of where the lane has got to.
 - Web console: the Upgrade box of a branch floats under its button instead of pushing the other facts around when it opens.
 - Web console: the Upgrade panel and the transactions views use short labels instead of explanatory sentences ("Upgraded to mysql@8.0.46 · before-upgrade-…", "Check passed", "Rolled back", "Not installed"); the confirmation shows only the two runtimes.
 - Web console: the Upgrade panel of a branch now follows the server's upgrade rules (5.6 to 5.7 to 8.0; it still said upgrades start from 8.0, so a 5.7 branch had no target), and it lists the runtimes the branch could move to that are not installed on the node yet, each with its `db-branch runtime install` command.
