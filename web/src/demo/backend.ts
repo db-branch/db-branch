@@ -425,7 +425,7 @@ export class DemoBackend {
       const b = this.branchFor(c);
       if (!b) return notFound("branch");
       const st = this.checkpointsOf(b.name);
-      const lines = this.linesOf(st).map((l) => ({ ...l, live: l.line === st.line }));
+      const lines = this.linesOf(st).map(({ replay: _replay, ...l }) => ({ ...l, live: l.line === st.line }));
       return ok({ items: st.list, next_cursor: null, lines, live: st.line, head: st.list.find((x) => x.current)?.name ?? null });
     });
     a("GET", "/v1/ext/history/branches/:name/events", "user", (c) => this.historyEvents(c));
@@ -551,7 +551,7 @@ export class DemoBackend {
 
   // finishRestore starts a new line and marks the restored checkpoint current.
   // The state the branch leaves is not saved: the person saves a checkpoint first.
-  private finishRestore(b: Branch, checkpoint: string, replay?: { line: number; gtid: string }) {
+  private finishRestore(b: Branch, checkpoint: string, replay?: { line: number; gtid: string; txs: HistoryTx[] }) {
     const st = this.checkpointsOf(b.name);
     const lines = this.linesOf(st);
     st.list.forEach((x) => (x.current = false));
@@ -597,13 +597,10 @@ export class DemoBackend {
   // module's replay keeps them), and its own follow.
   private fakeTxs(b: Branch, line: number): HistoryTx[] {
     const own = this.ownFakeTxs(b, line);
-    const meta = this.linesOf(this.checkpointsOf(b.name)).find((l) => l.line === line);
-    if (!meta?.replay) return own;
-    const parent = this.fakeTxs(b, meta.replay.line);
-    const upto = parent.findIndex((x) => x.gtid === meta.replay!.gtid);
-    const replayed = upto < 0 ? [] : parent.slice(0, upto + 1);
-    const last = replayed.length > 0 ? Date.parse(replayed[replayed.length - 1].time) : 0;
-    return [...replayed, ...own.filter((x) => Date.parse(x.time) > last)];
+    const replay = this.linesOf(this.checkpointsOf(b.name)).find((l) => l.line === line)?.replay;
+    if (!replay) return own;
+    const last = replay.txs.length > 0 ? Date.parse(replay.txs[replay.txs.length - 1].time) : 0;
+    return [...replay.txs, ...own.filter((x) => Date.parse(x.time) > last)];
   }
 
   // ownFakeTxs invents the transactions a line makes itself: a steady trickle
@@ -664,7 +661,8 @@ export class DemoBackend {
     const limit = Math.min(500, Math.max(1, Number(c.q.get("limit") ?? 100)));
     const all = this.fakeTxs(b, line).reverse();
     const items = all.slice(0, limit);
-    return ok({ line, recorded: !!b.record && runtimeEngine(b.runtime) === "mysql", items, next_before: all.length > limit ? items[items.length - 1].gtid : null, retention: "168h0m0s" });
+    const fromTx = this.linesOf(st).find((l) => l.line === line)?.replay?.gtid;
+    return ok({ line, recorded: !!b.record && runtimeEngine(b.runtime) === "mysql", items, next_before: all.length > limit ? items[items.length - 1].gtid : null, retention: "168h0m0s", ...(fromTx && all.some((x) => x.gtid === fromTx) ? { from_tx: fromTx } : {}) });
   }
 
   // historyRestore restores the newest checkpoint of the line before the
@@ -678,8 +676,11 @@ export class DemoBackend {
     if (!tx) return fail(409, "conflict", `line ${line} has no recorded transaction ${String(c.body.gtid)}`);
     if (b.status !== "ready") return fail(409, "conflict", `branch ${b.name} is ${b.status}`);
     const base = st.list.filter((x) => x.line === line && Date.parse(x.created_at) <= Date.parse(tx.time)).pop();
+    // What the module replays on the new line: the line's transactions after that checkpoint, up to this one.
+    const all = this.fakeTxs(b, line);
+    const replayed = all.slice(0, all.findIndex((x) => x.gtid === tx.gtid) + 1).filter((x) => !base || Date.parse(x.time) > Date.parse(base.created_at));
     const ms = TIMING.restoreMysql + 1200;
-    return this.branchAction(c, "history.restore", "restoring", ms, { k: "branch.restore", name: b.name, checkpoint: base ? base.name : "@reset", replay: { line, gtid: tx.gtid } });
+    return this.branchAction(c, "history.restore", "restoring", ms, { k: "branch.restore", name: b.name, checkpoint: base ? base.name : "@reset", replay: { line, gtid: tx.gtid, txs: replayed } });
   }
 
   private deleteCheckpoint(c: Ctx): Reply {

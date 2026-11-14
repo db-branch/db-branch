@@ -54,7 +54,7 @@ export type HistoryTx = {
   ddl: boolean;
   file: string;
 };
-export type HistoryEvents = { line: number; recorded: boolean; items: HistoryTx[]; next_before: string | null; retention: string };
+export type HistoryEvents = { line: number; recorded: boolean; items: HistoryTx[]; next_before: string | null; retention: string; from_tx?: string };
 
 export type Holder = { node: string; state: "held" | "pulling" | "draining" | "skipped"; origin: boolean; reason?: string; distro?: string };
 

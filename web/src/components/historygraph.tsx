@@ -18,6 +18,7 @@ export function HistoryGraph({
   checkpoints,
   head,
   events,
+  fromTx,
   recorded,
   scale = 1,
   selected,
@@ -28,6 +29,7 @@ export function HistoryGraph({
   checkpoints: Checkpoint[];
   head: string | null;
   events?: Record<number, HistoryTx[]>;
+  fromTx?: Record<number, string>;
   // recorded: the branch records its transactions (see mergeLines).
   recorded?: boolean;
   // scale draws the whole picture larger (the enlarged view), keeping its proportions.
@@ -35,7 +37,7 @@ export function HistoryGraph({
   selected: string | null;
   onSelect: (node: GNode) => void;
 }) {
-  const g = layoutGraph({ lines, checkpoints, head, events, recorded });
+  const g = layoutGraph({ lines, checkpoints, head, events, recorded, fromTx });
   const refs = useRef<Record<string, SVGGElement | null>>({});
   const scroller = useRef<HTMLDivElement>(null);
   // The one node in the tab order (the others are reached with the arrows).

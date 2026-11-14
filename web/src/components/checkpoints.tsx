@@ -33,6 +33,7 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
   // The transactions are the history module's, and only the owner and admins may read them.
   const overlay = hasHistoryModule(caps) && allow("ext.history.read");
   const [events, setEvents] = useState<Record<number, HistoryTx[]>>();
+  const [fromTx, setFromTx] = useState<Record<number, string>>();
   const [selected, setSelected] = useState<GNode | null>(null);
   const [askingTx, setAskingTx] = useState(false);
   const [name, setName] = useState("");
@@ -54,9 +55,11 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
     if (!overlay || !graph) return;
     let live = true;
     const load = () =>
-      Promise.all(graph.lines.map((l) => api.historyEvents(b.name, l.line).then((r) => [l.line, r.items.slice().reverse()] as const, () => null))).then((rs) => {
+      Promise.all(graph.lines.map((l) => api.historyEvents(b.name, l.line).then((r) => [l.line, r.items.slice().reverse(), r.from_tx] as const, () => null))).then((rs) => {
         const ok = rs.filter((r) => r !== null);
-        if (live) setEvents(ok.length > 0 ? Object.fromEntries(ok) : undefined);
+        if (!live) return;
+        setEvents(ok.length > 0 ? Object.fromEntries(ok.map(([n, items]) => [n, items])) : undefined);
+        setFromTx(Object.fromEntries(ok.filter(([, , f]) => !!f).map(([n, , f]) => [n, f!])));
       });
     load();
     const id = setInterval(load, EVENTS_MS);
@@ -103,13 +106,14 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
 
   const rows = graph ? newestFirst(graph.items) : [];
   // The line a node is drawn on: a line that continued another one's lane is shown as that one.
-  const lanes = useMemo(() => (graph ? mergeLines({ lines: graph.lines, checkpoints: graph.items, head: graph.head, events, recorded: b.record }) : new Map<number, number>()), [graph, events, b.record]);
+  const lanes = useMemo(() => (graph ? mergeLines({ lines: graph.lines, checkpoints: graph.items, head: graph.head, events, recorded: b.record, fromTx }) : new Map<number, number>()), [graph, events, fromTx, b.record]);
 
   return {
     branch: b,
     graph,
     rows,
     events,
+    fromTx,
     error: error ?? loadError,
     note,
     warning,
@@ -234,6 +238,7 @@ export function PanelBody({ p, modal, onExpand, expandRef }: { p: Panel; modal?:
             checkpoints={graph.items}
             head={graph.head}
             events={p.events}
+            fromTx={p.fromTx}
             recorded={b.record}
             scale={modal ? MODAL_SCALE : 1}
             selected={selected?.id ?? null}

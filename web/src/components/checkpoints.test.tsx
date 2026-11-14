@@ -20,6 +20,7 @@ function panel(over: Partial<Panel> = {}): Panel {
     graph: { items, lines, live: 1, head: "d1" },
     rows: [...items].reverse(),
     events: undefined,
+    fromTx: undefined,
     error: null,
     note: "",
     warning: "",
