@@ -33,14 +33,14 @@ describe("TxTableView", () => {
     const h = view([mk(1, "INSERT INTO a VALUES (1)\nSELECT 2", "t", { truncated: true })]);
     expect(h).toContain("<details");
     expect(h).toContain("INSERT INTO a VALUES (1)");
-    expect(h).toContain("cut");
+    expect(h).toContain("Cut");
   });
   it("filters the rows it is given by the text and the table", () => {
     const items = [mk(1, "INSERT one"), mk(2, "INSERT two", "shop.items")];
     expect(view(items, { filter: { text: "two", table: "" } })).not.toContain("INSERT one");
     expect(view(items, { filter: { text: "", table: "shop.items" } })).not.toContain("INSERT one");
     const h = view(items, { filter: { text: "zzz", table: "" } });
-    expect(h).toContain("No matching transactions.");
+    expect(h).toContain("No match");
   });
   it("offers the tables to choose from, and loading older ones only when there are more", () => {
     const items = [mk(1, "x"), mk(2, "y", "shop.items")];
@@ -52,6 +52,6 @@ describe("TxTableView", () => {
     expect(view(items, { more: true, loading: true })).toMatch(/<button[^>]*disabled[^>]*>Load older/);
   });
   it("says so when nothing is recorded yet", () => {
-    expect(view([])).toContain("No transactions recorded yet.");
+    expect(view([])).toContain("No transactions");
   });
 });

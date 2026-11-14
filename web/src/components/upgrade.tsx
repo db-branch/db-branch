@@ -28,22 +28,19 @@ export function Findings({ title, list }: { title: string; list: Finding[] }) {
 
 // headline is the one sentence that says how the upgrade ended.
 export function headline(r: UpgradeResult): string {
-  const vars = { branch: r.branch, from: r.from, to: r.to, checkpoint: r.checkpoint ?? "" };
   switch (r.status) {
     case "upgraded":
-      return t("{branch} now runs {to}. The state before is saved as the Checkpoint {checkpoint}; restore it to go back to {from}.", vars);
+      return t("Upgraded to {to}", { to: r.to }) + (r.checkpoint ? ` · ${r.checkpoint}` : "");
     case "checked":
-      return countLevel(r.pre_check, "error") > 0
-        ? t("Checked only, nothing was changed. The errors below stop the upgrade to {to}.", vars)
-        : t("Checked only, nothing was changed. {branch} can move to {to}.", vars);
+      return countLevel(r.pre_check, "error") > 0 ? t("Check found errors") : t("Check passed");
     case "rolled_back":
-      return t("The upgrade to {to} failed. {branch} was rolled back to {from} (Checkpoint {checkpoint}).", vars);
+      return t("Rolled back");
     case "failed":
-      return t("The upgrade to {to} failed and {branch} was left as it is. Restore the Checkpoint {checkpoint} to go back to {from}.", vars);
+      return t("Failed");
     case "refused":
-      return t("The pre-check found errors, so {branch} was not changed.", vars);
+      return t("Refused");
     default:
-      return t("The upgrade did not start; {branch} was not changed.", vars);
+      return t("Not started");
   }
 }
 
@@ -126,7 +123,7 @@ export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Br
   };
 
   const button = (
-    <button type="button" disabled={!!why || step.kind === "running"} title={why ?? t("Move this Branch to a newer version; the Base and other Branches stay as they are")} onClick={() => dispatch({ type: step.kind === "closed" || step.kind === "done" ? "open" : "close" })}>
+    <button type="button" disabled={!!why || step.kind === "running"} title={why} onClick={() => dispatch({ type: step.kind === "closed" || step.kind === "done" ? "open" : "close" })}>
       {t("Upgrade")}
     </button>
   );
@@ -136,7 +133,7 @@ export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Br
       {button}
       {step.kind === "choose" && (
         <div className="upgrade-box" role="group" aria-label={t("Upgrade {name}", { name: b.name })} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), dispatch({ type: "close" }))}>
-          {!installed && !error && <p className="muted small">{t("Looking for installed versions…")}</p>}
+          {!installed && !error && <p className="muted small">{t("Loading…")}</p>}
           {installed && <NotInstalled runtime={b.runtime} targets={targets} toInstall={toInstall} />}
           {targets.length > 0 && (
             <>
@@ -168,8 +165,10 @@ export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Br
       {step.kind === "confirm" && (
         <div className="confirm" role="group" aria-label={t("Upgrade {name}", { name: b.name })} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), dispatch({ type: "back" }))}>
           <span role="alert">
-            {t("Upgrade {name} from {from} to {to}? A Checkpoint is saved first; on failure it rolls back automatically.", { name: b.name, from: b.runtime, to: step.target })}
-            {step.force && <> {t("The pre-check found errors; they are ignored.")}</>}
+            <span className="mono">
+              {b.runtime} → {step.target}
+            </span>
+            {step.force && <> {t("Errors ignored")}</>}
           </span>
           <span className="confirm-buttons">
             <button type="button" ref={cancel} onClick={() => dispatch({ type: "back" })}>
@@ -213,13 +212,11 @@ export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Br
 
 // NotInstalled says which runtimes the branch could move to that are not installed
 // on this node yet, with the command that installs each, or that there is none.
-export function NotInstalled({ runtime, targets, toInstall }: { runtime: string; targets: string[]; toInstall: string[] }) {
-  if (toInstall.length === 0) {
-    return targets.length === 0 ? <p className="small">{t("No version newer than {runtime} can be reached in one step.", { runtime })}</p> : null;
-  }
+export function NotInstalled({ targets, toInstall }: { runtime?: string; targets: string[]; toInstall: string[] }) {
+  if (toInstall.length === 0) return targets.length === 0 ? <p className="small muted">{t("No upgrade target")}</p> : null;
   return (
     <div className="small upgrade-install">
-      <p>{targets.length === 0 ? t("None of the versions {runtime} can move to is installed on this node. Install one with:", { runtime }) : t("Can also be installed:")}</p>
+      <p className="muted">{t("Not installed")}</p>
       <ul>
         {toInstall.map((r) => (
           <li key={r}>

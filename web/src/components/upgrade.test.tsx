@@ -21,14 +21,14 @@ describe("the result of an upgrade", () => {
     expect(h).toContain("MY-010068");
     expect(h).toContain("upgrade-good");
   });
-  it("says how it ended, with the Checkpoint to restore", () => {
-    expect(headline(result())).toContain("before-upgrade-20261113-120000");
-    expect(headline(result({ status: "checked" }))).toContain("can move to mysql@8.4.13");
-    expect(headline(result({ status: "checked", pre_check: [{ level: "error", code: "c", message: "m" }] }))).toContain("errors below");
-    expect(headline(result({ status: "rolled_back" }))).toContain("rolled back to mysql@8.0.46");
-    expect(headline(result({ status: "failed" }))).toContain("left as it is");
-    expect(headline(result({ status: "refused" }))).toContain("not changed");
-    expect(headline(result({ status: "aborted" }))).toContain("did not start");
+  it("says how it ended in a few words, with the Checkpoint to restore", () => {
+    expect(headline(result())).toBe("Upgraded to mysql@8.4.13 · before-upgrade-20261113-120000");
+    expect(headline(result({ status: "checked" }))).toBe("Check passed");
+    expect(headline(result({ status: "checked", pre_check: [{ level: "error", code: "c", message: "m" }] }))).toBe("Check found errors");
+    expect(headline(result({ status: "rolled_back" }))).toBe("Rolled back");
+    expect(headline(result({ status: "failed" }))).toBe("Failed");
+    expect(headline(result({ status: "refused" }))).toBe("Refused");
+    expect(headline(result({ status: "aborted" }))).toBe("Not started");
   });
   it("shows the end of the error log of a failed start, and the error", () => {
     const h = html(<UpgradeResultView result={result({ status: "rolled_back", error: "server stopped while starting", log_excerpt: "[ERROR] [MY-013170] Upgrade failed" })} />);
@@ -60,17 +60,18 @@ describe("the Upgrade button", () => {
 describe("NotInstalled", () => {
   it("lists the runtimes that could be installed, each with its command, when none is installed", () => {
     const h = renderToStaticMarkup(<NotInstalled runtime="mysql@5.7.44" targets={[]} toInstall={["mysql@8.0.46"]} />);
-    expect(h).toContain("None of the versions mysql@5.7.44 can move to is installed on this node");
+    expect(h).toContain("Not installed");
     expect(h).toContain("db-branch runtime install mysql@8.0.46");
+    expect(h).not.toContain("None of the versions");
   });
   it("lists them behind an installed target as well", () => {
     const h = renderToStaticMarkup(<NotInstalled runtime="mysql@8.0.46" targets={["mysql@8.4.13"]} toInstall={["mysql@8.4.14", "mysql@8.4.15"]} />);
-    expect(h).toContain("Can also be installed:");
+    expect(h).toContain("Not installed");
     expect(h).toContain("db-branch runtime install mysql@8.4.14");
     expect(h).toContain("db-branch runtime install mysql@8.4.15");
   });
   it("says there is nothing when there is neither, and says nothing when an installed target is enough", () => {
-    expect(renderToStaticMarkup(<NotInstalled runtime="mysql@9.6.0" targets={[]} toInstall={[]} />)).toContain("No version newer than mysql@9.6.0 can be reached in one step.");
+    expect(renderToStaticMarkup(<NotInstalled runtime="mysql@9.6.0" targets={[]} toInstall={[]} />)).toContain("No upgrade target");
     expect(renderToStaticMarkup(<NotInstalled runtime="mysql@8.0.46" targets={["mysql@8.4.13"]} toInstall={[]} />)).toBe("");
   });
 });

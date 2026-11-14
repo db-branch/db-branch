@@ -40,9 +40,9 @@ export function TxTableView({
         <span className="muted small">line {line}</span>
       </div>
       {items.length === 0 ? (
-        <p className="muted small">{t("No transactions recorded yet.")}</p>
+        <p className="muted small">{t("No transactions")}</p>
       ) : shown.length === 0 ? (
-        <p className="muted small">{t("No matching transactions.")}</p>
+        <p className="muted small">{t("No match")}</p>
       ) : (
         <div className="hg-table-wrap tx-wrap">
           <table className="hg-table small">
@@ -69,7 +69,7 @@ export function TxTableView({
                       <details>
                         <summary>{firstLine(x.sql, 100)}</summary>
                         <pre className="hg-sql mono small">{x.sql}</pre>
-                        {x.truncated && <span className="muted small">{t("The statement was cut.")}</span>}
+                        {x.truncated && <span className="muted small">{t("Cut")}</span>}
                       </details>
                     ) : (
                       ""
