@@ -70,8 +70,8 @@ const (
 )
 
 // Plans. Lite: history, on up to 3 nodes. Team adds accounts with roles and
-// teams (and diff), on up to 5. Business adds single sign-on, the audit log
-// and masking governance, on up to 10.
+// teams, on up to 5. Business adds single sign-on, the audit log and masking
+// governance, on up to 10. No plan includes diff.
 const (
 	Lite     = "lite"
 	Team     = "team"
@@ -89,18 +89,20 @@ const (
 )
 
 // planFeatures is the one place that says which plan includes which feature.
-// To move a feature between plans, change only these lists. Diff is not in Lite.
+// To move a feature between plans, change only these lists. FeatureDiff is in
+// no plan (see optIn).
 var planFeatures = map[string][]string{
 	Lite:     {FeatureHistory},
-	Team:     {FeatureUsers, FeatureHistory, FeatureDiff},
-	Business: {FeatureUsers, FeatureAudit, FeatureSSO, FeatureHistory, FeatureDiff},
+	Team:     {FeatureUsers, FeatureHistory},
+	Business: {FeatureUsers, FeatureAudit, FeatureSSO, FeatureHistory},
 }
 
 // optIn are features no plan includes (yet). A licence has one only when its
 // Modules field names the module explicitly: "*" does not count, so neither
 // a plain key of any plan nor the trial enables them. Masking governance is
-// one: it comes back later as an opt-in beta.
-var optIn = map[string]string{FeatureMasking: "masking"}
+// one: it comes back later as an opt-in beta. So is diff: it is offered with no
+// plan for now.
+var optIn = map[string]string{FeatureMasking: "masking", FeatureDiff: "diff"}
 
 var planNodes = map[string]int{Lite: 3, Team: 5, Business: 10}
 

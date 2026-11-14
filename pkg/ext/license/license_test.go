@@ -146,10 +146,10 @@ func TestPlan_プランごとに使える機能が増える(t *testing.T) {
 		not  []string
 	}{
 		{license.Lite, []string{license.FeatureHistory}, []string{license.FeatureDiff, license.FeatureUsers, license.FeatureAudit, license.FeatureSSO, license.FeatureMasking}},
-		{license.Team, []string{license.FeatureUsers, license.FeatureHistory, license.FeatureDiff}, []string{license.FeatureAudit, license.FeatureSSO, license.FeatureMasking}},
-		{license.Business, []string{license.FeatureUsers, license.FeatureAudit, license.FeatureSSO, license.FeatureHistory, license.FeatureDiff}, []string{license.FeatureMasking}},
+		{license.Team, []string{license.FeatureUsers, license.FeatureHistory}, []string{license.FeatureDiff, license.FeatureAudit, license.FeatureSSO, license.FeatureMasking}},
+		{license.Business, []string{license.FeatureUsers, license.FeatureAudit, license.FeatureSSO, license.FeatureHistory}, []string{license.FeatureDiff, license.FeatureMasking}},
 		// Keys issued under the earlier plans read as the plan that replaced them.
-		{"startup", []string{license.FeatureUsers, license.FeatureHistory, license.FeatureDiff}, []string{license.FeatureAudit}},
+		{"startup", []string{license.FeatureUsers, license.FeatureHistory}, []string{license.FeatureAudit, license.FeatureDiff}},
 		{"growth", []string{license.FeatureUsers}, []string{license.FeatureSSO}},
 		{"enterprise", []string{license.FeatureAudit, license.FeatureSSO}, []string{license.FeatureMasking}},
 		{"", []string{license.FeatureAudit, license.FeatureSSO}, []string{license.FeatureMasking}},
@@ -235,5 +235,22 @@ func TestHas_マスク管理はどのプランにも入らずモジュールを�
 		if !l.Has(license.FeatureMasking) {
 			t.Errorf("a %s key naming the masking module enables it", plan)
 		}
+	}
+}
+
+func TestHas_diffはどのプランにも入らずモジュールを名指ししたときだけ使える(t *testing.T) {
+	for _, plan := range []string{license.Lite, license.Team, license.Business, "startup"} {
+		l := license.License{Plan: plan, Modules: []string{"*"}}
+		if l.Has(license.FeatureDiff) {
+			t.Errorf("a plain %s key must not enable diff", plan)
+		}
+		l.Modules = []string{"history", "diff"}
+		if !l.Has(license.FeatureDiff) {
+			t.Errorf("a %s key naming the diff module enables it", plan)
+		}
+	}
+	trial := license.Trial(time.Now())
+	if trial.Has(license.FeatureDiff) {
+		t.Error("a trial does not enable diff")
 	}
 }
