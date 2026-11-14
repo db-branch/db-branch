@@ -186,7 +186,7 @@ export class DemoBackend {
       case "branch.restore": {
         const b = s.branches.find((x) => x.name === fx.name);
         if (!b) return;
-        this.finishRestore(b, fx.checkpoint);
+        this.finishRestore(b, fx.checkpoint, fx.replay);
         this.emit("branch.updated", { name: b.name });
         return;
       }
@@ -551,13 +551,13 @@ export class DemoBackend {
 
   // finishRestore starts a new line and marks the restored checkpoint current.
   // The state the branch leaves is not saved: the person saves a checkpoint first.
-  private finishRestore(b: Branch, checkpoint: string) {
+  private finishRestore(b: Branch, checkpoint: string, replay?: { line: number; gtid: string }) {
     const st = this.checkpointsOf(b.name);
     const lines = this.linesOf(st);
     st.list.forEach((x) => (x.current = false));
     st.line = Math.max(st.line, ...st.list.map((x) => x.line), ...lines.map((l) => l.line)) + 1;
     const from = st.list.find((x) => x.name === checkpoint);
-    st.lines = [...lines, { line: st.line, parent: from ? from.line : 0, from: from ? checkpoint : "reset" }];
+    st.lines = [...lines, { line: st.line, parent: from ? from.line : 0, from: from ? checkpoint : "reset", ...(replay ? { replay } : {}) }];
     if (from) from.current = true;
     b.status = "ready";
     b.operation = null;
@@ -592,9 +592,24 @@ export class DemoBackend {
     return b;
   }
 
-  // fakeTxs invents the transactions of one line: a steady trickle between its
-  // birth and its end (the next restore, or now), the same for the same branch.
+  // fakeTxs: the transactions of one line. A line made by a restore to a
+  // transaction starts with the ones up to it, replayed (the same GTIDs, as the
+  // module's replay keeps them), and its own follow.
   private fakeTxs(b: Branch, line: number): HistoryTx[] {
+    const own = this.ownFakeTxs(b, line);
+    const meta = this.linesOf(this.checkpointsOf(b.name)).find((l) => l.line === line);
+    if (!meta?.replay) return own;
+    const parent = this.fakeTxs(b, meta.replay.line);
+    const upto = parent.findIndex((x) => x.gtid === meta.replay!.gtid);
+    const replayed = upto < 0 ? [] : parent.slice(0, upto + 1);
+    const last = replayed.length > 0 ? Date.parse(replayed[replayed.length - 1].time) : 0;
+    return [...replayed, ...own.filter((x) => Date.parse(x.time) > last)];
+  }
+
+  // ownFakeTxs invents the transactions a line makes itself: a steady trickle
+  // between its birth and its end (the next restore, or now), the same for the
+  // same branch.
+  private ownFakeTxs(b: Branch, line: number): HistoryTx[] {
     const st = this.checkpointsOf(b.name);
     if (!b.record || runtimeEngine(b.runtime) !== "mysql") return [];
     const mine = st.list.filter((x) => x.line === line).map((x) => Date.parse(x.created_at));
@@ -664,7 +679,7 @@ export class DemoBackend {
     if (b.status !== "ready") return fail(409, "conflict", `branch ${b.name} is ${b.status}`);
     const base = st.list.filter((x) => x.line === line && Date.parse(x.created_at) <= Date.parse(tx.time)).pop();
     const ms = TIMING.restoreMysql + 1200;
-    return this.branchAction(c, "history.restore", "restoring", ms, { k: "branch.restore", name: b.name, checkpoint: base ? base.name : "@reset" });
+    return this.branchAction(c, "history.restore", "restoring", ms, { k: "branch.restore", name: b.name, checkpoint: base ? base.name : "@reset", replay: { line, gtid: tx.gtid } });
   }
 
   private deleteCheckpoint(c: Ctx): Reply {

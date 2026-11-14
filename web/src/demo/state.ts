@@ -24,7 +24,7 @@ export type BaseRec = Omit<Base, "replicas" | "holders" | "can"> & { size: numbe
 export type Effect =
   | { k: "branch.ready"; name: string; reset?: boolean }
   | { k: "branch.delete"; name: string }
-  | { k: "branch.restore"; name: string; checkpoint: string }
+  | { k: "branch.restore"; name: string; checkpoint: string; replay?: { line: number; gtid: string } }
   | { k: "branch.upgrade"; name: string; to: string; op: string; result: UpgradeResult }
   | { k: "op.result"; op: string; result: UpgradeResult }
   | { k: "base.ready"; name: string; snapshot: boolean; grow?: number }
@@ -42,7 +42,8 @@ export type CheckpointState = { list: Checkpoint[]; line: number; lines?: LineMe
 
 // Where a line of history came from: the checkpoint it was restored from
 // ("reset": the creation state) on line parent. The first line has none.
-export type LineMeta = { line: number; parent: number | null; from: string };
+// replay: a line made by a restore to a transaction starts with the transactions up to it (the module replays them).
+export type LineMeta = { line: number; parent: number | null; from: string; replay?: { line: number; gtid: string } };
 
 export type State = {
   seq: number;

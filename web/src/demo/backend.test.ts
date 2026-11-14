@@ -640,6 +640,17 @@ describe("history graph and module", () => {
     expect(g.lines.find((l) => l.line === 3)).toMatchObject({ parent: 2, from: "fixed-totals", live: true });
     expect(g.items.filter((c) => c.auto)).toHaveLength(autosBefore); // none was added
   });
+  it("replays the transactions up to the chosen one on the new line, with the same GTIDs, and its own follow", () => {
+    const newestFirst = (line: number) => ((events("alex-orders-report", `?line=${line}&limit=500`).body as any).items as { gtid: string }[]).map((x) => x.gtid);
+    const before = newestFirst(2);
+    const pick = before[3];
+    call("POST", "/v1/ext/history/branches/alex-orders-report/restore", { line: 2, gtid: pick });
+    settle();
+    const after = newestFirst(graph("alex-orders-report").live).reverse();
+    const replayed = before.slice(3).reverse(); // oldest first, up to the chosen one
+    expect(after.slice(0, replayed.length)).toEqual(replayed);
+    expect(after.length).toBeGreaterThan(replayed.length);
+  });
   it("restores to a transaction before the line's first checkpoint from the creation state", () => {
     const first = (events("alex-orders-report", "?line=0&limit=500").body as any).items.at(-1);
     call("POST", "/v1/ext/history/branches/alex-orders-report/restore", { line: 0, gtid: first.gtid });
