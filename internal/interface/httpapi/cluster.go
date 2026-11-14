@@ -270,6 +270,29 @@ func (s *Server) nodeMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items(list))
 }
 
+// nodeStorage is what a node's storage holds: the pool, and every dataset and
+// snapshot under db-branch's root with its space use (the admin's Storage page).
+func (s *Server) nodeStorage(w http.ResponseWriter, r *http.Request) {
+	if s.forward(w, r, r.PathValue("name")) {
+		return
+	}
+	if r.PathValue("name") != s.Node && s.Cluster == nil {
+		writeError(w, http.StatusNotFound, "not_found", "no such node")
+		return
+	}
+	if s.Storage == nil {
+		writeError(w, http.StatusNotImplemented, "not_implemented", "this node does not report its storage")
+		return
+	}
+	rep, err := s.Storage(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	rep.Node = s.Node
+	writeJSON(w, http.StatusOK, rep)
+}
+
 // refreshPrincipal acts for mask runs a refresh starts on other nodes.
 var refreshPrincipal = ext.Principal{ID: "refresh", Name: "refresh", Roles: []string{"admin"}}
 

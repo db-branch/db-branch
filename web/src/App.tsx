@@ -15,13 +15,14 @@ import { Branches } from "./pages/Branches";
 import { Cluster } from "./pages/Cluster";
 import { Modules } from "./pages/Modules";
 import { Settings } from "./pages/Settings";
+import { Storage } from "./pages/Storage";
 
-const pages = { branches: Branches, bases: Bases, cluster: Cluster, settings: Settings } as const;
+const pages = { branches: Branches, bases: Bases, storage: Storage, cluster: Cluster, settings: Settings } as const;
 type Page = keyof typeof pages;
 
 // Who sees each page: maintainers get branches, bases and the cluster;
 // settings are for admins.
-const pageAction: Record<Page, string> = { branches: "branch.read", bases: "base.read", cluster: "cluster.read", settings: "setting.write" };
+const pageAction: Record<Page, string> = { branches: "branch.read", bases: "base.read", storage: "cluster.read", cluster: "cluster.read", settings: "setting.write" };
 const visiblePages = () => (Object.keys(pages) as Page[]).filter((p) => isAdmin() || can(pageAction[p]));
 
 // The admin console lives under /admin (see lib/nav.ts); main.tsx imports it from here.

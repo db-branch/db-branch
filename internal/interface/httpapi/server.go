@@ -124,6 +124,8 @@ type Server struct {
 	ExtPublic    map[string][]string
 	LoginMethods []LoginMethod
 	ExtPages     []ModulePage
+	// Storage reports what this node's storage holds and who uses the space. Optional.
+	Storage func(ctx context.Context) (domain.StorageReport, error)
 	// Metrics returns this node's recent performance samples, oldest first. Optional.
 	Metrics func() []domain.Metrics
 	// Tokens manages API tokens; TokenAuth checks them. Optional.
@@ -326,6 +328,7 @@ func (s *Server) routes(mux router, local bool) {
 	r("GET /v1/cluster", "cluster.read", s.cluster)
 	r("GET /v1/metrics", "metrics.read", s.withService(s.metrics))
 	r("GET /v1/nodes/{name}/metrics", "cluster.read", s.nodeMetrics)
+	r("GET /v1/nodes/{name}/storage", "cluster.read", s.nodeStorage)
 	r("POST /v1/cluster/token", "cluster.token", s.clusterToken(local))
 
 	// Logging in happens before there is a principal; it is audited itself.

@@ -56,6 +56,19 @@ export type HistoryTx = {
 };
 export type HistoryEvents = { line: number; recorded: boolean; items: HistoryTx[]; next_before: string | null; retention: string; from_tx?: string };
 
+// SpaceNode and StorageReport: what a node's storage holds (see the API's getNodeStorage).
+export type SpaceNode = {
+  name: string;
+  kind: "filesystem" | "snapshot";
+  used: number;
+  referenced: number;
+  used_by_snapshots?: number;
+  origin?: string;
+  clones?: string[];
+  created: string;
+};
+export type StorageReport = { node: string; pool: string; pool_size: number; pool_free: number; root: string; nodes: SpaceNode[] };
+
 export type Holder = { node: string; state: "held" | "pulling" | "draining" | "skipped"; origin: boolean; reason?: string; distro?: string };
 
 export type Base = {
@@ -402,6 +415,7 @@ export const api = {
   deleteSnapshot: (name: string, snapshot: string) => call<void>("DELETE", `/v1/bases/${name}/snapshots/${snapshot}`),
 
   runtimes: () => call<{ items: Runtime[] }>("GET", "/v1/runtimes").then((r) => r.items),
+  nodeStorage: (node: string) => call<StorageReport>("GET", `/v1/nodes/${encodeURIComponent(node)}/storage`),
   availableRuntimes: () => call<{ items: Runtime[] }>("GET", "/v1/runtimes/available").then((r) => r.items),
   installRuntime: (runtime: string) => call<Operation>("POST", "/v1/runtimes", { runtime }),
   removeRuntime: (runtime: string) => call<void>("DELETE", `/v1/runtimes/${runtime.replace("@", "/")}`),

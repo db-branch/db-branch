@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"io"
+	"time"
 )
 
 // Snapshot is a point-in-time, read-only view of a dataset.
@@ -62,4 +63,37 @@ type SnapshotStreams interface {
 // SnapshotSource fetches a base's snapshot stream from the node holding it.
 type SnapshotSource interface {
 	Open(ctx context.Context, node string, base Name, from, to string) (io.ReadCloser, error)
+}
+
+// SpaceNode is one dataset or snapshot of the storage with its space use, as
+// the storage report lists them (a flat list: names tell the tree).
+type SpaceNode struct {
+	// Name is the full name: "tank/db-branch/bases/orders" or "…/orders@s1".
+	Name string `json:"name"`
+	// Kind is "filesystem" or "snapshot".
+	Kind string `json:"kind"`
+	// Used: for a snapshot, the space only it holds (freed when it is destroyed);
+	// for a dataset, everything below it, snapshots included.
+	Used uint64 `json:"used"`
+	// Referenced is the data it can see, including what it shares.
+	Referenced uint64 `json:"referenced"`
+	// UsedBySnapshots is the part of a dataset's Used that its snapshots hold.
+	UsedBySnapshots uint64 `json:"used_by_snapshots,omitempty"`
+	// Origin is the snapshot a cloned dataset was made from.
+	Origin string `json:"origin,omitempty"`
+	// Clones are the datasets cloned from a snapshot; it cannot be destroyed while any exist.
+	Clones  []string  `json:"clones,omitempty"`
+	Created time.Time `json:"created"`
+}
+
+// StorageReport is what one node's storage holds, for the admin's view of who
+// uses the space.
+type StorageReport struct {
+	Node string `json:"node"`
+	// Pool and its size and free space; Root is the dataset db-branch keeps everything under.
+	Pool     string      `json:"pool"`
+	PoolSize uint64      `json:"pool_size"`
+	PoolFree uint64      `json:"pool_free"`
+	Root     string      `json:"root"`
+	Nodes    []SpaceNode `json:"nodes"`
 }

@@ -929,6 +929,33 @@ export class DemoBackend {
         })),
       });
     });
+    a("GET", "/v1/nodes/:name/storage", "admin", (c) => {
+      const i = NODES.indexOf(c.p.name);
+      if (i < 0) return notFound("node");
+      const root = "tank/db-branch";
+      const MIB = 1024 * 1024;
+      const nodes: Record<string, unknown>[] = [];
+      let total = 0;
+      for (const [n, b] of this.state.bases.entries()) {
+        const snaps = b.snapshots.map((s, k) => ({ name: s.name, used: (40 + ((n * 37 + k * 53) % 400)) * MIB, created: s.created_at }));
+        const snapsUsed = snaps.reduce((sum, s) => sum + s.used, 0);
+        const own = (900 + n * 700) * MIB;
+        const used = own + snapsUsed;
+        total += used;
+        nodes.push({ name: `${root}/bases/${b.name}`, kind: "filesystem", used, referenced: own, used_by_snapshots: snapsUsed, created: b.created_at });
+        for (const s of snaps) {
+          const clones = this.state.branches.filter((x) => x.base === b.name && x.snapshot === s.name).map((x) => `${root}/branches/${x.name}`);
+          nodes.push({ name: `${root}/bases/${b.name}@${s.name}`, kind: "snapshot", used: s.used, referenced: own, clones: clones.length ? clones : undefined, created: s.created });
+        }
+      }
+      for (const [n, br] of this.state.branches.entries()) {
+        const used = (20 + ((n * 61) % 300)) * MIB;
+        total += used;
+        nodes.push({ name: `${root}/branches/${br.name}`, kind: "filesystem", used, referenced: used + 500 * MIB, origin: `${root}/bases/${br.base}@${br.snapshot}`, created: br.created_at });
+      }
+      nodes.unshift({ name: root, kind: "filesystem", used: total, referenced: 0, created: new Date().toISOString() });
+      return ok({ node: c.p.name, pool: "tank", pool_size: 200 * GIB, pool_free: 200 * GIB - total - 6 * GIB, root, nodes });
+    });
     a("GET", "/v1/nodes/:name/metrics", "admin", (c) => {
       const i = NODES.indexOf(c.p.name);
       if (i < 0) return notFound("node");
