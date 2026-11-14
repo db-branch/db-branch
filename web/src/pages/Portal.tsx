@@ -2,8 +2,7 @@
 // pick a base, get a branch and its connection, manage your own branches.
 // It works without logging in for public snapshots.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, Branch, can, PublicBase, Session, ssoReturn } from "../api";
-import { diffFrame, showDiff } from "../lib/diffpage";
+import { api, ApiError, Branch, PublicBase, Session, ssoReturn } from "../api";
 import { Login, Mark } from "../App";
 import { AccountMenu, AccountPage, LanguagePicker } from "../components/account";
 import { allowed, BranchRow, Job, SnapInfo } from "../components/branchcard";
@@ -12,7 +11,7 @@ import { hasHistoryModule } from "../lib/history";
 import { Empty, ErrorLine } from "../components/ui";
 import { Limits, NewBranch, NewBranchSkeleton } from "../components/newbranch";
 import { Choice } from "../lib/bases";
-import { chooseLanguage, language, remembered as rememberedLanguage, setLanguage, t } from "../lib/i18n";
+import { chooseLanguage, remembered as rememberedLanguage, setLanguage, t } from "../lib/i18n";
 import { useCapabilities } from "../lib/caps";
 import { useNow } from "../lib/live";
 import { sortBranches } from "../lib/branches";
@@ -105,13 +104,6 @@ export function Portal() {
   const me = session ? session.user.name || session.user.id : null;
 
   const caps = useCapabilities(!!session);
-  const diffOn = !!session && showDiff(caps, can);
-  const onDiffPage = path === "/diff";
-  const link = (href: string) => (e: React.MouseEvent) => {
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-    e.preventDefault();
-    go(href);
-  };
   const bases = usePoll<Offer>(
     async () => {
       if (session) {
@@ -281,13 +273,6 @@ export function Portal() {
             </p>
           )}
         </main>
-      ) : onDiffPage && diffOn ? (
-        <main className="portal-main portal-diff">
-          <a className="text-button back-link" href="/" onClick={link("/")}>
-            ← {t("Your branches")}
-          </a>
-          <iframe className="module-frame" title="Diff" {...diffFrame(location.search, language())} />
-        </main>
       ) : branchName ? (
         <main className="portal-main portal-branch">
           <a
@@ -318,7 +303,6 @@ export function Portal() {
                     snapshot={bases.data?.snaps[b.base]?.[b.snapshot]}
                     fresh={b.name === fresh}
                     mode="page"
-                    onCompare={diffOn ? () => go(`/diff?a=${encodeURIComponent(b.name)}`) : undefined}
                     onChange={mine.reload}
                     onDismiss={job ? () => setJobs((js) => js.filter((j) => j.name !== b.name)) : undefined}
                     extra={session && b.record && hasHistoryModule(caps) && allowed(session.can, "ext.history.read") ? <BranchHistory name={b.name} /> : undefined}
@@ -390,7 +374,6 @@ export function Portal() {
                     snapshot={bases.data?.snaps[b.base]?.[b.snapshot]}
                     fresh={b.name === fresh}
                     mode="list"
-                    onCompare={diffOn ? () => go(`/diff?a=${encodeURIComponent(b.name)}`) : undefined}
                     href={pageOf(b.name)}
                     onOpen={() => go(pageOf(b.name))}
                     onChange={mine.reload}

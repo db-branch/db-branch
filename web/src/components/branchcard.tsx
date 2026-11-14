@@ -47,7 +47,6 @@ export function BranchRow({
   mode,
   href,
   onOpen,
-  onCompare,
   extra,
   onChange,
   onDismiss,
@@ -64,8 +63,6 @@ export function BranchRow({
   mode: "list" | "page";
   href?: string;
   onOpen?: () => void;
-  // onCompare opens the diff page with this branch chosen; absent when the person has no diff page.
-  onCompare?: () => void;
   // extra is a section of the page under its details (the transactions).
   extra?: ReactNode;
   onChange: () => void;
@@ -196,11 +193,6 @@ export function BranchRow({
         <div className="brow-side">
           <span className="brow-actions">
             <CopyButton text={t("Copy URL")} label={t("Copy connection URL")} load={() => api.dsn(b.name)} disabled={!ready} />
-            {onCompare && (
-              <button type="button" disabled={!ready} onClick={onCompare}>
-                Compare
-              </button>
-            )}
             {manage && (
               <button
                 type="button"

@@ -65,20 +65,3 @@ describe("BranchRow as the page of the branch", () => {
     expect(h).toContain("Sign in to extend, reset or delete.");
   });
 });
-
-describe("BranchRow: Compare", () => {
-  it("sits with the other quick actions, before Extend, in the list and on the page", () => {
-    for (const mode of ["list", "page"]) {
-      const h = row({ mode, onCompare: noop });
-      expect(h).toContain("Compare");
-      expect(h.indexOf("Copy URL")).toBeLessThan(h.indexOf("Compare"));
-      expect(h.indexOf("Compare")).toBeLessThan(h.indexOf("Extend +4h"));
-    }
-  });
-  it("is left out when there is no diff page, and disabled until the branch is ready", () => {
-    expect(row()).not.toContain("Compare");
-    const busy = row({ onCompare: noop }, branch({ status: "provisioning" }));
-    expect(busy).toMatch(/<button[^>]*disabled[^>]*>Compare/);
-  });
-});
-

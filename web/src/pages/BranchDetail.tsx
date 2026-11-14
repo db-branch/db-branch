@@ -6,7 +6,6 @@ import { ConnectPanel } from "../components/connect";
 import { UpgradePanel } from "../components/upgrade";
 import { BranchHistory } from "../components/branchhistory";
 import { hasHistoryModule } from "../lib/history";
-import { showDiff } from "../lib/diffpage";
 import { useCapabilities } from "../lib/caps";
 import { Empty, ErrorLine } from "../components/ui";
 import { GoContext } from "../lib/gocontext";
@@ -58,7 +57,6 @@ export function BranchDetail({ name }: { name: string }) {
         onReset={() => run(api.resetBranch(b.name))}
         onRecreate={() => run(api.recreateBranch(b.name))}
         onDelete={() => setDeleting(true)}
-        onCompare={showDiff(caps, can) ? () => go(`${ADMIN}/m/diff/ui/?a=${encodeURIComponent(b.name)}`) : undefined}
         onCopyProxy={() => run(api.dsn(b.name, "proxy").then((d) => navigator.clipboard.writeText(d)))}
       />
       {deleting && <DeleteBranch branch={b} onClose={() => setDeleting(false)} onDeleted={back} />}

@@ -22,7 +22,6 @@ export function BranchView({
   onRecreate,
   onDelete,
   onCopyProxy,
-  onCompare,
 }: {
   b: Branch;
   clustered: boolean;
@@ -34,8 +33,6 @@ export function BranchView({
   onRecreate: () => void;
   onDelete: () => void;
   onCopyProxy: () => void;
-  // onCompare opens the diff page with this branch chosen; absent when the person has no diff page.
-  onCompare?: () => void;
 }): ReactNode {
   const ready = b.status === "ready";
   return (
@@ -93,7 +90,6 @@ export function BranchView({
       <div className="branch-actions" role="group" aria-label={t("Actions")}>
         {b.status === "lost" && <button onClick={onRecreate}>{t("Recreate")}</button>}
         {b.proxy && <button onClick={onCopyProxy}>{t("Copy proxy URL")}</button>}
-        {onCompare && <button onClick={onCompare}>Compare</button>}
         <button onClick={() => onExtend("1h")}>{t("Extend 1h")}</button>
         <button onClick={() => onExtend("24h")}>{t("Extend 24h")}</button>
         <button onClick={() => onExtend("168h")}>{t("Extend 7d")}</button>
