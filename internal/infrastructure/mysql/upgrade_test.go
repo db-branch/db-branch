@@ -347,3 +347,45 @@ func TestCheckUpgrade_8_0より前の新しいバージョンには_validate_con
 		t.Errorf("8.0: %q", g.sys.calls)
 	}
 }
+
+func TestStartUpgraded_5_7へは起動後にmysql_upgradeを流して再起動する_8系では流さない(t *testing.T) {
+	f := newFixture(t).with("5.7.44")
+	f.sys.shutdownOK = true
+	if _, err := f.srv.StartUpgraded(ctx, f.spec, domain.Login{User: "branch-x"}); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(f.runDir, f.spec.ID, "mysqld.sock")
+	if !f.sys.called("mysql_upgrade --socket=" + sock + " -uroot") {
+		t.Fatalf("mysql_upgrade did not run: %q", f.sys.calls)
+	}
+	// The server is restarted after it: a start, the upgrade, a stop, another start.
+	var order []string
+	for _, c := range f.sys.calls {
+		switch {
+		case strings.HasPrefix(c, "systemctl start"):
+			order = append(order, "start")
+		case strings.HasPrefix(c, "mysql_upgrade"):
+			order = append(order, "upgrade")
+		case strings.HasPrefix(c, "systemctl stop"):
+			order = append(order, "stop")
+		}
+	}
+	if strings.Join(order, " ") != "start upgrade stop start" {
+		t.Errorf("order = %v", order)
+	}
+	g := newFixture(t).with("8.0.46")
+	if _, err := g.srv.StartUpgraded(ctx, g.spec, domain.Login{User: "branch-x"}); err != nil {
+		t.Fatal(err)
+	}
+	if g.sys.called("mysql_upgrade") {
+		t.Errorf("8.0 upgrades its own data dictionary: %q", g.sys.calls)
+	}
+}
+
+func TestStartUpgraded_mysql_upgradeが失敗したらエラーにする(t *testing.T) {
+	f := newFixture(t).with("5.7.44")
+	f.sys.failOn = "mysql_upgrade --socket"
+	if _, err := f.srv.StartUpgraded(ctx, f.spec, domain.Login{User: "branch-x"}); err == nil || !strings.Contains(err.Error(), "mysql_upgrade") {
+		t.Errorf("err = %v", err)
+	}
+}

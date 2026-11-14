@@ -280,12 +280,30 @@ func (m *Server) StartUpgraded(ctx context.Context, s domain.Server, own domain.
 	if err != nil {
 		return res, err
 	}
+	if !seriesAtLeast(domain.MySQLSeries(s.Runtime.Version), "8.0") {
+		// 5.x leaves the system tables as they were: mysql_upgrade brings them up to date, and
+		// the server is restarted so that it runs on the new ones.
+		if err := m.systemUpgrade(ctx, s); err != nil {
+			return res, fmt.Errorf("mysql_upgrade: %w", err)
+		}
+	}
 	if seriesAtLeast(domain.MySQLSeries(s.Runtime.Version), "9.0") {
 		if err := m.convertOwn(ctx, s, own); err != nil {
 			return res, fmt.Errorf("switch account %s to caching_sha2_password: %w", own.User, err)
 		}
 	}
 	return res, nil
+}
+
+// systemUpgrade runs mysql_upgrade of the running server's runtime and restarts the server.
+func (m *Server) systemUpgrade(ctx context.Context, s domain.Server) error {
+	if _, err := m.Run.Run(ctx, m.bin(s, "mysql_upgrade"), "--socket="+m.socket(s), "-uroot"); err != nil {
+		return err
+	}
+	if err := m.Stop(ctx, s, domain.StopClean); err != nil {
+		return err
+	}
+	return m.Start(ctx, s)
 }
 
 // convertOwn moves the branch's own account off mysql_native_password, which
