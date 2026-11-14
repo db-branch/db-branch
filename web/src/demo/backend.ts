@@ -420,6 +420,16 @@ export class DemoBackend {
     });
     a("DELETE", "/v1/branches/:name", "user", (c) => this.branchAction(c, "branch.delete", "deleting", TIMING.branchDelete, { k: "branch.delete", name: c.p.name }, true));
     a("POST", "/v1/branches/:name/reset", "user", (c) => this.branchAction(c, "branch.reset", "resetting", TIMING.branchReset, { k: "branch.ready", name: c.p.name, reset: true }));
+    a("POST", "/v1/branches/:name/query", "user", (c) => {
+      const br = this.branchFor(c);
+      if (!br) return notFound("branch");
+      if (br.status !== "ready") return fail(409, "conflict", `branch ${br.name} is ${br.status}`);
+      const sql = String(c.body.sql ?? "").trim();
+      if (!sql) return fail(422, "query_failed", "empty statement");
+      if (!/^(select|show|describe|explain)\b/i.test(sql)) return ok({ affected: 1, millis: 3 });
+      const rows = Array.from({ length: 5 }, (_, i) => [String(i + 1), `user${i + 1}@example.com`, i === 3 ? null : `User ${i + 1}`]);
+      return ok({ columns: ["id", "email", "name"], rows, millis: 4 });
+    });
     a("POST", "/v1/branches/:name/pause", "user", (c) => this.branchAction(c, "branch.pause", "pausing", TIMING.branchPause, { k: "branch.paused", name: c.p.name }));
     a("POST", "/v1/branches/:name/resume", "user", (c) => {
       const br = this.branchFor(c);

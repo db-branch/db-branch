@@ -93,3 +93,15 @@ describe("BranchRow: Pause and Resume", () => {
   });
 });
 
+describe("BranchRow page: SQL", () => {
+  it("shows the section it is given, before the transactions", () => {
+    const h = row({ mode: "page", sql: <p>SQL BODY</p>, extra: <p>TX BODY</p> });
+    expect(h).toContain("SQL BODY");
+    expect(h.indexOf("SQL BODY")).toBeLessThan(h.indexOf("TX BODY"));
+    expect(h).toMatch(/<h2>SQL<\/h2>/);
+  });
+  it("shows nothing without it", () => {
+    expect(row({ mode: "page" })).not.toMatch(/<h2>SQL<\/h2>/);
+  });
+});
+

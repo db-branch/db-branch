@@ -47,6 +47,7 @@ export function BranchRow({
   mode,
   href,
   onOpen,
+  sql,
   extra,
   onChange,
   onDismiss,
@@ -63,6 +64,8 @@ export function BranchRow({
   mode: "list" | "page";
   href?: string;
   onOpen?: () => void;
+  // sql is the SQL runner section of the page.
+  sql?: ReactNode;
   // extra is a section of the page under its details (the transactions).
   extra?: ReactNode;
   onChange: () => void;
@@ -358,6 +361,12 @@ export function BranchRow({
             </div>
           ) : (
             <p className="muted small">{t("Sign in to extend, reset or delete.")}</p>
+          )}
+          {sql && (
+            <section className="branch-section">
+              <h2>SQL</h2>
+              {sql}
+            </section>
           )}
           {extra && (
             <section className="branch-section">

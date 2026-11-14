@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- Web console: an **SQL** section on the page of a branch (admin console and user page) runs one statement on the branch as its own user and shows the rows as a table (up to 500) or the rows affected, with the time. It uses `POST /v1/branches/{name}/query` and shows for a `ready` branch the person may query.
 - **Pause / Resume of a branch**: `branch pause <name>` (`POST /v1/branches/{name}/pause`) stops the branch's database server cleanly and keeps its data, so no memory is held; `branch resume <name>` starts it again on the same port with the same credentials. A paused branch has the status `paused` (`pausing` and `resuming` while it changes), refuses connections, and cannot be reset, checkpointed or upgraded until resumed; it can be deleted, and its expiry keeps running. The console has Pause / Resume next to Extend. Cluster protocol 18: a pause is refused with `cluster_upgrading` until every node runs this version.
 - Web console (admin): a **Storage** page (`/admin/storage`) shows how much of a node's pool is used as a tree: each base with its data and snapshots, and under each snapshot the branches cloned from it, every line with its size and its share of the pool (branches whose snapshot is gone sit under their base, branches without a base in a "No base" group). The API gets `GET /v1/nodes/{name}/storage`, a flat list of the datasets and snapshots under db-branch's root with their space use.
 

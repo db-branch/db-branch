@@ -69,6 +69,9 @@ export type SpaceNode = {
 };
 export type StorageReport = { node: string; pool: string; pool_size: number; pool_free: number; root: string; nodes: SpaceNode[] };
 
+// QueryResult is what one SQL statement on a branch returned (see the API's queryBranch).
+export type QueryResult = { columns?: string[]; rows?: (string | null)[][]; truncated?: boolean; affected?: number; millis: number };
+
 export type Holder = { node: string; state: "held" | "pulling" | "draining" | "skipped"; origin: boolean; reason?: string; distro?: string };
 
 export type Base = {
@@ -378,6 +381,7 @@ export const api = {
   createBranch: (b: { name: string; base: string; ttl?: string; init_sql?: string; owner?: string; access?: string; record?: boolean; runtime?: string }) => call<Operation>("POST", "/v1/branches", b),
   recreateBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/recreate`),
   resetBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/reset`),
+  query: (name: string, sql: string, maxRows?: number) => call<QueryResult>("POST", `/v1/branches/${name}/query`, { sql, max_rows: maxRows }),
   pauseBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/pause`),
   resumeBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/resume`),
   deleteBranch: (name: string) => call<Operation>("DELETE", `/v1/branches/${name}`),

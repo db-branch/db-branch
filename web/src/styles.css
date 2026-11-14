@@ -820,3 +820,10 @@ a.brow-id { color: inherit; text-decoration: none; cursor: pointer; }
 .tree-pct { min-width: 3.5em; }
 .tree-item[data-kind="base"] > .tree-row { border-top: 1px solid var(--line); font-weight: 500; }
 @media (max-width: 640px) { .tree-kind { display: none; } .tree-bar { display: none; } }
+.sql-runner textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.sql-actions { display: flex; align-items: center; gap: var(--s3); margin: var(--s2) 0; }
+.sql-table-wrap { max-height: 28em; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.sql-table { width: 100%; border-collapse: collapse; }
+.sql-table th, .sql-table td { text-align: left; padding: 2px var(--s2); border-bottom: 1px solid var(--line); white-space: pre; vertical-align: top; }
+.sql-table td.null { font-style: italic; }
+

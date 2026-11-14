@@ -786,3 +786,22 @@ describe("pause and resume", () => {
   });
 });
 
+describe("sql runner", () => {
+  it("runs a statement on a ready branch: rows for a SELECT, rows affected for the rest", () => {
+    const name = branches()[0].name;
+    const sel = call("POST", `/v1/branches/${name}/query`, { sql: "SELECT * FROM users" });
+    expect(sel.status).toBe(200);
+    expect((sel.body as any).columns).toEqual(["id", "email", "name"]);
+    expect((sel.body as any).rows).toHaveLength(5);
+    const upd = call("POST", `/v1/branches/${name}/query`, { sql: "UPDATE users SET name = 'x'" });
+    expect((upd.body as any).affected).toBe(1);
+  });
+  it("refuses an empty statement, a branch that is not ready and a branch that is not there", () => {
+    const name = branches()[0].name;
+    expect(call("POST", `/v1/branches/${name}/query`, { sql: " " }).status).toBe(422);
+    expect(call("POST", "/v1/branches/nope/query", { sql: "SELECT 1" }).status).toBe(404);
+    call("POST", `/v1/branches/${name}/pause`);
+    expect(call("POST", `/v1/branches/${name}/query`, { sql: "SELECT 1" }).status).toBe(409);
+  });
+});
+
