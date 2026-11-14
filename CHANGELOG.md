@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-14
+
 ### Added
 
 - Web console (admin): the Branches and Bases lists have a search box and filters (Branches: status, engine, base, owner; Bases: status, engine, node), kept in the address (`?q=…&status=…`).
@@ -22,6 +24,11 @@ All notable changes to this project are documented here. The format follows [Kee
 - Web console: recorded transactions made less than a second apart (for example the rows of one save) are drawn as one group in the Checkpoints graph, with a count, instead of several dots on top of each other. Selecting the group lists its transactions in time order as a table, and each row can be chosen to restore to (a single Restore to #N button below the table). A DDL statement or a checkpoint ends a group. When a stretch between two nodes is too short for all its dots, the closest neighbours are merged into groups (a DDL statement never is) instead of overlapping or being left out; the Busy-stretches sampling is gone.
 - Web console: a branch that records its transactions now shows the Checkpoints graph as soon as it has a recorded transaction, also right after a reset when it has no checkpoint yet. The graph used to appear only with a checkpoint or a second line.
 
+### Changed
+
+- No plan includes the diff module any more (it was in Lite, Team and Business). Like masking governance it is an opt-in: only a licence whose `Modules` names `diff` enables it (a plain key or a trial does not). Licences that used diff through their plan stop being accepted by it.
+
+
 ## [0.2.2] - 2026-11-14
 
 ### Added
@@ -30,7 +37,6 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
-- No plan includes the diff module any more (it was in Lite, Team and Business). Like masking governance it is an opt-in: only a licence whose `Modules` names `diff` enables it (a plain key or a trial does not). Licences that used diff through their plan stop being accepted by it.
 - Console: restoring the last recorded transaction of a line (history module) continues that line instead of drawing a new one, like the restore of a tip checkpoint. The history module now remembers which transaction a restore went to and returns it as `from_tx` in the events response of that line (only while the line's log holds it); the console takes it as the restored point and extends the lane when nothing on the lane is later. Without `from_tx` the line forks as before. Display only; the core API did not change.
 - **A restore no longer saves the current state automatically.** Restoring a checkpoint (`POST /v1/branches/{name}/checkpoints/{checkpoint}/restore`, `branch restore`, MCP `restore_checkpoint`, and a module's restore through the core) replaces the branch's current state and takes no `before-restore-<time>` checkpoint any more; the work after the last checkpoint is gone unless the person saved a checkpoint first. Every checkpoint taken so far stays and can be restored as often as before, `before-upgrade-<time>` is unchanged, and `before-restore-*` checkpoints made by older versions stay (listed, restorable, deletable) and are still not counted toward `branch.max_checkpoints`. The product only nudges: the console's restore confirmation (checkpoint and recorded transaction, also inside the Expand modal) says the state is replaced and not saved and has a **Save a checkpoint first** button; `db-branch branch restore` prints one note on standard error before it starts (no question, exit status unchanged); the MCP instructions and the `restore_checkpoint` description tell the agent to call `create_checkpoint` first. The operation no longer has the phase `checkpointing`. No API field and no Raft command changed. A failed restore before the swap still leaves the branch as it was, running.
 - Web console: restoring the tip of a line of history no longer adds a new lane to the graph. The restored state continues on the same lane, with no fork and no new "line N" label. Restoring a point in the middle of a line still forks a new lane. Display only: the API and the server are unchanged.
