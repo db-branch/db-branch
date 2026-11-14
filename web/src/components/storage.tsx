@@ -1,10 +1,10 @@
-import { ReactNode, useState } from "react";
+import { ReactNode } from "react";
 import { bytes, relative } from "../lib/format";
-import { Analysis, BaseUsage, Candidate } from "../lib/storage";
-import { t } from "../lib/i18n";
+import { Analysis, BaseUsage, BranchUsage } from "../lib/storage";
 
 // share is a width in percent, at least a sliver while there is something.
 const share = (n: number, of: number) => (of > 0 && n > 0 ? Math.max(1, (n / of) * 100) : 0);
+const percent = (f: number) => (f >= 0.1 ? `${Math.round(f * 100)}%` : f > 0 ? `${(f * 100).toFixed(1)}%` : "0%");
 
 function PoolBar({ pool }: { pool: Analysis["pool"] }) {
   const parts: [string, number, string][] = [
@@ -34,41 +34,27 @@ function PoolBar({ pool }: { pool: Analysis["pool"] }) {
   );
 }
 
-// StorageView is the Storage page: the pool, what to delete to free space, and
-// who uses it, base by base. Deleting is only offered for a snapshot nothing depends on;
-// a base or a branch is deleted on its own page.
+// StorageView is the Storage page: how much of the pool each base and each branch uses.
 export function StorageView({
   analysis: a,
   nodes,
   node,
   onNode,
   onOpen,
-  onDeleteSnapshot,
-  working,
 }: {
   analysis: Analysis;
   nodes: string[];
   node: string;
   onNode: (n: string) => void;
   onOpen: (href: string) => void;
-  onDeleteSnapshot: (base: string, snapshot: string) => void;
-  working: boolean;
 }): ReactNode {
-  const [confirming, setConfirming] = useState<string | null>(null);
-  const maxTotal = Math.max(1, ...a.bases.map((b) => b.total));
-  const del = (c: { base: string; snapshot: string; id: string }) => (
-    <button
-      type="button"
-      className="text-button danger"
-      disabled={working}
-      onClick={() => (confirming === c.id ? (setConfirming(null), onDeleteSnapshot(c.base, c.snapshot)) : setConfirming(c.id))}
-      onBlur={() => setConfirming(null)}
-    >
-      {confirming === c.id ? t("Really delete?") : "Delete"}
-    </button>
+  const maxBase = Math.max(1, ...a.bases.map((b) => b.total));
+  const maxBranch = Math.max(1, ...a.branches.map((b) => b.used));
+  const link = (href: string, text: string) => (
+    <a className="mono strong" href={href} onClick={(e) => (e.stopPropagation(), e.preventDefault(), onOpen(href))}>
+      {text}
+    </a>
   );
-  const open = (c: Candidate) =>
-    c.kind === "base" ? `/admin/bases/${encodeURIComponent(c.base)}` : c.kind === "branch" ? `/admin/branches/${encodeURIComponent(c.id)}` : `/admin/bases/${encodeURIComponent(c.base)}`;
   return (
     <section className="page storage-page">
       <header className="page-head">
@@ -85,54 +71,45 @@ export function StorageView({
       </header>
       <PoolBar pool={a.pool} />
 
-      <h2>Free up space</h2>
-      {a.candidates.length === 0 ? (
-        <p className="muted">{t("Nothing to free")}</p>
-      ) : (
+      <h2>
+        Bases <span className="muted">{a.bases.length}</span>
+      </h2>
+      {a.bases.map((b) => (
+        <BaseBlock key={`${b.location}:${b.name}`} base={b} max={maxBase} link={link} />
+      ))}
+
+      <h2>
+        Branches <span className="muted">{a.branches.length}</span>
+      </h2>
+      {a.branches.length > 0 && (
         <table className="rows compact">
           <thead>
             <tr>
-              <th>Kind</th>
               <th>Name</th>
-              <th>Frees</th>
+              <th>Base</th>
+              <th>Size</th>
               <th />
             </tr>
           </thead>
           <tbody>
-            {a.candidates.map((c) => (
-              <tr key={`${c.kind}:${c.id}`}>
-                <td className="muted">{c.kind}</td>
-                <td>
-                  <span className="mono strong">{c.label}</span>
-                  {c.note && <span className="muted small"> + {c.note}</span>}
-                </td>
+            {a.branches.map((br: BranchUsage) => (
+              <tr key={br.name}>
+                <td>{link(`/admin/branches/${encodeURIComponent(br.name)}`, br.name)}</td>
+                <td className="mono muted">{br.base}</td>
                 <td>
                   <span className="bar">
-                    <span className="bar-own" style={{ width: `${share(c.freed, a.candidates[0].freed)}%` }} />
+                    <span className="bar-own" style={{ width: `${share(br.used, maxBranch)}%` }} />
                   </span>
-                  <span className="mono"> {bytes(c.freed)}</span>
+                  <span className="mono"> {bytes(br.used)}</span>
+                  <span className="muted small"> {percent(br.share)}</span>
                 </td>
-                <td className="col-actions">
-                  {c.kind === "snapshot" ? (
-                    del({ base: c.base, snapshot: c.label.split("@")[1], id: c.id })
-                  ) : (
-                    <a className="text-button" href={open(c)} onClick={(e) => (e.preventDefault(), onOpen(open(c)))}>
-                      Open
-                    </a>
-                  )}
-                </td>
+                <td>{br.expired && <span className="badge warn">Expired</span>}</td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
 
-      <h2>
-        Bases <span className="muted">{a.bases.length}</span>
-      </h2>
-      {a.bases.map((b) => (
-        <BaseBlock key={`${b.location}:${b.name}`} base={b} max={maxTotal} del={del} onOpen={onOpen} />
-      ))}
       {a.other.used > 0 && (
         <p className="muted small">
           Other <span className="mono">{bytes(a.other.used)}</span> ({a.other.items.length}): {a.other.items.slice(0, 5).map((i) => `${i.name} ${bytes(i.used)}`).join(", ")}
@@ -142,15 +119,12 @@ export function StorageView({
   );
 }
 
-function BaseBlock({ base: b, max, del, onOpen }: { base: BaseUsage; max: number; del: (c: { base: string; snapshot: string; id: string }) => ReactNode; onOpen: (href: string) => void }) {
+function BaseBlock({ base: b, max, link }: { base: BaseUsage; max: number; link: (href: string, text: string) => ReactNode }) {
   const own = Math.max(0, b.used - b.snapshotsUsed);
-  const href = `/admin/bases/${encodeURIComponent(b.name)}`;
   return (
     <details className="base-block">
       <summary>
-        <a className="mono strong" href={href} onClick={(e) => (e.stopPropagation(), e.preventDefault(), onOpen(href))}>
-          {b.name}
-        </a>
+        {link(`/admin/bases/${encodeURIComponent(b.name)}`, b.name)}
         {b.location === "replicas" && <span className="badge">replica</span>}
         <span className="stack small-stack" style={{ width: `${share(b.total, max)}%` }} role="img" aria-label={`${bytes(own)} data, ${bytes(b.snapshotsUsed)} snapshots, ${bytes(b.branchesUsed)} branches`}>
           <span className="seg seg-db" style={{ width: `${share(own, b.total)}%` }} title={`Data ${bytes(own)}`} />
@@ -158,52 +132,36 @@ function BaseBlock({ base: b, max, del, onOpen }: { base: BaseUsage; max: number
           <span className="seg seg-branch" style={{ width: `${share(b.branchesUsed, b.total)}%` }} title={`Branches ${bytes(b.branchesUsed)}`} />
         </span>
         <span className="mono">{bytes(b.total)}</span>
+        <span className="muted small">{percent(b.share)}</span>
       </summary>
-      <table className="rows compact">
-        <thead>
-          <tr>
-            <th>Snapshot</th>
-            <th>Frees</th>
-            <th>Taken</th>
-            <th>State</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {[...b.snapshots].reverse().map((s) => (
-            <tr key={s.name}>
-              <td className="mono">{s.name}</td>
-              <td className="mono">{bytes(s.used)}</td>
-              <td className="muted" title={new Date(s.created).toLocaleString()}>
-                {relative(s.created)}
-              </td>
-              <td>{s.latest ? <span className="badge">Latest</span> : s.blockedBy.length > 0 ? <span className="muted" title={s.blockedBy.join(", ")}>In use ({s.blockedBy.length})</span> : <span className="muted">Unused</span>}</td>
-              <td className="col-actions">{!s.latest && s.blockedBy.length === 0 ? del({ base: b.name, snapshot: s.name, id: `${b.name}@${s.name}` }) : null}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {b.branches.length > 0 && (
+      <div className="base-detail small">
+        <span className="muted">
+          <i className="dot seg-db" /> Data <span className="mono">{bytes(own)}</span>
+        </span>
+        <span className="muted">
+          <i className="dot seg-snap" /> Snapshots <span className="mono">{bytes(b.snapshotsUsed)}</span>
+        </span>
+        <span className="muted">
+          <i className="dot seg-branch" /> Branches <span className="mono">{bytes(b.branchesUsed)}</span>
+        </span>
+      </div>
+      {b.snapshots.length > 0 && (
         <table className="rows compact">
           <thead>
             <tr>
-              <th>Branch</th>
-              <th>Own</th>
-              <th>Checkpoints</th>
-              <th />
+              <th>Snapshot</th>
+              <th>Size</th>
+              <th>Taken</th>
             </tr>
           </thead>
           <tbody>
-            {b.branches.map((br) => (
-              <tr key={br.name}>
-                <td>
-                  <a className="mono" href={`/admin/branches/${encodeURIComponent(br.name)}`} onClick={(e) => (e.preventDefault(), onOpen(`/admin/branches/${encodeURIComponent(br.name)}`))}>
-                    {br.name}
-                  </a>
+            {[...b.snapshots].reverse().map((s) => (
+              <tr key={s.name}>
+                <td className="mono">{s.name}</td>
+                <td className="mono">{bytes(s.used)}</td>
+                <td className="muted" title={new Date(s.created).toLocaleString()}>
+                  {relative(s.created)}
                 </td>
-                <td className="mono">{bytes(br.used)}</td>
-                <td className="mono">{br.checkpoints ? bytes(br.checkpoints) : "—"}</td>
-                <td>{br.expired && <span className="badge warn">Expired</span>}</td>
               </tr>
             ))}
           </tbody>

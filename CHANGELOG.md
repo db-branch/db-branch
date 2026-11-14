@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
-- Web console (admin): a **Storage** page (`/admin/storage`) shows how a node's pool is used (db-branch, other, free), which bases (with the branches cloned from them) and snapshots use the space, and a ranked list of what to delete to free the most: unused bases, branches (with the snapshot they were the last clone of), and snapshots nothing depends on (the latest is never offered). A snapshot can be deleted from it. The API gets `GET /v1/nodes/{name}/storage`, a flat list of the datasets and snapshots under db-branch's root with their space use.
+- Web console (admin): a **Storage** page (`/admin/storage`) shows how much of a node's pool each base (with its snapshots and the branches cloned from it) and each branch uses, as bars and sizes, biggest first. The API gets `GET /v1/nodes/{name}/storage`, a flat list of the datasets and snapshots under db-branch's root with their space use.
 
 ## [0.2.3] - 2026-11-14
 

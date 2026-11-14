@@ -77,39 +77,21 @@ describe("analyze: who uses the space", () => {
   });
 });
 
-describe("analyze: what to delete to free space", () => {
+describe("analyze: the branches", () => {
   const a = analyze(report(nodes), bases, branches, now);
-  it("lists what can be deleted now, the biggest gain first, and leaves out what is blocked or kept", () => {
-    expect(a.candidates.map((c) => [c.kind, c.label, c.freed])).toEqual([
-      ["base", "shop", 300],
-      ["branch", "x", 50 + 0],
-      ["branch", "y", 30],
-      ["snapshot", "orders@s2", 30],
+  it("lists every branch with its base and the space it uses, biggest first", () => {
+    expect(a.branches.map((b) => [b.name, b.base, b.used, b.checkpoints])).toEqual([
+      ["x", "orders", 50, 5],
+      ["y", "orders", 30, 0],
     ]);
   });
-  it("says what else a deletion lets go: the last clone of a snapshot frees the snapshot too", () => {
-    const only = analyze(report([...nodes.filter((n) => n.name !== `${R}/branches/y`).map((n) => (n.name.endsWith("@s1") && n.name.includes("orders") ? { ...n, clones: [`${R}/branches/x`] } : n))]), bases, branches.filter((b) => b.name === "x"), now);
-    const x = only.candidates.find((c) => c.kind === "branch" && c.label === "x")!;
-    expect(x.freed).toBe(50 + 60);
-    expect(x.note).toContain("orders@s1");
+  it("takes the base from the branch list, and shows a branch the list does not know with an empty base", () => {
+    const unknown = analyze(report([...nodes, fs("branches/z", 70)]), bases, branches, now);
+    expect(unknown.branches[0]).toMatchObject({ name: "z", base: "", used: 70 });
   });
-  it("never offers the latest snapshot of a base", () => {
-    expect(a.candidates.some((c) => c.label === "orders@s3")).toBe(false);
-    expect(a.candidates.some((c) => c.label === "shop@s1")).toBe(false);
-  });
-  it("offers a snapshot of a base that has a branch only when no branch is cloned from it", () => {
-    expect(a.candidates.some((c) => c.label === "orders@s1")).toBe(false);
-    expect(a.candidates.find((c) => c.label === "orders@s2")?.freed).toBe(30);
-  });
-});
-
-describe("analyze: a base nobody uses", () => {
-  it("offers both the whole base and its old snapshots, so a base can be kept and only trimmed", () => {
-    const a = analyze(report([fs("", 500), fs("bases/shop", 400, { used_by_snapshots: 90 }), snap("bases/shop@old", 60), snap("bases/shop@new", 30)]), [{ name: "shop", latest_snapshot: "new" }], [], now);
-    expect(a.candidates.map((c) => [c.kind, c.label, c.freed])).toEqual([
-      ["base", "shop", 400],
-      ["snapshot", "shop@old", 60],
-    ]);
+  it("gives the shares: what a base or a branch uses of the pool", () => {
+    expect(a.bases[0].share).toBeCloseTo((900 + 80) / 10_000);
+    expect(a.branches[0].share).toBeCloseTo(50 / 10_000);
   });
 });
 
