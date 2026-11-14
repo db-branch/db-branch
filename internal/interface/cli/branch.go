@@ -251,7 +251,7 @@ func (a *App) branchCommand() *cobra.Command {
 	}
 	restore := &cobra.Command{
 		Use:   "restore <name> <checkpoint>",
-		Short: "Put a branch back to a checkpoint (nothing is lost: see 'branch checkpoints')",
+		Short: "Put a branch back to a checkpoint (the current state is replaced and not saved: save a checkpoint first)",
 		Args:  cobra.ExactArgs(2),
 		RunE:  a.restoreCheckpoint(&noWait),
 	}
