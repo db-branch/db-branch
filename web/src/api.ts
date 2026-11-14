@@ -368,7 +368,8 @@ export const api = {
   deleteBranch: (name: string) => call<Operation>("DELETE", `/v1/branches/${name}`),
   checkpoints: (name: string) => call<{ items: Checkpoint[] }>("GET", `/v1/branches/${name}/checkpoints`).then((r) => r.items),
   checkpointGraph: (name: string) => call<CheckpointList>("GET", `/v1/branches/${name}/checkpoints`),
-  historyEvents: (name: string, line: number, limit = 200) => call<HistoryEvents>("GET", `/v1/ext/history/branches/${name}/events?line=${line}&limit=${limit}`),
+  historyEvents: (name: string, line: number, limit = 200, before?: string) =>
+    call<HistoryEvents>("GET", `/v1/ext/history/branches/${name}/events?line=${line}&limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ""}`),
   historyRestore: (name: string, to: { line: number; gtid: string }) => call<Operation>("POST", `/v1/ext/history/branches/${name}/restore`, to),
   createCheckpoint: (name: string, checkpoint?: string) => call<Checkpoint>("POST", `/v1/branches/${name}/checkpoints`, { name: checkpoint ?? "" }),
   restoreCheckpoint: (name: string, checkpoint: string) => call<Operation>("POST", `/v1/branches/${name}/checkpoints/${checkpoint}/restore`),

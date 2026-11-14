@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Web console: every branch has a page of its own at `/admin/branches/<name>`, with its facts, its actions (recreate, copy proxy URL, extend, reset, delete), the connection details, the Checkpoints graph, the recorded transactions as a searchable table (history module) and the upgrade. The Branches list is now a light table (status, name, base) whose names open the page; its action menu and the Connect and Checkpoints dialogs moved to the page.
+
 ### Fixed
 
 - Web console: a lane that forked off another now starts right next to the node it forked from and its checkpoints follow one slot apart, instead of being placed where they fall in time against all the other lanes, which pushed new lines far to the right.

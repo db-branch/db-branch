@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildNav, ancestorsOf, expandFor, legacyRedirect, loadOpen, resolveRoute, saveOpen, NAV_KEY } from "./nav";
+import { activeId, buildNav, ancestorsOf, expandFor, legacyRedirect, loadOpen, resolveRoute, saveOpen, NAV_KEY } from "./nav";
 
 const pages = [
   { module: "auth", path: "/users", title: "Users" },
@@ -107,5 +107,23 @@ describe("開閉の記憶", () => {
     expect(expandFor({ "mod:audit": true, modules: false }, ["modules", "mod:auth"])).toEqual({ "mod:audit": true, modules: true, "mod:auth": true });
     const same = { modules: true };
     expect(expandFor(same, ["modules"])).toBe(same);
+  });
+});
+
+describe("resolveRoute: a branch's own page", () => {
+  it("/admin/branches/<name> is the page of that branch, and the Branches entry stays current", () => {
+    const r = resolveRoute("/admin/branches/feature-x", admin);
+    expect(r).toEqual({ kind: "branch", name: "feature-x" });
+    expect(activeId(r)).toBe("page:branches");
+    expect(ancestorsOf(r)).toEqual([]);
+  });
+  it("decodes the name, and the list stays at /admin/branches", () => {
+    expect(resolveRoute("/admin/branches/a%2Fb", admin)).toEqual({ kind: "branch", name: "a/b" });
+    expect(resolveRoute("/admin/branches", admin)).toEqual({ kind: "page", page: "branches" });
+    expect(resolveRoute("/admin/branches/", admin)).toEqual({ kind: "page", page: "branches" });
+  });
+  it("only for people who may see Branches, and other pages ignore a second part", () => {
+    expect(resolveRoute("/admin/branches/x", { ...admin, pages: ["bases"] })).toEqual({ kind: "page", page: "branches" });
+    expect(resolveRoute("/admin/bases/x", admin)).toEqual({ kind: "page", page: "bases" });
   });
 });

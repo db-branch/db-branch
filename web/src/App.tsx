@@ -5,9 +5,11 @@ import { SideNav } from "./components/sidenav";
 import { ErrorLine, Field } from "./components/ui";
 import { hooks, moduleFrame } from "./lib/hooks";
 import { chooseLanguage, language, remembered, setLanguage, t } from "./lib/i18n";
+import { GoContext } from "./lib/gocontext";
 import { disconnect, useLive } from "./lib/live";
 import { activeId, ADMIN, ancestorsOf, buildNav, expandFor, legacyRedirect, loadOpen, resolveRoute, saveOpen } from "./lib/nav";
 import { Bases } from "./pages/Bases";
+import { BranchDetail } from "./pages/BranchDetail";
 import { Branches } from "./pages/Branches";
 import { Cluster } from "./pages/Cluster";
 import { Modules } from "./pages/Modules";
@@ -198,6 +200,7 @@ function Shell({ session, onLogout }: { session: Session; onLogout: () => void }
   const frame = route.kind === "modpage" ? modPages?.find((p) => p.module === route.module && p.path === route.path) : undefined;
   const Current = route.kind === "page" ? pages[route.page as Page] : undefined;
   return (
+    <GoContext.Provider value={go}>
     <div className="shell">
       <nav className="nav">
         <div className="wordmark">
@@ -217,10 +220,13 @@ function Shell({ session, onLogout }: { session: Session; onLogout: () => void }
           <Modules onOpen={(n) => go(`${ADMIN}/modules/${encodeURIComponent(n)}`)} />
         ) : route.kind === "module" ? (
           <Modules key={route.name} name={route.name} />
+        ) : route.kind === "branch" ? (
+          <BranchDetail key={route.name} name={route.name} />
         ) : (
           Current && <Current />
         )}
       </main>
     </div>
+    </GoContext.Provider>
   );
 }

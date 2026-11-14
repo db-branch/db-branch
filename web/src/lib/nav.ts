@@ -6,7 +6,7 @@ import type { ModulePage } from "../api";
 import { moduleLabel } from "./modules";
 
 // The admin console lives under /admin: /admin/<page>, /admin/modules[/<module>],
-// /admin/m/<module><path>.
+// /admin/m/<module><path>. A branch has a page of its own: /admin/branches/<name>.
 export const ADMIN = "/admin";
 export const NAV_KEY = "db-branch.nav.v1";
 
@@ -14,6 +14,7 @@ export type NavItem = { id: string; label: string; href?: string; children?: Nav
 
 export type Route =
   | { kind: "page"; page: string }
+  | { kind: "branch"; name: string }
   | { kind: "overview" }
   | { kind: "module"; name: string }
   | { kind: "modpage"; module: string; path: string }
@@ -59,6 +60,8 @@ export function resolveRoute(pathname: string, ctx: NavContext): Route {
   } else if (head === "modules" && ctx.canSettings) {
     const name = second ? decodeURIComponent(second) : "";
     return name && (!ctx.enabled || ctx.enabled.includes(name)) ? { kind: "module", name } : { kind: "overview" };
+  } else if (head === "branches" && second && ctx.pages.includes(head)) {
+    return { kind: "branch", name: decodeURIComponent(second) };
   } else if (head && ctx.pages.includes(head)) {
     return { kind: "page", page: head };
   }
@@ -70,6 +73,8 @@ export function activeId(r: Route): string {
   switch (r.kind) {
     case "page":
       return `page:${r.page}`;
+    case "branch":
+      return "page:branches";
     case "overview":
       return "overview";
     case "module":

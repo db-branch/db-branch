@@ -22,3 +22,18 @@ export function firstLine(sql: string, max = 90): string {
   const one = sql.replace(/\s+/g, " ").trim();
   return one.length > max ? one.slice(0, max - 1) + "…" : one;
 }
+
+export type TxFilter = { text: string; table: string };
+
+// tablesOf: the tables the transactions touched, once each, sorted.
+export function tablesOf(items: HistoryTx[]): string[] {
+  return [...new Set(items.flatMap((x) => x.tables.map((y) => y.name)))].sort();
+}
+
+// filterTxs keeps the transactions that match the search text (in the statement,
+// or the transaction number, with or without "#") and touch the table.
+export function filterTxs(items: HistoryTx[], f: TxFilter): HistoryTx[] {
+  const q = f.text.trim().toLowerCase().replace(/^#/, "");
+  return items.filter((x) => (!f.table || x.tables.some((y) => y.name === f.table)) && (!q || x.sql.toLowerCase().includes(q) || txNumber(x.gtid) === q));
+}
+
