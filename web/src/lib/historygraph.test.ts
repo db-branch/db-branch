@@ -284,7 +284,8 @@ describe("layoutGraph: a restore of the tip extends its lane", () => {
 
   it("starts the dots of a merged line where the lane has got to, not at the left edge", () => {
     // line 1 continues line 0's lane (tip restore): its transactions come before its first checkpoint d1.
-    const g = layoutGraph({ lines: tipLines, checkpoints: tipCps, head: null, events: { 1: [tx(2, 21), tx(3, 22)] }, recorded: true });
+    const g = layoutGraph({ lines: tipLines, checkpoints: tipCps, head: null, events: { 0: [], 1: [tx(2, 21), tx(3, 22)] }, recorded: true });
+    expect(g.forks).toEqual([]); // line 1 is drawn on the lane of line 0
     const lane = g.nodes.filter((n) => n.lane === 0 && n.kind === "checkpoint" && n.line === 0).map((n) => n.x);
     const dots = g.nodes.filter((n) => n.kind === "tx" || n.kind === "group");
     expect(dots.length).toBeGreaterThan(0);
