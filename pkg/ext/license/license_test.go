@@ -145,7 +145,7 @@ func TestPlan_プランごとに使える機能が増える(t *testing.T) {
 		has  []string
 		not  []string
 	}{
-		{license.Lite, []string{license.FeatureHistory, license.FeatureDiff}, []string{license.FeatureUsers, license.FeatureAudit, license.FeatureSSO, license.FeatureMasking}},
+		{license.Lite, []string{license.FeatureHistory}, []string{license.FeatureDiff, license.FeatureUsers, license.FeatureAudit, license.FeatureSSO, license.FeatureMasking}},
 		{license.Team, []string{license.FeatureUsers, license.FeatureHistory, license.FeatureDiff}, []string{license.FeatureAudit, license.FeatureSSO, license.FeatureMasking}},
 		{license.Business, []string{license.FeatureUsers, license.FeatureAudit, license.FeatureSSO, license.FeatureHistory, license.FeatureDiff}, []string{license.FeatureMasking}},
 		// Keys issued under the earlier plans read as the plan that replaced them.
