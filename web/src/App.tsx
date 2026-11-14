@@ -9,6 +9,7 @@ import { GoContext } from "./lib/gocontext";
 import { disconnect, useLive } from "./lib/live";
 import { activeId, ADMIN, ancestorsOf, buildNav, expandFor, legacyRedirect, loadOpen, resolveRoute, saveOpen } from "./lib/nav";
 import { Bases } from "./pages/Bases";
+import { BaseDetailPage } from "./pages/BaseDetailPage";
 import { BranchDetail } from "./pages/BranchDetail";
 import { Branches } from "./pages/Branches";
 import { Cluster } from "./pages/Cluster";
@@ -220,6 +221,8 @@ function Shell({ session, onLogout }: { session: Session; onLogout: () => void }
           <Modules onOpen={(n) => go(`${ADMIN}/modules/${encodeURIComponent(n)}`)} />
         ) : route.kind === "module" ? (
           <Modules key={route.name} name={route.name} />
+        ) : route.kind === "base" ? (
+          <BaseDetailPage key={route.name} name={route.name} />
         ) : route.kind === "branch" ? (
           <BranchDetail key={route.name} name={route.name} />
         ) : (

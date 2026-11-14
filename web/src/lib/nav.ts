@@ -15,6 +15,7 @@ export type NavItem = { id: string; label: string; href?: string; children?: Nav
 export type Route =
   | { kind: "page"; page: string }
   | { kind: "branch"; name: string }
+  | { kind: "base"; name: string }
   | { kind: "overview" }
   | { kind: "module"; name: string }
   | { kind: "modpage"; module: string; path: string }
@@ -62,6 +63,8 @@ export function resolveRoute(pathname: string, ctx: NavContext): Route {
     return name && (!ctx.enabled || ctx.enabled.includes(name)) ? { kind: "module", name } : { kind: "overview" };
   } else if (head === "branches" && second && ctx.pages.includes(head)) {
     return { kind: "branch", name: decodeURIComponent(second) };
+  } else if (head === "bases" && second && ctx.pages.includes(head)) {
+    return { kind: "base", name: decodeURIComponent(second) };
   } else if (head && ctx.pages.includes(head)) {
     return { kind: "page", page: head };
   }
@@ -75,6 +78,8 @@ export function activeId(r: Route): string {
       return `page:${r.page}`;
     case "branch":
       return "page:branches";
+    case "base":
+      return "page:bases";
     case "overview":
       return "overview";
     case "module":

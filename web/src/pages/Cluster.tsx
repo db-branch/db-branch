@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { osLabel, zfsLabel } from "../lib/system";
 import { api, can, ClusterNode, NodeSystem, Operation, Runtime } from "../api";
 import { Engine, Icon, Status } from "../components/marks";
 import { Sparkline } from "../components/sparkline";
@@ -126,20 +127,22 @@ function NodeColumn({ node, branches }: { node: ClusterNode; branches: { name: s
 // NodeSystemInfo shows what the node runs on. Nodes of mixed distributions
 // matter for PostgreSQL (docs/mixed-os.md), so the key is shown with the name.
 function NodeSystemInfo({ system }: { system?: NodeSystem }) {
-  const v = (x?: string) => x || "unknown";
+  const os = osLabel(system);
+  const zfs = zfsLabel(system?.zfs);
   return (
     <div className="node-section">
       <h3>{t("System")}</h3>
       <dl className="kv">
         <dt>{t("OS")}</dt>
-        <dd className="mono" title={v(system?.distro)}>
-          {v(system?.os)}
-          {system?.distro && system.distro !== "unknown" && system.os !== system.distro && <span className="muted"> · {system.distro}</span>}
+        <dd className="mono" title={os.title}>
+          {os.text}
         </dd>
         <dt>{t("Kernel")}</dt>
-        <dd className="mono">{v(system?.kernel)}</dd>
+        <dd className="mono">{system?.kernel || "unknown"}</dd>
         <dt>{t("ZFS")}</dt>
-        <dd className="mono">{v(system?.zfs)}</dd>
+        <dd className="mono" title={zfs.title}>
+          {zfs.text}
+        </dd>
       </dl>
     </div>
   );

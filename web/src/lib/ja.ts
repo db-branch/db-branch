@@ -132,6 +132,7 @@ export const ja: Record<string, string> = {
   "No bases.": "ベースはありません。",
   "No branches.": "ブランチはありません。",
   "No such branch.": "そのブランチはありません。",
+  "No such base.": "その Base はありません。",
   "No engines yet. Add one to create bases.": "エンジンがまだありません。ベースを作るには追加してください。",
   "No licence key. The 30-day trial begins when the first paid module is enabled.": "ライセンスキーはありません。最初の有償モジュールを有効にすると、30 日間の試用が始まります。",
   "Every paid module works without a key until {date} ({n} days left).": "{date} まで、キーなしですべての有償モジュールを使えます（残り {n} 日）。",

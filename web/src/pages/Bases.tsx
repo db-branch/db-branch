@@ -1,8 +1,10 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useContext, useState } from "react";
 import { api, Base, Branch, canBase } from "../api";
 import { Engine, Icon, Status } from "../components/marks";
 import { Dialog, Drawer, Empty, ErrorLine, Field, Info } from "../components/ui";
 import { skippedReasons } from "../lib/bases";
+import { GoContext } from "../lib/gocontext";
+import { ADMIN } from "../lib/nav";
 import { relative } from "../lib/format";
 import { useLive, useNow } from "../lib/live";
 import { t } from "../lib/i18n";
@@ -12,22 +14,15 @@ import { ReplicasCard } from "./BaseReplicas";
 import { DumpPicker, DumpSource, dumpProblem, Progress, useDumpSender } from "../components/dumppicker";
 
 export function Bases() {
+  const go = useContext(GoContext);
   const { data: bases, error } = useLive(api.bases, ["base", "operation"]);
   const { data: branches } = useLive(api.branches, ["branch"]);
   const { data: cluster } = useLive(api.cluster, ["node"]);
   const [creating, setCreating] = useState(false);
-  // Panels refer to the base by name so they follow live updates.
-  const [selected, setSelected] = useState<string | null>(null);
-  const [updating, setUpdating] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState<string | null>(null);
   useNow();
 
   const nodes = cluster?.mode === "cluster" ? cluster.nodes.map((n) => n.name) : [];
-  const find = (n: string | null) => bases?.find((b) => b.name === n);
   const usedBy = (n: string) => (branches ?? []).filter((x) => x.base === n);
-  const open = find(selected);
-  const toUpdate = find(updating);
-  const toDelete = find(deleting);
 
   return (
     <section className="page">
@@ -41,32 +36,10 @@ export function Bases() {
       {bases && bases.length === 0 && <Empty line={t("No bases.")} action={<button onClick={() => setCreating(true)}>{t("Create a base")}</button>} />}
       <div className="bases">
         {bases?.map((b) => (
-          <BaseLine key={b.name} base={b} branches={usedBy(b.name)} nodes={nodes} onOpen={() => setSelected(b.name)} />
+          <BaseLine key={b.name} base={b} branches={usedBy(b.name)} nodes={nodes} href={`${ADMIN}/bases/${encodeURIComponent(b.name)}`} onOpen={() => go(`${ADMIN}/bases/${encodeURIComponent(b.name)}`)} />
         ))}
       </div>
       {creating && <CreateBase onClose={() => setCreating(false)} />}
-      {open && !toUpdate && !toDelete && (
-        <BaseDetail
-          base={open}
-          branches={usedBy(open.name)}
-          nodes={nodes}
-          onClose={() => setSelected(null)}
-          onUpdate={() => setUpdating(open.name)}
-          onDelete={() => setDeleting(open.name)}
-        />
-      )}
-      {toUpdate && <UpdateData base={toUpdate} onClose={() => setUpdating(null)} />}
-      {toDelete && (
-        <DeleteBase
-          base={toDelete}
-          branches={usedBy(toDelete.name).length}
-          onClose={() => setDeleting(null)}
-          onDeleted={() => {
-            setDeleting(null);
-            setSelected(null);
-          }}
-        />
-      )}
     </section>
   );
 }
@@ -74,7 +47,7 @@ export function Bases() {
 // A base is drawn as a timeline: snapshots are ticks on a line, and the
 // branches cloned from each snapshot hang below it. Clicking it opens the
 // detail panel, where it is managed.
-function BaseLine({ base, branches, nodes, onOpen }: { base: Base; branches: Branch[]; nodes: string[]; onOpen: () => void }) {
+function BaseLine({ base, branches, nodes, href, onOpen }: { base: Base; branches: Branch[]; nodes: string[]; href: string; onOpen: () => void }) {
   const clustered = nodes.length > 1;
   const bySnap = new Map<string, Branch[]>();
   for (const br of branches) bySnap.set(br.snapshot, [...(bySnap.get(br.snapshot) ?? []), br]);
@@ -82,9 +55,19 @@ function BaseLine({ base, branches, nodes, onOpen }: { base: Base; branches: Bra
     <article className="base clickable" onClick={onOpen}>
       <header className="base-head">
         <Status status={base.status} reason={base.status_reason} />
-        <button className="base-name mono strong" aria-label={`Open ${base.name}`}>
+        <a
+          className="base-name mono strong"
+          href={href}
+          aria-label={`Open ${base.name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            onOpen();
+          }}
+        >
           {base.name}
-        </button>
+        </a>
         <Engine runtime={base.runtime} />
         {clustered && (
           <span className="mono muted" title={t("Node holding the base")}>
@@ -153,18 +136,16 @@ const publicHelp = () => (
   </>
 );
 
-function BaseDetail({
+export function BaseBody({
   base,
   branches,
   nodes,
-  onClose,
   onUpdate,
   onDelete,
 }: {
   base: Base;
   branches: Branch[];
   nodes: string[];
-  onClose: () => void;
   onUpdate: () => void;
   onDelete: () => void;
 }) {
@@ -176,7 +157,7 @@ function BaseDetail({
   const count = (snap: string) => branches.filter((b) => b.snapshot === snap).length;
 
   return (
-    <Drawer title={base.name} onClose={onClose} wide>
+    <>
       <div className="detail">
         <div className="detail-meta">
           <Status status={base.status} reason={base.status_reason} />
@@ -302,7 +283,7 @@ function BaseDetail({
           </ul>
         )}
       </div>
-    </Drawer>
+    </>
   );
 }
 
@@ -425,7 +406,7 @@ function CreateBase({ onClose }: { onClose: () => void }) {
 // UpdateData changes the base itself: load a dump, or run SQL. Then (by
 // default) it snapshots, so new branches see the change. Existing branches
 // keep their snapshot.
-function UpdateData({ base, onClose }: { base: Base; onClose: () => void }) {
+export function UpdateData({ base, onClose }: { base: Base; onClose: () => void }) {
   const [mode, setMode] = useState<"dump" | "sql">("dump");
   const [sql, setSql] = useState("");
   const [dump, setDump] = useState<DumpSource>({ kind: "file", file: null });
@@ -492,7 +473,7 @@ function UpdateData({ base, onClose }: { base: Base; onClose: () => void }) {
 
 // DeleteBase asks for the base's name before deleting it with every
 // snapshot. A base with branches cannot be deleted.
-function DeleteBase({ base, branches, onClose, onDeleted }: { base: Base; branches: number; onClose: () => void; onDeleted: () => void }) {
+export function DeleteBase({ base, branches, onClose, onDeleted }: { base: Base; branches: number; onClose: () => void; onDeleted: () => void }) {
   const [typed, setTyped] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

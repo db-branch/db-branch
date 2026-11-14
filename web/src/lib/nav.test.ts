@@ -124,6 +124,21 @@ describe("resolveRoute: a branch's own page", () => {
   });
   it("only for people who may see Branches, and other pages ignore a second part", () => {
     expect(resolveRoute("/admin/branches/x", { ...admin, pages: ["bases"] })).toEqual({ kind: "page", page: "branches" });
-    expect(resolveRoute("/admin/bases/x", admin)).toEqual({ kind: "page", page: "bases" });
+    expect(resolveRoute("/admin/cluster/x", admin)).toEqual({ kind: "page", page: "cluster" });
+  });
+});
+
+describe("resolveRoute: a base's own page", () => {
+  it("/admin/bases/<name> is the page of that base, and the Bases entry stays current", () => {
+    const r = resolveRoute("/admin/bases/orders", admin);
+    expect(r).toEqual({ kind: "base", name: "orders" });
+    expect(activeId(r)).toBe("page:bases");
+    expect(ancestorsOf(r)).toEqual([]);
+    expect(resolveRoute("/admin/bases/a%2Fb", admin)).toEqual({ kind: "base", name: "a/b" });
+  });
+  it("the list stays at /admin/bases, and a person who may not see Bases gets the default page", () => {
+    expect(resolveRoute("/admin/bases", admin)).toEqual({ kind: "page", page: "bases" });
+    expect(resolveRoute("/admin/bases/", admin)).toEqual({ kind: "page", page: "bases" });
+    expect(resolveRoute("/admin/bases/x", { ...admin, pages: ["branches"] })).toEqual({ kind: "page", page: "branches" });
   });
 });
