@@ -325,3 +325,25 @@ func TestCheckUpgrade_5系の検査のSQLが失敗したらエラー(t *testing.
 		t.Error("a check that cannot run must not pass silently")
 	}
 }
+
+func TestCheckUpgrade_8_0より前の新しいバージョンには_validate_configがないので_help_verboseで設定を確かめる(t *testing.T) {
+	f := newFixture(t).running("5.6.51")
+	if _, err := f.srv.CheckUpgrade(ctx, f.spec, mysqlRT("5.7.44"), domain.Login{User: "branch-x"}); err != nil {
+		t.Fatal(err)
+	}
+	check := filepath.Join(f.state, f.spec.ID, "my.cnf.check")
+	if !f.sys.called("mysqld --defaults-file=" + check + " --user=db-branch --help --verbose") {
+		t.Errorf("5.7 should check its options with --help --verbose: %q", f.sys.calls)
+	}
+	if f.sys.called("mysqld --defaults-file=" + check + " --validate-config") {
+		t.Errorf("5.7 does not know --validate-config (it would start the server): %q", f.sys.calls)
+	}
+	// 8.0.16 and later keep the exact check.
+	g := newFixture(t).running("5.7.44")
+	if _, err := g.srv.CheckUpgrade(ctx, g.spec, mysqlRT("8.0.46"), domain.Login{User: "branch-x"}); err != nil {
+		t.Fatal(err)
+	}
+	if !g.sys.called("mysqld --defaults-file=" + filepath.Join(g.state, g.spec.ID, "my.cnf.check") + " --validate-config --user=db-branch") {
+		t.Errorf("8.0: %q", g.sys.calls)
+	}
+}

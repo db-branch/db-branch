@@ -207,7 +207,13 @@ func (m *Server) validateConfig(ctx context.Context, s domain.Server, to domain.
 		return append(out, domain.Finding{Level: domain.LevelWarning, Code: domain.CodeConfigInvalid, Message: "Could not check the configuration: " + err.Error()})
 	}
 	defer os.Remove(file)
-	if _, err := m.Run.Run(ctx, m.bin(next, "mysqld"), "--defaults-file="+file, "--validate-config", "--user=db-branch"); err != nil {
+	// --validate-config exists from 8.0.16; an older mysqld would start the server. Its
+	// --help --verbose reads the options and stops, failing on one it does not know.
+	check := []string{"--defaults-file=" + file, "--validate-config", "--user=db-branch"}
+	if !seriesAtLeast(domain.MySQLSeries(to.Version), "8.0") {
+		check = []string{"--defaults-file=" + file, "--user=db-branch", "--help", "--verbose"}
+	}
+	if _, err := m.Run.Run(ctx, m.bin(next, "mysqld"), check...); err != nil {
 		out = append(out, domain.Finding{Level: domain.LevelError, Code: domain.CodeConfigInvalid,
 			Message: fmt.Sprintf("mysqld %s does not accept the configuration db-branch generates: %s", to.Version, strings.TrimSpace(err.Error()))})
 	}
