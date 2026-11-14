@@ -378,6 +378,8 @@ export const api = {
   createBranch: (b: { name: string; base: string; ttl?: string; init_sql?: string; owner?: string; access?: string; record?: boolean; runtime?: string }) => call<Operation>("POST", "/v1/branches", b),
   recreateBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/recreate`),
   resetBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/reset`),
+  pauseBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/pause`),
+  resumeBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/resume`),
   deleteBranch: (name: string) => call<Operation>("DELETE", `/v1/branches/${name}`),
   checkpoints: (name: string) => call<{ items: Checkpoint[] }>("GET", `/v1/branches/${name}/checkpoints`).then((r) => r.items),
   checkpointGraph: (name: string) => call<CheckpointList>("GET", `/v1/branches/${name}/checkpoints`),

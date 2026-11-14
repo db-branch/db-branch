@@ -23,6 +23,7 @@ export type BaseRec = Omit<Base, "replicas" | "holders" | "can"> & { size: numbe
 // Effect is what happens when a simulated operation finishes.
 export type Effect =
   | { k: "branch.ready"; name: string; reset?: boolean }
+  | { k: "branch.paused"; name: string }
   | { k: "branch.delete"; name: string }
   | { k: "branch.restore"; name: string; checkpoint: string; replay?: { line: number; gtid: string; txs: HistoryTx[] } }
   | { k: "branch.upgrade"; name: string; to: string; op: string; result: UpgradeResult }

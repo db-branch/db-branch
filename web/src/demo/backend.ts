@@ -35,7 +35,7 @@ export type Listener = (type: string, data: unknown) => void;
 
 // How long each simulated operation takes (ms).
 // A restore stops the server and starts it again: PostgreSQL stops faster than MySQL (measured on real ZFS: 0.7 s and 2.2 s).
-export const TIMING = { branchCreate: 2000, branchReset: 1300, branchDelete: 800, restorePostgres: 700, restoreMysql: 2200, baseCreate: 2500, baseSnapshot: 1500, baseDelete: 1200, refresh: 3500, runtime: 4000, module: 2000 };
+export const TIMING = { branchCreate: 2000, branchReset: 1300, branchPause: 1200, branchDelete: 800, restorePostgres: 700, restoreMysql: 2200, baseCreate: 2500, baseSnapshot: 1500, baseDelete: 1200, refresh: 3500, runtime: 4000, module: 2000 };
 
 const MAX_NAME = 32;
 const NAME = /^[a-z]([a-z0-9]|-[a-z0-9])*$/;
@@ -180,6 +180,14 @@ export class DemoBackend {
           b.reset_at = new Date(now).toISOString();
           this.resetCheckpoints(b.name);
         }
+        this.emit("branch.updated", { name: b.name });
+        return;
+      }
+      case "branch.paused": {
+        const b = s.branches.find((x) => x.name === fx.name);
+        if (!b) return;
+        b.status = "paused";
+        b.operation = null;
         this.emit("branch.updated", { name: b.name });
         return;
       }
@@ -412,6 +420,12 @@ export class DemoBackend {
     });
     a("DELETE", "/v1/branches/:name", "user", (c) => this.branchAction(c, "branch.delete", "deleting", TIMING.branchDelete, { k: "branch.delete", name: c.p.name }, true));
     a("POST", "/v1/branches/:name/reset", "user", (c) => this.branchAction(c, "branch.reset", "resetting", TIMING.branchReset, { k: "branch.ready", name: c.p.name, reset: true }));
+    a("POST", "/v1/branches/:name/pause", "user", (c) => this.branchAction(c, "branch.pause", "pausing", TIMING.branchPause, { k: "branch.paused", name: c.p.name }));
+    a("POST", "/v1/branches/:name/resume", "user", (c) => {
+      const br = this.branchFor(c);
+      if (br && br.status !== "paused") return fail(409, "conflict", `branch ${br.name} is ${br.status}; only a paused branch can be resumed`);
+      return this.branchAction(c, "branch.resume", "resuming", TIMING.branchPause, { k: "branch.ready", name: c.p.name }, true);
+    });
     a("POST", "/v1/branches/:name/recreate", "user", (c) => this.branchAction(c, "branch.create", "provisioning", TIMING.branchCreate, { k: "branch.ready", name: c.p.name }));
     a("GET", "/v1/branches/:name/dsn", "anon", (c) => {
       const b = this.branchFor(c);

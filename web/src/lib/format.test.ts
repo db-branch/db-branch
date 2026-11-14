@@ -64,3 +64,12 @@ describe("storageShare", () => {
     expect(storageShare({ used: 10, referenced: 0 }, 0)).toEqual({ total: 0, own: 0 });
   });
 });
+
+describe("statusShape: paused", () => {
+  it("draws a paused branch as a pause mark, and pausing and resuming as busy", () => {
+    expect(statusShape("paused")).toBe("pause");
+    expect(statusShape("pausing")).toBe("ring");
+    expect(statusShape("resuming")).toBe("ring");
+  });
+});
+

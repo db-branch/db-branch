@@ -132,3 +132,12 @@ describe("confirmReducer", () => {
     for (const type of ["cancel", "timeout", "done"] as const) expect(confirmReducer("delete", { type })).toBeNull();
   });
 });
+
+describe("isBusy: pause", () => {
+  it("counts pausing and resuming as busy, and a paused branch as at rest", () => {
+    expect(isBusy("pausing")).toBe(true);
+    expect(isBusy("resuming")).toBe(true);
+    expect(isBusy("paused")).toBe(false);
+  });
+});
+

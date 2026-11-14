@@ -121,7 +121,12 @@ export function BranchRow({
   const [prefix, rest] = splitOwned(b.name, b.owner ?? undefined);
   const more = longerChoices(ttlChoices, b.expires_at, now);
 
-  const chip = failed ? (
+  const paused = b.status === "paused" && !job;
+  const chip = paused ? (
+    <span className="chip chip-paused" title={b.expires_at ? new Date(b.expires_at).toLocaleString() : undefined}>
+      Paused
+    </span>
+  ) : failed ? (
     <span className="chip chip-failed">{t("Failed")}</span>
   ) : busy ? (
     <span className="chip chip-busy">
@@ -193,11 +198,21 @@ export function BranchRow({
         <div className="brow-side">
           <span className="brow-actions">
             <CopyButton text={t("Copy URL")} label={t("Copy connection URL")} load={() => api.dsn(b.name)} disabled={!ready} />
+            {manage && ready && !extendWhy && (
+              <button type="button" disabled={working} onClick={() => run(api.pauseBranch(b.name))}>
+                Pause
+              </button>
+            )}
+            {manage && paused && !extendWhy && (
+              <button type="button" disabled={working} onClick={() => run(api.resumeBranch(b.name))}>
+                Resume
+              </button>
+            )}
             {manage && (
               <button
                 type="button"
                 className={soon || expired ? "primary" : ""}
-                disabled={!ready || !!extendWhy || working}
+                disabled={!(ready || paused) || !!extendWhy || working}
                 title={extendWhy ?? t("Adds 4 hours to the time left")}
                 onClick={() => run(api.extendBranch(b.name, extendTtl(b.expires_at, now)), t("Extended by 4 hours"))}
               >
@@ -229,7 +244,7 @@ export function BranchRow({
       {open && (
         <div className="brow-details" id={detailsId}>
           {fresh && ready && <p className="fresh-note">{t("Your Branch is ready. Connect with the details below.")}</p>}
-          {ready ? <ConnectPanel branch={b.name} proxy={b.proxy} /> : <p className="muted small">{failed ? "" : t("Connection details appear once it is ready.")}</p>}
+          {ready ? <ConnectPanel branch={b.name} proxy={b.proxy} /> : <p className="muted small">{failed || paused ? "" : t("Connection details appear once it is ready.")}</p>}
           <dl className="facts two">
             <dt>Snapshot</dt>
             <dd>

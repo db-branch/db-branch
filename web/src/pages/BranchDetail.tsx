@@ -55,6 +55,8 @@ export function BranchDetail({ name }: { name: string }) {
         onBack={back}
         onExtend={(ttl) => run(api.extendBranch(b.name, ttl))}
         onReset={() => run(api.resetBranch(b.name))}
+        onPause={() => run(api.pauseBranch(b.name))}
+        onResume={() => run(api.resumeBranch(b.name))}
         onRecreate={() => run(api.recreateBranch(b.name))}
         onDelete={() => setDeleting(true)}
         onCopyProxy={() => run(api.dsn(b.name, "proxy").then((d) => navigator.clipboard.writeText(d)))}

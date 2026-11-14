@@ -39,7 +39,7 @@ export function ttlState(created: string, expires: string | null, now = Date.now
   return { kind: "active", fraction: total > 0 ? left / total : 1, left: span(left), warn: left < WARN_MS || left / total < 0.15 };
 }
 
-export type Shape = "dot" | "ring" | "triangle" | "dashed";
+export type Shape = "dot" | "ring" | "triangle" | "dashed" | "pause";
 
 export function statusShape(status: string): Shape {
   switch (status) {
@@ -49,6 +49,8 @@ export function statusShape(status: string): Shape {
       return "triangle";
     case "lost":
       return "dashed";
+    case "paused":
+      return "pause";
     default:
       return "ring";
   }

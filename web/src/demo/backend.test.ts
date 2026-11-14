@@ -751,3 +751,38 @@ describe("branch upgrade", () => {
     expect(list("report-fix").find((x) => x.name === res.checkpoint)).toMatchObject({ auto: true, runtime: before });
   });
 });
+
+describe("pause and resume", () => {
+  const settle = (ms = 2300) => vi.advanceTimersByTime(ms);
+  const status = (name: string) => get<Branch>(`/v1/branches/${name}`).status;
+
+  it("stops a ready branch (pausing, then paused) and starts it again", () => {
+    const name = branches()[0].name;
+    expect(call("POST", `/v1/branches/${name}/pause`).status).toBe(202);
+    expect(status(name)).toBe("pausing");
+    settle();
+    expect(status(name)).toBe("paused");
+    expect(call("POST", `/v1/branches/${name}/resume`).status).toBe(202);
+    expect(status(name)).toBe("resuming");
+    settle();
+    expect(status(name)).toBe("ready");
+  });
+  it("refuses a pause of a branch that is not ready and a resume of one that is not paused", () => {
+    const name = branches()[0].name;
+    expect(call("POST", `/v1/branches/${name}/resume`).status).toBe(409);
+    call("POST", `/v1/branches/${name}/pause`);
+    expect(call("POST", `/v1/branches/${name}/pause`).status).toBe(409);
+    settle();
+    expect(call("POST", `/v1/branches/${name}/pause`).status).toBe(409);
+    expect(call("POST", "/v1/branches/nope/pause").status).toBe(404);
+    expect(call("POST", "/v1/branches/nope/resume").status).toBe(404);
+  });
+  it("lets a paused branch be deleted, but not reset", () => {
+    const name = branches()[0].name;
+    call("POST", `/v1/branches/${name}/pause`);
+    settle();
+    expect(call("POST", `/v1/branches/${name}/reset`).status).toBe(409);
+    expect(call("DELETE", `/v1/branches/${name}`).status).toBe(202);
+  });
+});
+

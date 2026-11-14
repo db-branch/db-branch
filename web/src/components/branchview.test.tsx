@@ -25,7 +25,7 @@ const branch = (extra: Partial<Branch> = {}): Branch => ({
   ...extra,
 });
 const noop = () => {};
-const actions = { onBack: noop, onExtend: noop, onReset: noop, onRecreate: noop, onDelete: noop, onCopyProxy: noop };
+const actions = { onBack: noop, onExtend: noop, onReset: noop, onRecreate: noop, onDelete: noop, onCopyProxy: noop, onPause: noop, onResume: noop };
 const view = (b: Branch, props: Record<string, unknown> = {}) => renderToStaticMarkup(<BranchView b={b} clustered={false} max={2048} {...actions} {...props} />);
 
 describe("BranchView", () => {
@@ -71,4 +71,19 @@ describe("BranchView", () => {
     expect(h.indexOf("CONNECT BODY")).toBeLessThan(h.indexOf("CP BODY"));
     expect(h).toContain('id="x"');
   });
+  it("offers Pause for a ready branch and Resume for a paused one, never both", () => {
+    const ready = view(branch());
+    expect(ready).toContain("Pause");
+    expect(ready).not.toContain("Resume");
+    const paused = view(branch({ status: "paused" }));
+    expect(paused).toContain("Resume");
+    expect(paused).not.toMatch(/>Pause</);
+  });
+  it("disables Pause while the branch is busy, and keeps Reset off and Delete on for a paused branch", () => {
+    expect(view(branch({ status: "restoring" }))).not.toMatch(/>Pause</);
+    const paused = view(branch({ status: "paused" }));
+    expect(paused).toMatch(/<button[^>]*disabled[^>]*>Reset/);
+    expect(paused).not.toMatch(/<button[^>]*disabled[^>]*>Delete/);
+  });
 });
+

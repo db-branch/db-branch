@@ -65,3 +65,31 @@ describe("BranchRow as the page of the branch", () => {
     expect(h).toContain("Sign in to extend, reset or delete.");
   });
 });
+
+describe("BranchRow: Pause and Resume", () => {
+  const act = { "branch.update": true, "branch.reset": true, "branch.delete": true };
+  it("offers Pause beside Extend for a ready branch, and Resume instead for a paused one", () => {
+    const r = row({ can: act });
+    expect(r).toContain("Pause");
+    expect(r).not.toContain("Resume");
+    expect(r.indexOf("Pause")).toBeLessThan(r.indexOf("Extend +4h"));
+    const p = row({ can: act }, branch({ status: "paused" }));
+    expect(p).toContain("Resume");
+    expect(p).not.toMatch(/>Pause</);
+  });
+  it("says Paused in the summary, and leaves out Connect details and Copy URL being usable", () => {
+    const p = row({ can: act }, branch({ status: "paused" }));
+    expect(p).toContain("Paused");
+    expect(p).toMatch(/<button[^>]*disabled[^>]*>.*Copy URL|<button[^>]*disabled/);
+  });
+  it("has neither without the right to update, and not for a branch that is busy", () => {
+    expect(row({ can: { "branch.update": false } })).not.toMatch(/>Pause</);
+    expect(row({ can: act }, branch({ status: "resetting" }))).not.toMatch(/>Pause</);
+  });
+  it("shows the page of a paused branch with Resume and no connection details", () => {
+    const p = row({ mode: "page", can: act }, branch({ status: "paused" }));
+    expect(p).toContain("Resume");
+    expect(p).not.toContain("connect-snippet");
+  });
+});
+

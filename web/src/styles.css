@@ -172,6 +172,7 @@ input[type="checkbox"], input[type="radio"] { width: auto; flex: none; margin: 0
 .status-ring circle { fill: none; stroke: var(--accent); stroke-width: 1.6; transform-origin: 6px 6px; animation: spin 1s linear infinite; }
 .status-triangle path { fill: var(--bad); }
 .status-dashed circle { fill: none; stroke: var(--lost); stroke-width: 1.4; }
+.status-pause rect { fill: var(--muted); }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .status-ring circle { animation: none; } }
 
@@ -583,6 +584,7 @@ a.wordmark { color: inherit; text-decoration: none; }
 .chip-soon { border-color: var(--warn); color: var(--warn); }
 .chip-expired, .chip-failed { border-color: var(--bad); color: var(--bad); }
 .chip-busy { border-color: var(--accent); color: var(--accent); }
+.chip-paused { border-color: var(--line-strong); color: var(--muted); }
 .cap { text-transform: capitalize; }
 .brow-reason, .brow-note { margin: 0; padding: 0 var(--s3) var(--s2) 32px; font-size: 12px; }
 .brow-reason { color: var(--bad); }
