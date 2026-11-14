@@ -257,11 +257,6 @@ export function Portal() {
           <Mark /> db-branch
         </a>
         <span className="spacer" />
-        {diffOn && (
-          <a className="text-button" href="/diff" onClick={link("/diff")}>
-            Diff
-          </a>
-        )}
         {canTour && (
           <button type="button" className="text-button" onClick={() => setTouring(true)}>
             {t("Tour")}
