@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Checkpoint, HistoryTx, Line } from "../api";
-import { describe as say, GROUP_W, layoutGraph, LANE_H, LEFT, MIN_DOT_GAP, mergeLines, neighbour, SLOT_W } from "./historygraph";
+import { describe as say, forkPath, GROUP_W, layoutGraph, LANE_H, LEFT, MIN_DOT_GAP, mergeLines, neighbour, SLOT_W } from "./historygraph";
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 12, 10, min)).toISOString();
 const cp = (name: string, min: number, line: number, extra: Partial<Checkpoint> = {}): Checkpoint => ({ name, created_at: at(min), size: 1, line, auto: false, current: false, ...extra });
@@ -351,5 +351,16 @@ describe("layoutGraph: a restore to a recorded transaction (from_tx)", () => {
     });
     expect(g.lanes).toHaveLength(1);
     expect(g.forks).toEqual([]);
+  });
+});
+
+describe("forkPath", () => {
+  it("leaves the parent lane at a steep angle, then runs straight along the new lane", () => {
+    // down 52px over 14px across: a bend close to a right angle, then a horizontal run
+    expect(forkPath({ line: 1, x1: 180, y1: 30, x2: 440, y2: 82 })).toBe("M 180 30 L 194 82 L 440 82");
+  });
+  it("goes up to a lane above the same way, and shortens the slant when there is little room", () => {
+    expect(forkPath({ line: 1, x1: 180, y1: 82, x2: 440, y2: 30 })).toBe("M 180 82 L 194 30 L 440 30");
+    expect(forkPath({ line: 1, x1: 180, y1: 30, x2: 188, y2: 82 })).toBe("M 180 30 L 188 82");
   });
 });

@@ -1,6 +1,6 @@
 import { KeyboardEvent, useEffect, useRef } from "react";
 import type { Checkpoint, HistoryTx, Line } from "../api";
-import { describe, GNode, layoutGraph, neighbour } from "../lib/historygraph";
+import { describe, forkPath, GNode, layoutGraph, neighbour } from "../lib/historygraph";
 
 const LABEL = 13; // characters of a checkpoint's name drawn under its node
 
@@ -73,7 +73,7 @@ export function HistoryGraph({
           </g>
         ))}
         {g.forks.map((f) => (
-          <path key={`fork-${f.line}`} className={`hg-fork hg-c${f.line % 6}`} d={`M ${f.x1} ${f.y1} C ${f.x1 + 34} ${f.y1}, ${f.x2 - 34} ${f.y2}, ${f.x2} ${f.y2}`} fill="none" />
+          <path key={`fork-${f.line}`} className={`hg-fork hg-c${f.line % 6}`} d={forkPath(f)} fill="none" />
         ))}
         {g.nodes.map((n) => {
           const label = n.kind === "checkpoint" ? n.checkpoint!.name : n.kind === "reset" ? "creation" : "";

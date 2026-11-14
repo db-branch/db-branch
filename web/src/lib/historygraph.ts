@@ -157,6 +157,17 @@ export function mergeLines(input: LayoutInput): Map<number, number> {
 
 const sortedCheckpoints = (list: Checkpoint[]) => [...list].sort((a, b) => ms(a.created_at) - ms(b.created_at) || (a.name < b.name ? -1 : 1));
 
+// FORK_SLANT is how far across a fork leaves its lane while it drops to the next one.
+const FORK_SLANT = 14;
+
+// forkPath draws a restore's branch: it leaves the parent lane at a steep
+// angle (nearly a right angle), then runs straight along the new lane.
+export function forkPath(f: GFork): string {
+  const dx = Math.min(FORK_SLANT, f.x2 - f.x1);
+  if (dx >= f.x2 - f.x1) return `M ${f.x1} ${f.y1} L ${f.x2} ${f.y2}`;
+  return `M ${f.x1} ${f.y1} L ${f.x1 + dx} ${f.y2} L ${f.x2} ${f.y2}`;
+}
+
 type Item = { tx: HistoryTx; group?: HistoryTx[] };
 const width = (item: Item) => (item.group ? GROUP_W : MIN_DOT_GAP);
 

@@ -678,7 +678,7 @@ li.brow.skeleton { height: 56px; border-radius: 0; border-bottom: 2px solid var(
 .hg-c4 { color: var(--ok); }
 .hg-c5 { color: var(--own); }
 .hg-track { stroke: currentColor; stroke-width: 2; opacity: 0.55; }
-.hg-fork { stroke: currentColor; stroke-width: 2; opacity: 0.55; stroke-dasharray: 5 4; }
+.hg-fork { stroke: currentColor; stroke-width: 2; opacity: 0.55; stroke-dasharray: 5 4; stroke-linejoin: round; }
 .hg-lane-label { fill: var(--muted); font: 11px var(--mono); }
 .hg-node { cursor: pointer; outline: none; }
 .hg-cp { fill: var(--surface); stroke: currentColor; stroke-width: 2.5; }
