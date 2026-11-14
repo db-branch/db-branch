@@ -1,7 +1,6 @@
 import { KeyboardEvent, useEffect, useRef } from "react";
 import type { Checkpoint, HistoryTx, Line } from "../api";
 import { describe, GNode, layoutGraph, neighbour } from "../lib/historygraph";
-import { t } from "../lib/i18n";
 
 const LABEL = 13; // characters of a checkpoint's name drawn under its node
 
@@ -121,7 +120,6 @@ export function HistoryGraph({
           </g>
         ) : null}
       </svg>
-      {g.sampled > 0 && <p className="muted small hg-note">{t("Busy stretches show a sample of their transactions.")}</p>}
     </div>
   );
 }

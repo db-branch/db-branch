@@ -427,7 +427,7 @@ function GroupDetail({ group, line, branch, asking, working, why, onAsk, onResto
           {relative(group[group.length - 1].time)}
         </span>
       </div>
-      <p className="muted small">{t("Made within a second of each other. Choose the point to go back to.")}</p>
+      <p className="muted small">{t("Close together in time, shown as one. Choose the point to go back to.")}</p>
       <div className="hg-table-wrap">
         <table className="hg-table small">
           <thead>

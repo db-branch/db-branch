@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Checkpoint, HistoryTx, Line } from "../api";
-import { describe as say, layoutGraph, LANE_H, LEFT, MAX_DOTS, mergeLines, neighbour, sample, SLOT_W } from "./historygraph";
+import { describe as say, GROUP_W, layoutGraph, LANE_H, LEFT, MIN_DOT_GAP, mergeLines, neighbour, SLOT_W } from "./historygraph";
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 12, 10, min)).toISOString();
 const cp = (name: string, min: number, line: number, extra: Partial<Checkpoint> = {}): Checkpoint => ({ name, created_at: at(min), size: 1, line, auto: false, current: false, ...extra });
@@ -68,7 +68,6 @@ describe("layoutGraph", () => {
     expect(dot(0, 3).x).toBeGreaterThan(LEFT + 3 * SLOT_W - 1); // after the last checkpoint: to its right (not past the lane)
     expect(dot(1, 9).x).toBeGreaterThan(LEFT + 4 * SLOT_W);
     expect(dot(1, 9).y).toBe(30 + LANE_H);
-    expect(g.sampled).toBe(0);
   });
 
   it("puts transactions before the first checkpoint of a line, and on a line without checkpoints", () => {
@@ -112,13 +111,24 @@ describe("layoutGraph", () => {
     const xs = g.nodes.filter((n) => n.kind === "tx" && n.line === 0).map((n) => n.x).sort((a, b) => a - b);
     for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBeGreaterThanOrEqual(12);
   });
-  it("samples a stretch with too many transactions and says how many were left out", () => {
-    const many = Array.from({ length: MAX_DOTS + 14 }, (_, i) => ({ ...tx(i + 1, 1), time: new Date(Date.UTC(2026, 10, 12, 10, 1, 5 * i)).toISOString() }));
+  it("merges close neighbours into groups when a stretch is too short for all its dots, and loses none", () => {
+    const many = Array.from({ length: 40 }, (_, i) => tsAt(i + 1, 3 * i));
     const g = layoutGraph({ lines, checkpoints: cps, head: null, events: { 0: many } });
-    expect(g.nodes.filter((n) => n.kind === "tx")).toHaveLength(MAX_DOTS);
-    expect(g.sampled).toBe(14);
-    expect(sample([1, 2, 3], 5)).toEqual([1, 2, 3]);
-    expect(sample([1, 2, 3, 4, 5, 6, 7, 8, 9], 3)).toEqual([1, 5, 9]);
+    const dots = g.nodes.filter((n) => (n.kind === "tx" || n.kind === "group") && n.line === 0).sort((a, b) => a.x - b.x);
+    // every transaction is in exactly one node
+    const all = dots.flatMap((n) => (n.group ?? [n.tx!]).map((x) => x.gtid)).sort();
+    expect(all).toEqual(many.map((x) => x.gtid).sort());
+    expect(dots.some((n) => n.kind === "group")).toBe(true);
+    // nodes do not lie on top of each other: a dot needs 14px, a group (with its count) 26px
+    const w = (n: (typeof dots)[number]) => (n.kind === "group" ? GROUP_W : MIN_DOT_GAP);
+    for (let i = 1; i < dots.length; i++) expect(dots[i].x - dots[i - 1].x).toBeGreaterThanOrEqual((w(dots[i]) + w(dots[i - 1])) / 2 - 0.01);
+  });
+  it("merges the pair with the least time between first and never merges a DDL statement", () => {
+    const rows = [tsAt(1, 0), tsAt(2, 100), tsAt(3, 100.5, { ddl: true, inserted: 0 }), tsAt(4, 101.5), tsAt(5, 300)];
+    const g = layoutGraph({ lines: [lines[0]], checkpoints: [], head: null, events: { 0: rows } });
+    const nodes = g.nodes.filter((n) => n.kind === "tx" || n.kind === "group");
+    expect(nodes.flatMap((n) => (n.group ?? [n.tx!]).map((x) => x.gtid)).sort()).toEqual(["u:1", "u:2", "u:3", "u:4", "u:5"]);
+    expect(nodes.filter((n) => n.kind === "group").every((n) => n.group!.every((x) => !x.ddl))).toBe(true);
   });
 
   it("orders the nodes by lane and position, and sizes the picture to them", () => {
@@ -297,10 +307,11 @@ describe("layoutGraph: a restore to a recorded transaction (from_tx)", () => {
 
   it("keeps the real line of a dot for the API, and draws the replayed ones on the shared lane", () => {
     const g = run({ 1: "u:4" });
-    const dots = g.nodes.filter((n) => n.kind === "tx");
-    expect(dots.map((n) => n.tx!.gtid).sort()).toEqual(["u:1", "u:2", "u:3", "u:4", "u:9"]);
-    expect(dots.find((n) => n.tx!.gtid === "u:4")!.line).toBe(1);
-    expect(dots.find((n) => n.tx!.gtid === "u:1")!.line).toBe(0);
+    const dots = g.nodes.filter((n) => n.kind === "tx" || n.kind === "group");
+    expect(dots.flatMap((n) => (n.group ?? [n.tx!]).map((x) => x.gtid)).sort()).toEqual(["u:1", "u:2", "u:3", "u:4", "u:9"]);
+    expect(dots.find((n) => (n.group ?? [n.tx!]).some((x) => x.gtid === "u:4"))!.line).toBe(1);
+    expect(dots.find((n) => (n.group ?? [n.tx!]).some((x) => x.gtid === "u:1"))!.line).toBe(0);
+    expect(dots.every((n) => n.shown === 0)).toBe(true);
   });
 
   it("forks without from_tx (a restore of the checkpoint, or an older module)", () => {

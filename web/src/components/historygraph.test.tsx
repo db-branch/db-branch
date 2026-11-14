@@ -41,15 +41,13 @@ describe("HistoryGraph", () => {
     expect(h).toContain(">now<");
     expect(h).toContain("auto");
   });
-  it("adds recorded transactions as dots when it has them, and says when a busy stretch was sampled", () => {
+  it("adds recorded transactions as dots when it has them, and groups close ones", () => {
     expect(html()).not.toContain("hg-dot");
     const h = html({ events: { 0: [tx(1, 2), tx(2, 3)] } });
     expect(h.match(/hg-dot/g)).toHaveLength(2);
     expect(h).toContain('aria-label="Transaction 1, line 0"');
     expect(h).toContain("<title>insert 1</title>");
     expect(h).not.toContain("hg-note");
-    const busy = Array.from({ length: 80 }, (_, i) => ({ ...tx(i + 1, 1), time: new Date(Date.UTC(2026, 10, 12, 10, 1, 3 * i)).toISOString() }));
-    expect(html({ events: { 0: busy } })).toContain("Busy stretches");
     // transactions within a second of each other are one group, not many dots
     const burst = Array.from({ length: 5 }, (_, i) => ({ ...tx(i + 1, 1), time: new Date(Date.UTC(2026, 10, 12, 10, 1, 0, 40 * i)).toISOString() }));
     const grouped = html({ events: { 0: burst } });

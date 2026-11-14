@@ -13,10 +13,9 @@ export const SLOT_W = 104;
 export const LANE_H = 52;
 export const LEFT = 76;
 export const TOP = 30;
-// Most transaction dots drawn between two neighbours; a busier stretch is sampled.
-export const MAX_DOTS = 36;
-// MIN_DOT_GAP is the least distance between two transaction dots on a lane.
+// MIN_DOT_GAP is the room a transaction dot needs on a lane, GROUP_W the room of a group (it has a count beside it).
 export const MIN_DOT_GAP = 14;
+export const GROUP_W = 26;
 // GROUP_MS: transactions less than this apart (for example the rows of one save) are drawn as one group.
 export const GROUP_MS = 1000;
 
@@ -71,17 +70,9 @@ export type GLayout = {
   nodes: GNode[];
   // The end of the live line, where the branch's data is now.
   now: { x: number; y: number; lane: number } | null;
-  // sampled: transactions left out of the drawing because a stretch was too busy.
-  sampled: number;
 };
 
 const ms = (iso: string) => Date.parse(iso);
-
-// sample keeps at most max of the items, spread evenly, in order.
-export function sample<T>(items: T[], max: number): T[] {
-  if (items.length <= max) return items;
-  return Array.from({ length: max }, (_, i) => items[Math.round((i * (items.length - 1)) / (max - 1))]);
-}
 
 export function nodeId(kind: GNode["kind"], key: string): string {
   return `${kind}:${key}`;
@@ -166,6 +157,32 @@ export function mergeLines(input: LayoutInput): Map<number, number> {
 
 const sortedCheckpoints = (list: Checkpoint[]) => [...list].sort((a, b) => ms(a.created_at) - ms(b.created_at) || (a.name < b.name ? -1 : 1));
 
+type Item = { tx: HistoryTx; group?: HistoryTx[] };
+const width = (item: Item) => (item.group ? GROUP_W : MIN_DOT_GAP);
+
+// fit merges the neighbouring items that are closest in time (never a DDL
+// statement) until the items have room in `room` pixels, or no more can merge.
+function fit(items: Item[], room: number): Item[] {
+  const list = [...items];
+  const needed = () => list.slice(1).reduce((sum, item, k) => sum + (width(item) + width(list[k])) / 2, 0);
+  while (list.length > 1 && needed() > room) {
+    let best = -1;
+    let least = Infinity;
+    for (let k = 0; k + 1 < list.length; k++) {
+      if (list[k].tx.ddl || list[k + 1].tx.ddl) continue;
+      const first = (list[k + 1].group ?? [list[k + 1].tx])[0];
+      const gap = ms(first.time) - ms(list[k].tx.time);
+      if (gap < least) {
+        least = gap;
+        best = k;
+      }
+    }
+    if (best < 0) break;
+    list.splice(best, 2, { tx: list[best + 1].tx, group: [...(list[best].group ?? [list[best].tx]), ...(list[best + 1].group ?? [list[best + 1].tx])] });
+  }
+  return list;
+}
+
 // layoutGraph lays the history out: one lane per line that did not continue
 // another (mergeLines holds the exact rule, written once), the reset point and
 // the checkpoints left to right in time order, a fork for every line that
@@ -199,7 +216,6 @@ export function layoutGraph(input: LayoutInput): GLayout {
   const lanes: GLane[] = [];
   const forks: GFork[] = [];
   let now: GLayout["now"] = null;
-  let sampled = 0;
 
   nodes.push({ id: nodeId("reset", "0"), kind: "reset", x: xOf(0), y: yOf(laneOf.get(0) ?? 0), lane: laneOf.get(0) ?? 0, line: 0, shown: 0, time: 0 });
 
@@ -254,20 +270,23 @@ export function layoutGraph(input: LayoutInput): GLayout {
       for (const [i, list] of perInterval) {
         const a = anchors[i];
         const b = anchors[i + 1] ?? { x: a.x + SLOT_W * 0.6, t: a.t + 1 };
-        const kept = sample(list, MAX_DOTS);
-        sampled += list.length - kept.length;
-        // Dots lie by time; keep a minimum gap between them, and spread them
-        // evenly when the stretch is too short for it.
+        // Dots lie by time. A stretch too short for all of them merges the closest
+        // neighbours into groups (never a DDL statement), so nothing lies on top of
+        // anything else and no transaction is left out; when merging cannot make it
+        // fit, the nodes are packed closer.
         const lo = a.x + 12;
         const hi = Math.max(lo, b.x - 12);
-        const gap = kept.length > 1 ? Math.min(MIN_DOT_GAP, (hi - lo) / (kept.length - 1)) : 0;
+        const kept = fit(list, hi - lo);
+        const need = (k: number) => (width(kept[k]) + width(kept[k + 1])) / 2;
+        const total = kept.slice(1).reduce((sum, _, k) => sum + need(k), 0);
+        const scale = total > hi - lo && total > 0 ? (hi - lo) / total : 1;
         const xs = kept.map((item) => {
           const f = b.t > a.t ? Math.min(1, Math.max(0, (ms(item.tx.time) - a.t) / (b.t - a.t))) : 0.5;
           return lo + (hi - lo) * f;
         });
-        for (let k = 1; k < xs.length; k++) xs[k] = Math.max(xs[k], xs[k - 1] + gap);
+        for (let k = 1; k < xs.length; k++) xs[k] = Math.max(xs[k], xs[k - 1] + need(k - 1) * scale);
         if (xs.length > 0) xs[xs.length - 1] = Math.min(xs[xs.length - 1], hi);
-        for (let k = xs.length - 2; k >= 0; k--) xs[k] = Math.min(xs[k], xs[k + 1] - gap);
+        for (let k = xs.length - 2; k >= 0; k--) xs[k] = Math.min(xs[k], xs[k + 1] - need(k) * scale);
         for (const [k, item] of kept.entries()) {
           const kind = item.group ? "group" : "tx";
           nodes.push({ id: nodeId(kind, `${l.line}:${(item.group ?? [item.tx])[0].gtid}`), kind, x: xs[k], y, lane, line: l.line, shown, time: ms(item.tx.time), tx: item.tx, group: item.group });
@@ -277,7 +296,7 @@ export function layoutGraph(input: LayoutInput): GLayout {
   }
 
   nodes.sort((a, b) => a.lane - b.lane || a.x - b.x);
-  return { width: xOf(lastSlot) + SLOT_W * 0.9, height: yOf(Math.max(roots.length - 1, 0)) + 46, lanes, forks, nodes, now, sampled };
+  return { width: xOf(lastSlot) + SLOT_W * 0.9, height: yOf(Math.max(roots.length - 1, 0)) + 46, lanes, forks, nodes, now };
 }
 
 // Moving around the graph with the arrow keys: the node next to this one on

@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- Web console: recorded transactions made less than a second apart (for example the rows of one save) are drawn as one group in the Checkpoints graph, with a count, instead of several dots on top of each other. Selecting the group lists its transactions in time order as a table, and each row can be chosen to restore to (a single Restore to #N button below the table). A DDL statement or a checkpoint ends a group. Dots keep a minimum distance.
+- Web console: recorded transactions made less than a second apart (for example the rows of one save) are drawn as one group in the Checkpoints graph, with a count, instead of several dots on top of each other. Selecting the group lists its transactions in time order as a table, and each row can be chosen to restore to (a single Restore to #N button below the table). A DDL statement or a checkpoint ends a group. When a stretch between two nodes is too short for all its dots, the closest neighbours are merged into groups (a DDL statement never is) instead of overlapping or being left out; the Busy-stretches sampling is gone.
 - Web console: a branch that records its transactions now shows the Checkpoints graph as soon as it has a recorded transaction, also right after a reset when it has no checkpoint yet. The graph used to appear only with a checkpoint or a second line.
 
 ## [0.2.2] - 2026-11-14
