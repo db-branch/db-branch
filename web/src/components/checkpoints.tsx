@@ -222,7 +222,7 @@ export function PanelBody({ p, modal, onExpand, expandRef }: { p: Panel; modal?:
         </p>
       )}
       <ErrorLine error={p.error} />
-      {graph && (rows.length > 0 || graph.lines.length > 1) && (
+      {graph && (rows.length > 0 || graph.lines.length > 1 || dots) && (
         <>
           {!modal && (
             <div className="hg-bar">

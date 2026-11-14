@@ -63,6 +63,17 @@ describe("PanelBody inline", () => {
     expect(h).not.toContain("Expand");
     expect(h).toContain("No checkpoints yet.");
   });
+  it("draws the graph for a branch without checkpoints once it has recorded transactions", () => {
+    const h = body(panel({ graph: { items: [], lines: [lines[0]], live: 0, head: null }, rows: [], events: { 0: [tx(7, 5)] } }));
+    expect(h).toContain("hg");
+    expect(h).toContain("Expand");
+    expect(h).toContain("Dots are recorded transactions");
+    expect(h).toContain("No checkpoints yet.");
+  });
+  it("draws no graph for recorded branch whose log is still empty", () => {
+    const h = body(panel({ graph: { items: [], lines: [lines[0]], live: 0, head: null }, rows: [], events: { 0: [] } }));
+    expect(h).not.toContain("Expand");
+  });
 });
 
 describe("PanelBody in the modal", () => {

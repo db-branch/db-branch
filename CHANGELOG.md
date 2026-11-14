@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Web console: a branch that records its transactions now shows the Checkpoints graph as soon as it has a recorded transaction, also right after a reset when it has no checkpoint yet. The graph used to appear only with a checkpoint or a second line.
+
 ## [0.2.2] - 2026-11-14
 
 ### Added
