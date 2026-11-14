@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, QueryResult } from "../api";
-import { cellText, isRunKey, resultSummary } from "../lib/sqlrun";
+import { cellText, isRunKey, resultSummary, splitStatements } from "../lib/sqlrun";
 
 // SqlResultView draws a result: the rows as a table, or how many rows a statement changed.
 export function SqlResultView({ result: r }: { result: QueryResult }) {
@@ -35,22 +35,26 @@ export function SqlResultView({ result: r }: { result: QueryResult }) {
   );
 }
 
-// SqlRunnerView is the statement box, the Run button and what came back.
+export type SqlItem = { sql: string; result?: QueryResult; error?: string };
+
+// SqlRunnerView is the statements box, the Run button and what came back for each statement.
 export function SqlRunnerView({
   sql,
   onSql,
   onRun,
   running,
-  result,
-  error,
+  items,
+  total,
 }: {
   sql: string;
   onSql: (s: string) => void;
   onRun: () => void;
   running: boolean;
-  result: QueryResult | null;
-  error: string | null;
+  items: SqlItem[];
+  total?: number;
 }) {
+  const empty = splitStatements(sql).length === 0;
+  const many = items.length > 1;
   return (
     <div className="sql-runner">
       <textarea
@@ -64,36 +68,54 @@ export function SqlRunnerView({
         onKeyDown={(e) => {
           if (isRunKey(e)) {
             e.preventDefault();
-            if (sql.trim() && !running) onRun();
+            if (!empty && !running) onRun();
           }
         }}
       />
       <div className="sql-actions">
-        <button type="button" className="primary" disabled={running || !sql.trim()} onClick={onRun}>
+        <button type="button" className="primary" disabled={running || empty} onClick={onRun}>
           Run
         </button>
         <span className="muted small">Ctrl / ⌘ + Enter</span>
+        {running && total ? <span className="muted small mono">{`${items.length} / ${total}`}</span> : null}
       </div>
-      {error && <p className="field-error mono">{error}</p>}
-      {result && <SqlResultView result={result} />}
+      {items.map((it, i) => (
+        <div key={i} className={many ? "sql-stmt" : undefined}>
+          {many && <pre className="mono small sql-stmt-text">{it.sql}</pre>}
+          {it.error && <p className="field-error mono">{it.error}</p>}
+          {it.result && <SqlResultView result={it.result} />}
+        </div>
+      ))}
     </div>
   );
 }
 
 const MAX_ROWS = 500;
 
-// SqlRunner runs one statement on the branch (its own user; changes stay in the branch).
+// SqlRunner runs the statements one after another on the branch (its own user; changes stay
+// in the branch). It stops at the first one that fails.
 export function SqlRunner({ name }: { name: string }) {
   const [sql, setSql] = useState("");
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<QueryResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const run = () => {
+  const [items, setItems] = useState<SqlItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const run = async () => {
+    const list = splitStatements(sql);
     setRunning(true);
-    api.query(name, sql, MAX_ROWS).then(
-      (r) => (setResult(r), setError(null)),
-      (e: Error) => (setResult(null), setError(e.message)),
-    ).finally(() => setRunning(false));
+    setTotal(list.length);
+    setItems([]);
+    const done: SqlItem[] = [];
+    for (const st of list) {
+      try {
+        done.push({ sql: st, result: await api.query(name, st, MAX_ROWS) });
+      } catch (e) {
+        done.push({ sql: st, error: (e as Error).message });
+        setItems([...done]);
+        break;
+      }
+      setItems([...done]);
+    }
+    setRunning(false);
   };
-  return <SqlRunnerView sql={sql} onSql={setSql} onRun={run} running={running} result={result} error={error} />;
+  return <SqlRunnerView sql={sql} onSql={setSql} onRun={run} running={running} items={items} total={total} />;
 }

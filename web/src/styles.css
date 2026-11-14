@@ -826,4 +826,6 @@ a.brow-id { color: inherit; text-decoration: none; cursor: pointer; }
 .sql-table { width: 100%; border-collapse: collapse; }
 .sql-table th, .sql-table td { text-align: left; padding: 2px var(--s2); border-bottom: 1px solid var(--line); white-space: pre; vertical-align: top; }
 .sql-table td.null { font-style: italic; }
+.sql-stmt { margin-top: var(--s3); }
+.sql-stmt-text { margin: 0 0 var(--s1); white-space: pre-wrap; color: var(--muted); }
 

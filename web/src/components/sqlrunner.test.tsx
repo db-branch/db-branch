@@ -4,10 +4,10 @@ import { SqlResultView, SqlRunnerView } from "./sqlrunner";
 
 const noop = () => {};
 const run = (props: Record<string, unknown> = {}) =>
-  renderToStaticMarkup(<SqlRunnerView sql="SELECT 1" onSql={noop} onRun={noop} running={false} result={null} error={null} {...props} />);
+  renderToStaticMarkup(<SqlRunnerView sql="SELECT 1" onSql={noop} onRun={noop} running={false} items={[]} {...props} />);
 
 describe("SqlRunnerView", () => {
-  it("has a box for the statement and a Run button, and shows the shortcut", () => {
+  it("has a box for the statements and a Run button, and shows the shortcut", () => {
     const h = run();
     expect(h).toMatch(/<textarea[^>]*aria-label="SQL"/);
     expect(h).toContain("SELECT 1");
@@ -17,9 +17,28 @@ describe("SqlRunnerView", () => {
   it("disables Run while it runs or the box is empty", () => {
     expect(run({ running: true })).toMatch(/<button[^>]*disabled[^>]*>Run/);
     expect(run({ sql: "  " })).toMatch(/<button[^>]*disabled[^>]*>Run/);
+    expect(run({ sql: " ; " })).toMatch(/<button[^>]*disabled[^>]*>Run/);
   });
   it("shows the error of a failed statement", () => {
-    expect(run({ error: "You have an error in your SQL syntax" })).toContain("You have an error in your SQL syntax");
+    expect(run({ items: [{ sql: "SELEC 1", error: "You have an error in your SQL syntax" }] })).toContain("You have an error in your SQL syntax");
+  });
+  it("shows one result without a heading, and several with the statement above each", () => {
+    const one = run({ items: [{ sql: "SELECT 1", result: { columns: ["1"], rows: [["1"]], millis: 1 } }] });
+    expect(one).not.toContain("sql-stmt");
+    const many = run({
+      items: [
+        { sql: "INSERT INTO t VALUES (1)", result: { affected: 1, millis: 2 } },
+        { sql: "SELECT * FROM t", result: { columns: ["id"], rows: [["1"]], millis: 3 } },
+        { sql: "SELEC oops", error: "syntax error" },
+      ],
+    });
+    expect(many.match(/class="sql-stmt/g)).toHaveLength(3);
+    expect(many).toContain("INSERT INTO t VALUES (1)");
+    expect(many.indexOf("INSERT INTO t")).toBeLessThan(many.indexOf("SELECT * FROM t"));
+    expect(many).toContain("syntax error");
+  });
+  it("tells the number of statements while it runs", () => {
+    expect(run({ running: true, total: 3, items: [{ sql: "a", result: { affected: 1, millis: 1 } }] })).toContain("1 / 3");
   });
 });
 

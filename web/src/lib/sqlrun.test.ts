@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cellText, isRunKey, resultSummary } from "./sqlrun";
+import { cellText, isRunKey, resultSummary, splitStatements } from "./sqlrun";
 
 describe("cellText", () => {
   it("shows NULL for a SQL null and the text otherwise", () => {
@@ -32,3 +32,39 @@ describe("isRunKey", () => {
     expect(isRunKey({ key: "a", ctrlKey: true, metaKey: false })).toBe(false);
   });
 });
+
+describe("splitStatements", () => {
+  it("keeps one statement as it is, without the closing semicolon, and gives nothing for nothing", () => {
+    expect(splitStatements("SELECT 1")).toEqual(["SELECT 1"]);
+    expect(splitStatements("  SELECT 1;  ")).toEqual(["SELECT 1"]);
+    expect(splitStatements("")).toEqual([]);
+    expect(splitStatements(" ; ;\n")).toEqual([]);
+  });
+  it("splits at the semicolons, over several lines", () => {
+    expect(splitStatements("INSERT INTO t VALUES (1);\nINSERT INTO t VALUES (2);\nSELECT * FROM t")).toEqual([
+      "INSERT INTO t VALUES (1)",
+      "INSERT INTO t VALUES (2)",
+      "SELECT * FROM t",
+    ]);
+  });
+  it("does not split inside a quoted string or a quoted name", () => {
+    expect(splitStatements("SELECT 'a;b'; SELECT \"c;d\"; SELECT `e;f`")).toEqual(["SELECT 'a;b'", 'SELECT "c;d"', "SELECT `e;f`"]);
+    expect(splitStatements("SELECT 'it''s;ok'; SELECT 'back\\'s;x'; SELECT 2")).toEqual(["SELECT 'it''s;ok'", "SELECT 'back\\'s;x'", "SELECT 2"]);
+  });
+  it("does not split inside a comment, and drops a statement that is only a comment", () => {
+    expect(splitStatements("SELECT 1 -- a; b\n; SELECT 2 # c; d\n; SELECT 3 /* e; f */")).toEqual(["SELECT 1 -- a; b", "SELECT 2 # c; d", "SELECT 3 /* e; f */"]);
+    expect(splitStatements("-- nothing here;\n/* or here; */")).toEqual([]);
+  });
+  it("does not split inside a PostgreSQL dollar-quoted body", () => {
+    expect(splitStatements("CREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql; SELECT f()")).toEqual([
+      "CREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql",
+      "SELECT f()",
+    ]);
+    expect(splitStatements("SELECT $q$a;b$q$; SELECT 2")).toEqual(["SELECT $q$a;b$q$", "SELECT 2"]);
+  });
+  it("takes an unterminated string or comment to the end instead of splitting inside it", () => {
+    expect(splitStatements("SELECT 'a; b")).toEqual(["SELECT 'a; b"]);
+    expect(splitStatements("SELECT 1 /* a; b")).toEqual(["SELECT 1 /* a; b"]);
+  });
+});
+
