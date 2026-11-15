@@ -99,7 +99,7 @@ export function Portal() {
         setSsoError(error);
         setSigningIn(true);
       }
-      api.session().then(enter, () => setSession(null));
+      api.session().then((s) => (s.must_change_password ? setSession(null) : enter(s)), () => setSession(null));
     });
   }, []);
   const me = session ? session.user.name || session.user.id : null;
