@@ -8,6 +8,7 @@ db-branch is an independent open-source project, built from scratch. Create a co
 
 ![Create a branch, drop a table, reset the branch, delete it](docs/assets/demo.gif)
 
+
 ## Use cases
 
 - **AI agent sandboxes.** The built-in MCP server lets an LLM agent create a branch, run a risky query or migration on it, and delete the branch, so production data is never touched.
@@ -79,6 +80,10 @@ db-branch branch delete feature-x                                           # re
 ```
 
 MySQL works the same way, for example `mysql@8.4.13`. List installable versions with `db-branch runtime available`.
+
+## Web Console
+![web console/branch](docs/assets/branch-home.png)
+![web console/branch-graph](docs/assets/branch-graph.png)
 
 ## How it works
 
