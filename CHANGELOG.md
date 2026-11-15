@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-15
+
 ### Added
 
 - `db-branch init --evaluation`: the first admin password is `admin` and the console asks for a new one (12 characters or more) at the first sign-in; until then only the session, logout and password calls work (403 `password_change_required` otherwise; `must_change_password` in the session). For a throwaway evaluation VM.
