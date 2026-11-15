@@ -6,6 +6,14 @@ Instant database branches for MySQL and PostgreSQL, built on ZFS clones.
 
 db-branch is an independent open-source project, built from scratch. Create a copy-on-write branch of a production-sized database, break it, reset it, and throw it away, without copying any data.
 
+![Create a branch, drop a table, reset the branch, delete it](docs/assets/demo.gif)
+
+## Use cases
+
+- **AI agent sandboxes.** The built-in MCP server lets an LLM agent create a branch, run a risky query or migration on it, and delete the branch, so production data is never touched.
+- **A database per pull request.** Each CI run or PR gets its own copy of a production-sized database, ready in seconds, and removed by `--ttl` when it is no longer needed.
+- **Version-upgrade checks.** Run a major-version upgrade (for example MySQL 8.0 to 8.4) on one branch first, with `branch upgrade --check-only` to see what it would run into, before touching the base.
+
 ## What it does
 
 - **Branches in seconds.** On our own 3-node test cluster a PostgreSQL branch is ready in about 0.5 s and a MySQL branch in about 3 s, with 0 bytes copied at creation (copy-on-write).
@@ -32,6 +40,25 @@ sudo db-branch init --pool <zpool>
 ```
 
 The repository signing key fingerprint is `3F404C4E5D49FA653F8385692C6E89E341D4D7A5`. `db-branch init` prints the initial admin password once.
+
+### Evaluate locally (macOS / Windows)
+
+db-branch needs Linux and ZFS. To try it on a Mac or Windows machine, run it inside an Ubuntu VM with [Multipass](https://multipass.run/), using a file-backed ZFS pool (for evaluation only):
+
+```sh
+multipass launch 24.04 --name db-branch-eval --memory 4G --disk 30G
+multipass shell db-branch-eval
+```
+
+Then, inside the VM, run the `curl`, `echo` and `apt` lines of the install steps above (the package brings in ZFS), and create the pool from a file before `db-branch init`:
+
+```sh
+sudo truncate -s 20G /var/lib/db-branch-eval.img
+sudo zpool create tank /var/lib/db-branch-eval.img
+sudo db-branch init --pool tank
+```
+
+A file-backed pool is slower and is not meant for real data. Delete the VM with `multipass delete --purge db-branch-eval`.
 
 ## First branch
 
