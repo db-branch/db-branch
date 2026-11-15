@@ -6,6 +6,8 @@ Instant database branches for MySQL and PostgreSQL, built on ZFS clones.
 
 db-branch is an independent open-source project, built from scratch. Create a copy-on-write branch of a production-sized database, break it, reset it, and throw it away, without copying any data.
 
+![Create a branch, drop a table, reset the branch, delete it](docs/assets/demo.gif)
+
 ## Use cases
 
 - **AI agent sandboxes.** The built-in MCP server lets an LLM agent create a branch, run a risky query or migration on it, and delete the branch, so production data is never touched.
