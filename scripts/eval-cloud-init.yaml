@@ -70,8 +70,6 @@ runcmd:
     db-branch runtime install mysql@8.4.13
     db-branch base create shop --runtime mysql@8.4.13 --dump /var/lib/db-branch-eval/shop.sql
     db-branch module install history
-    for i in $(seq 1 60); do dpkg -s db-branch-history 2>/dev/null | grep -q "^Status: install ok installed" && break; sleep 2; done
-    systemctl restart db-branch
     for i in $(seq 1 60); do db-branch module list 2>/dev/null | grep -q "history.*enabled 1/1" && break; sleep 2; done
     until_day=$(date -d '+30 days' +%F)
     ip=$(hostname -I | cut -d' ' -f1)
