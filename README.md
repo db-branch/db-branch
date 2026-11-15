@@ -48,10 +48,9 @@ multipass launch 24.04 --name db-branch-eval --memory 4G --disk 30G
 multipass shell db-branch-eval
 ```
 
-Then, inside the VM, follow the install steps above, creating the pool from a file before `db-branch init`:
+Then, inside the VM, run the `curl`, `echo` and `apt` lines of the install steps above (the package brings in ZFS), and create the pool from a file before `db-branch init`:
 
 ```sh
-sudo apt install -y zfsutils-linux
 sudo truncate -s 20G /var/lib/db-branch-eval.img
 sudo zpool create tank /var/lib/db-branch-eval.img
 sudo db-branch init --pool tank
