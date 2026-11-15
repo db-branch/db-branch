@@ -48,11 +48,11 @@ db-branch needs Linux and ZFS. To try it on a Mac or Windows machine, run it in 
 ```sh
 multipass launch 24.04 --name db-branch-eval --memory 4G --disk 30G \
   --cloud-init https://raw.githubusercontent.com/db-branch/db-branch/main/scripts/eval-cloud-init.yaml
-multipass exec db-branch-eval -- cat /etc/motd    # console URL and the admin password
+multipass exec db-branch-eval -- cat /etc/motd    # console URL and sign-in (admin / admin)
 multipass shell db-branch-eval                    # then: sudo db-branch branch create try --base shop --ttl 1h
 ```
 
-The pool is a file, so it is slower and is not meant for real data, and the admin password is kept in a readable file. Delete the VM with `multipass delete --purge db-branch-eval`.
+The pool is a file, so it is slower and is not meant for real data, and the first admin password is `admin` (the console asks for a new one at the first sign-in). Delete the VM with `multipass delete --purge db-branch-eval`.
 
 ## First branch
 

@@ -1,8 +1,8 @@
 #cloud-config
 # Evaluation VM for db-branch (Multipass): installs db-branch, makes a file-backed ZFS pool,
 # initialises it, loads a small sample base (`shop`, MySQL 8.4, synthetic data), and writes the
-# console URL and the admin password to /etc/motd.
-# Not for real data: the pool is a file, and the password is stored in a readable file.
+# console URL and the sign-in (admin / admin, changed at the first sign-in) to /etc/motd.
+# Not for real data: the pool is a file, and the first password is a known one.
 write_files:
   - path: /var/lib/db-branch-eval/shop.sql
     permissions: '0644'
@@ -64,7 +64,7 @@ runcmd:
     DEBIAN_FRONTEND=noninteractive apt-get install -y db-branch
     truncate -s 20G /var/lib/db-branch-eval.img
     zpool create tank /var/lib/db-branch-eval.img
-    db-branch init --pool tank > /tmp/db-branch-init.txt 2>&1
+    db-branch init --pool tank --evaluation > /tmp/db-branch-init.txt 2>&1
     for i in $(seq 1 60); do db-branch runtime list >/dev/null 2>&1 && break; sleep 1; done
     db-branch runtime install mysql@8.4.13
     db-branch base create shop --runtime mysql@8.4.13 --dump /var/lib/db-branch-eval/shop.sql
