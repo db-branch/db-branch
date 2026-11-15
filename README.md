@@ -43,22 +43,16 @@ The repository signing key fingerprint is `3F404C4E5D49FA653F8385692C6E89E341D4D
 
 ### Evaluate locally (macOS / Windows)
 
-db-branch needs Linux and ZFS. To try it on a Mac or Windows machine, run it inside an Ubuntu VM with [Multipass](https://multipass.run/), using a file-backed ZFS pool (for evaluation only):
+db-branch needs Linux and ZFS. To try it on a Mac or Windows machine, run it in an Ubuntu VM with [Multipass](https://multipass.run/). This one command makes the VM, installs db-branch and initialises it on a file-backed ZFS pool (about a minute and a half):
 
 ```sh
-multipass launch 24.04 --name db-branch-eval --memory 4G --disk 30G
-multipass shell db-branch-eval
+multipass launch 24.04 --name db-branch-eval --memory 4G --disk 30G \
+  --cloud-init https://raw.githubusercontent.com/db-branch/db-branch/main/scripts/eval-cloud-init.yaml
+multipass exec db-branch-eval -- cat /etc/motd    # console URL and the admin password
+multipass shell db-branch-eval                    # then: sudo db-branch ... (see First branch below)
 ```
 
-Then, inside the VM, run the `curl`, `echo` and `apt` lines of the install steps above (the package brings in ZFS), and create the pool from a file before `db-branch init`:
-
-```sh
-sudo truncate -s 20G /var/lib/db-branch-eval.img
-sudo zpool create tank /var/lib/db-branch-eval.img
-sudo db-branch init --pool tank
-```
-
-A file-backed pool is slower and is not meant for real data. Delete the VM with `multipass delete --purge db-branch-eval`.
+The pool is a file, so it is slower and is not meant for real data, and the admin password is kept in a readable file. Delete the VM with `multipass delete --purge db-branch-eval`.
 
 ## First branch
 

@@ -1,0 +1,25 @@
+#cloud-config
+# Evaluation VM for db-branch (Multipass): installs db-branch, makes a file-backed ZFS pool,
+# initialises it, and writes the console URL and the admin password to /etc/motd.
+# Not for real data: the pool is a file, and the password is stored in a readable file.
+runcmd:
+  - |
+    set -e
+    curl -fsSL https://apt.db-branch.com/db-branch.gpg | tee /usr/share/keyrings/db-branch.gpg >/dev/null
+    echo "deb [signed-by=/usr/share/keyrings/db-branch.gpg] https://apt.db-branch.com stable main" > /etc/apt/sources.list.d/db-branch.list
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y db-branch
+    truncate -s 20G /var/lib/db-branch-eval.img
+    zpool create tank /var/lib/db-branch-eval.img
+    db-branch init --pool tank > /tmp/db-branch-init.txt 2>&1
+    ip=$(hostname -I | cut -d' ' -f1)
+    {
+      echo
+      echo "db-branch evaluation VM"
+      echo "  Console:  https://$ip:7080/  (self-signed certificate; admin console: /admin)"
+      echo "  Pool:     file-backed, for evaluation only"
+      echo
+      cat /tmp/db-branch-init.txt
+      echo
+    } > /etc/motd
+    rm -f /tmp/db-branch-init.txt
