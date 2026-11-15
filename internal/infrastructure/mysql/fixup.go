@@ -181,11 +181,34 @@ func isLauncher(path string) bool {
 	return bytes.Contains(b, []byte(wrapperMark))
 }
 
-// Fixup prepares an unpacked MySQL runtime for this system: libaio under
-// its t64 name, ncurses 5 for the clients of old versions, and launchers for
-// the binaries of 5.x that cannot find those links by themselves.
+// DropDebug removes the debug server and plugins that the full (non-minimal)
+// upstream tarballs carry: bin/*-debug and lib/plugin/debug. db-branch never
+// runs them, and on arm64 (no minimal build) they take about 500 MB.
+func DropDebug(runtimeDir string) error {
+	drop := []string{filepath.Join(runtimeDir, "lib", "plugin", "debug")}
+	entries, _ := os.ReadDir(filepath.Join(runtimeDir, "bin")) // no bin/: nothing to drop
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), "-debug") {
+			drop = append(drop, filepath.Join(runtimeDir, "bin", e.Name()))
+		}
+	}
+	for _, p := range drop {
+		if err := os.RemoveAll(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Fixup prepares an unpacked MySQL runtime for this system: no debug
+// binaries, libaio under its t64 name, ncurses 5 for the clients of old
+// versions, and launchers for the binaries of 5.x that cannot find those
+// links by themselves.
 func Fixup(libDirs []string, needed func(binary string) ([]string, error)) func(dir string) error {
 	return func(dir string) error {
+		if err := DropDebug(dir); err != nil {
+			return err
+		}
 		if err := FixLibaio(dir, libDirs); err != nil {
 			return err
 		}

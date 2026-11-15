@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Fixed
 
 - `db-branch runtime install mysql@8.0.46` (and `mysql@8.4.13`, `mysql@9.6.0`) works on arm64 (Apple Silicon VMs, Graviton): the catalog had no arm64 entry, so the install failed with `runtime not found` and the Multipass evaluation VM stopped before writing /etc/motd. Oracle ships no `-minimal` build for aarch64, so arm64 uses the full `glibc2.28-aarch64` tarball (800 MB to 1 GB to download).
+- Installing a MySQL runtime drops the debug server and plugins of the full upstream tarballs (`bin/*-debug`, `lib/plugin/debug`), which db-branch never runs: about 500 MB less per version on arm64 (8.4.13: 1.5 GB to 1.1 GB).
+- Evaluation VM: when a setup step fails, `/etc/motd` says so and points at `/var/log/cloud-init-output.log` (it used to stay empty). The README adds `--timeout 900` to `multipass launch` (arm64 downloads about 800 MB) and a one-line form for Windows.
 
 ## [0.2.4] - 2026-11-15
 
