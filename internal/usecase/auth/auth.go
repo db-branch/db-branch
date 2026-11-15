@@ -53,6 +53,9 @@ type Credentials struct {
 	// cluster: replicated), so sessions survive agent restarts and work on
 	// every node.
 	SessionKey []byte `json:"session_key,omitempty"`
+	// MustChange is set for a known initial password (`init --evaluation`): the
+	// console asks for a new one before anything else. An older node ignores it.
+	MustChange bool `json:"must_change,omitempty"`
 }
 
 // Store persists Credentials.
@@ -77,7 +80,10 @@ type Session struct {
 	// Renewed is set when Session issued a fresh Token (same session, later
 	// expiry) that the caller should hand back to the client.
 	Renewed bool
-	id      string
+	// MustChange: the admin signed in with an initial password and has to set a
+	// new one first (only the session and password calls work until then).
+	MustChange bool
+	id         string
 }
 
 // Service checks passwords and issues signed session tokens. Nothing about
@@ -114,7 +120,13 @@ func randomToken() string {
 func GeneratePassword() string { return randomToken()[:24] }
 
 // SetPassword replaces the admin password and ends every session.
-func (s *Service) SetPassword(password string) error {
+func (s *Service) SetPassword(password string) error { return s.setPassword(password, false) }
+
+// SetInitialPassword is SetPassword for a password everyone knows (such as
+// "admin" on an evaluation VM): the next sign-in must change it.
+func (s *Service) SetInitialPassword(password string) error { return s.setPassword(password, true) }
+
+func (s *Service) setPassword(password string, mustChange bool) error {
 	c, err := s.Store.Load()
 	if err != nil && !errors.Is(err, ErrNoCredentials) {
 		return err
@@ -126,7 +138,7 @@ func (s *Service) SetPassword(password string) error {
 		key = newKey()
 	}
 	return s.Store.Save(Credentials{
-		Salt: salt, Hash: s.Hasher.Hash(password, salt), Generation: c.Generation + 1, UpdatedAt: s.Clock(), SessionKey: key,
+		Salt: salt, Hash: s.Hasher.Hash(password, salt), Generation: c.Generation + 1, UpdatedAt: s.Clock(), SessionKey: key, MustChange: mustChange,
 	})
 }
 
@@ -230,7 +242,7 @@ func (s *Service) issue(c Credentials, p payload) Session {
 	body := base64.RawURLEncoding.EncodeToString(b)
 	token := body + "." + base64.RawURLEncoding.EncodeToString(mac(c.SessionKey, "session", body))
 	csrf := base64.RawURLEncoding.EncodeToString(mac(c.SessionKey, "csrf", p.ID))[:32]
-	return Session{Token: token, CSRF: csrf, User: p.User, Name: p.Name, Roles: p.Roles, ExpiresAt: time.Unix(p.Expires, 0).UTC(), id: p.ID}
+	return Session{Token: token, CSRF: csrf, User: p.User, Name: p.Name, Roles: p.Roles, ExpiresAt: time.Unix(p.Expires, 0).UTC(), MustChange: c.MustChange && p.User == AdminUser, id: p.ID}
 }
 
 func (s *Service) parse(c Credentials, token string) (payload, error) {
@@ -274,7 +286,7 @@ func (s *Service) Session(token string) (Session, error) {
 		sess.Renewed = true
 		return sess, nil
 	}
-	return Session{Token: token, CSRF: s.issue(c, p).CSRF, User: p.User, Name: p.Name, Roles: p.Roles, ExpiresAt: exp.UTC(), id: p.ID}, nil
+	return Session{Token: token, CSRF: s.issue(c, p).CSRF, User: p.User, Name: p.Name, Roles: p.Roles, ExpiresAt: exp.UTC(), MustChange: c.MustChange && p.User == AdminUser, id: p.ID}, nil
 }
 
 // Logout ends a session on this node. (Tokens are not stored, so another

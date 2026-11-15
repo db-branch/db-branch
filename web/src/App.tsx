@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, ApiError, can, isAdmin, LoginMethod, managesBases, Session, ssoReturn } from "./api";
 import { AccountMenu } from "./components/account";
+import { FirstPassword } from "./components/firstpassword";
 import { SideNav } from "./components/sidenav";
 import { ErrorLine, Field } from "./components/ui";
 import { hooks, moduleFrame } from "./lib/hooks";
@@ -41,7 +42,7 @@ export function App() {
     ssoReturn().then(({ session, error }) => {
       if (session) return enter(session);
       setSsoError(error);
-      api.session().then(enter, () => setState("login"));
+      api.session().then((s) => (s.must_change_password ? setState("login") : enter(s)), () => setState("login"));
     });
   }, []);
   if (state === "loading") return null;
@@ -99,17 +100,29 @@ export function Login({
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(initialError ?? null);
   const [methods, setMethods] = useState<LoginMethod[]>([]);
+  const [first, setFirst] = useState(false); // signed in with an initial password
   useEffect(() => {
     api.loginMethods().then(setMethods, () => {});
   }, []);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      onDone(await api.login(username.trim() || "admin", password));
+      const s = await api.login(username.trim() || "admin", password);
+      if (s.must_change_password) return setFirst(true);
+      onDone(s);
     } catch (err) {
       setError(err instanceof ApiError && err.code === "invalid_credentials" ? t("Wrong password.") : (err as Error).message);
     }
   };
+  if (first)
+    return (
+      <main className="login">
+        <div className="wordmark">
+          <Mark /> db-branch
+        </div>
+        <FirstPassword current={password} onDone={onDone} />
+      </main>
+    );
   return (
     <main className="login">
       <form className="login-box" onSubmit={submit}>

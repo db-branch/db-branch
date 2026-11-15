@@ -27,11 +27,12 @@ func main() {
 		Agent: func(ctx context.Context, cfg config.Config) error {
 			return app.RunAgent(ctx, cfg, app.AgentOptions{Version: version, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))})
 		},
-		Init:          node.Init,
-		ResetPassword: node.ResetPassword,
-		ClusterInit:   node.ClusterInit,
-		ClusterJoin:   node.ClusterJoin,
-		ClusterAlignIDs: node.AlignIDs,
+		Init:                  node.Init,
+		UseEvaluationPassword: node.UseEvaluationPassword,
+		ResetPassword:         node.ResetPassword,
+		ClusterInit:           node.ClusterInit,
+		ClusterJoin:           node.ClusterJoin,
+		ClusterAlignIDs:       node.AlignIDs,
 	}.Run(ctx, os.Args[1:])
 	stop()
 	os.Exit(code)

@@ -325,3 +325,62 @@ func Test細かな失敗(t *testing.T) {
 		t.Error("reload failure: want error")
 	}
 }
+
+func TestSetInitialPassword_最初のログインでパスワードの変更を求める(t *testing.T) {
+	s, _, _ := newService(t)
+	if err := s.SetInitialPassword("admin"); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := s.Login("admin", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sess.MustChange {
+		t.Error("the first session must be asked to change the password")
+	}
+	again, err := s.Session(sess.Token)
+	if err != nil || !again.MustChange {
+		t.Errorf("session lookup: %+v %v", again, err)
+	}
+}
+
+func TestSetInitialPassword_パスワードを変えたら求めなくなる(t *testing.T) {
+	s, _, st := newService(t)
+	_ = s.SetInitialPassword("admin")
+	sess, _ := s.Login("admin", "admin")
+	fresh, err := s.ChangePassword(sess.Token, "admin", "a much better passphrase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.MustChange || st.c.MustChange {
+		t.Errorf("still asked to change: session %v stored %v", fresh.MustChange, st.c.MustChange)
+	}
+	next, err := s.Login("admin", "a much better passphrase")
+	if err != nil || next.MustChange {
+		t.Errorf("login after the change: %+v %v", next, err)
+	}
+}
+
+func TestSetPassword_ふつうのパスワード設定では変更を求めない(t *testing.T) {
+	s, _, st := newService(t)
+	_ = s.SetInitialPassword("admin")
+	if err := s.SetPassword("correct horse battery"); err != nil {
+		t.Fatal(err)
+	}
+	sess, _ := s.Login("admin", "correct horse battery")
+	if sess.MustChange || st.c.MustChange {
+		t.Error("an ordinary reset must not ask for another change")
+	}
+}
+
+func TestMustChange_管理者以外のセッションには付けない(t *testing.T) {
+	s, _, _ := newService(t)
+	_ = s.SetInitialPassword("admin")
+	other, err := s.Begin("alice", "Alice", []string{"developer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.MustChange {
+		t.Error("only the admin session is asked to change the password")
+	}
+}

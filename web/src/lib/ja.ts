@@ -12,6 +12,7 @@ export const ja: Record<string, string> = {
   "The name and role come from your account; an administrator changes them.": "名前と権限はアカウントの設定です。変更は管理者が行います。",
   "Saved to your account: it follows you to any browser.": "アカウントに保存され、どのブラウザでも同じ言語になります。",
   "Your password is managed by your sign-in provider, not here.": "パスワードはサインインに使うサービス側で管理されています。",
+  "12 characters or more.": "12 文字以上。",
   "12 characters or more. Your other sessions sign out.": "12 文字以上。ほかのセッションはサインアウトされます。",
   "Does not match.": "一致しません。",
   "Password changed.": "パスワードを変更しました。",

@@ -420,6 +420,7 @@ OSS 版のユーザーは `admin` の 1 人だけ。ユーザーの追加はで�
 
 - **初期パスワード**: `db-branch init`（クラスタでは `cluster init`）でランダムに生成し、1 回だけ表示する。あわせて `/etc/db-branch/initial-admin-password`（root のみ読み取り可、0600）に保存する。パスワードを変更したら、このファイルは削除する
 - **パスワードの変更**: Web コンソールから（現在のパスワードの入力が必要）
+- **評価用の初期パスワード**：`db-branch init --pool <pool> --evaluation` は、最初の管理者パスワードをランダムではなく `admin` にし、コンソールの最初のサインインで、新しいパスワード（12 文字以上）への変更を求める（Multipass の評価用 VM 向け。使い捨ての VM 以外では使わない）。変更するまでは、セッションの確認（`GET /v1/auth/session`、`must_change_password: true`）、サインアウト、パスワード変更の3つ以外の API は 403 `password_change_required` になる。変更が済めば通常どおり。すでに初期化したノードには何もしない。保存済みのランダムなパスワード（`/etc/db-branch/initial-admin-password`）は削除する。管理者のセッションにだけ付き、モジュールのユーザーには付かない
 - **パスワードのリセット**: パスワードを忘れたときは、ノードの root が `sudo db-branch admin reset-password` を実行する。新しいランダムパスワードを表示し、既存のセッションはすべて無効にする
 - **保存**: パスワードは argon2id でハッシュ化して Raft に保存する（どのノードでも同じパスワードでログインできる）
 - **セッション**: Cookie（`HttpOnly`・`Secure`・`SameSite=Strict`）と CSRF トークン。ログインの試行回数には上限を設ける

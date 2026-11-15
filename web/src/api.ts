@@ -282,6 +282,8 @@ export type Session = {
   user: { id: string; name: string; roles: string[] };
   csrf_token: string;
   can_change_password?: boolean;
+  // must_change_password: signed in with an initial password; set a new one first.
+  must_change_password?: boolean;
   language?: string;
   // branch_prefix is put in front of the branch names this user types on the
   // user page ("" for admins). The server adds it; the page only shows it.
