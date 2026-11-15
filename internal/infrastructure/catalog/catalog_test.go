@@ -119,6 +119,23 @@ func TestDefault_同梱のカタログが読み込めMySQL84を含む(t *testing
 	}
 }
 
+func TestDefault_同梱のカタログはarm64にもMySQL8系を提供する(t *testing.T) {
+	c, err := catalog.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"mysql@8.0.46", "mysql@8.4.13", "mysql@9.6.0"} {
+		parts, err := c.Lookup(ref(v), "arm64")
+		if err != nil {
+			t.Errorf("default catalog should offer %s for arm64: %v", v, err)
+			continue
+		}
+		if len(parts) != 1 || !strings.HasSuffix(parts[0].URL, "-aarch64.tar.xz") {
+			t.Errorf("%s arm64: want one aarch64 tarball, got %v", v, parts)
+		}
+	}
+}
+
 func TestLookup_複数のアーカイブからなるランタイムは順に返す(t *testing.T) {
 	c, err := catalog.Parse([]byte(`{"runtimes": [{"engine": "postgres", "version": "18.6", "artifacts": {"amd64": {"parts": [
 		{"url": "https://x.test/server.deb", "sha256": "` + sha + `", "size": 7},

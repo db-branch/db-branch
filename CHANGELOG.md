@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- `db-branch runtime install mysql@8.0.46` (and `mysql@8.4.13`, `mysql@9.6.0`) works on arm64 (Apple Silicon VMs, Graviton): the catalog had no arm64 entry, so the install failed with `runtime not found` and the Multipass evaluation VM stopped before writing /etc/motd. Oracle ships no `-minimal` build for aarch64, so arm64 uses the full `glibc2.28-aarch64` tarball (800 MB to 1 GB to download).
+
 ## [0.2.4] - 2026-11-15
 
 ### Added
