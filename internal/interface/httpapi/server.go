@@ -398,12 +398,25 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			writeError(w, http.StatusForbidden, "csrf_failed", "missing or wrong X-CSRF-Token")
 			return
 		}
+		if sess.MustChange && !allowedBeforePasswordChange(r) {
+			writeError(w, http.StatusForbidden, "password_change_required", "set a new password first")
+			return
+		}
 		if sess.Renewed {
 			setSessionCookie(w, sess)
 		}
 		ctx := context.WithValue(r.Context(), ctxKey{}, sess)
 		next.ServeHTTP(w, r.WithContext(withPrincipal(ctx, ext.Principal{ID: sess.User, Name: sess.Name, Roles: sess.Roles})))
 	})
+}
+
+// allowedBeforePasswordChange: what a session with an initial password may do.
+func allowedBeforePasswordChange(r *http.Request) bool {
+	switch r.Method + " " + r.URL.Path {
+	case "GET /v1/auth/session", "POST /v1/auth/logout", "PUT /v1/auth/password":
+		return true
+	}
+	return false
 }
 
 func securityHeaders(next http.Handler) http.Handler {

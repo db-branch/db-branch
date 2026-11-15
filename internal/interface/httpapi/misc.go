@@ -238,6 +238,9 @@ type sessionJSON struct {
 	ExpiresAt string         `json:"expires_at"`
 	// CanChangePassword: the account page may offer a password change.
 	CanChangePassword bool `json:"can_change_password"`
+	// MustChangePassword: the password is an initial one; the console asks for a
+	// new one before anything else (every other call is refused until then).
+	MustChangePassword bool `json:"must_change_password"`
 	// Language is the user's chosen console language ("": the browser's).
 	Language string `json:"language"`
 	// Can tells the console which of consoleActions the user may do, so
@@ -272,6 +275,7 @@ func (s *Server) passwordChanger(sess auth.Session) (ext.PasswordChanger, bool) 
 
 func (s *Server) sessionView(ctx context.Context, sess auth.Session) sessionJSON {
 	v := sessionView(sess)
+	v.MustChangePassword = sess.MustChange
 	p, az := ext.Principal{ID: sess.User, Name: sess.Name, Roles: sess.Roles}, s.authorizer()
 	v.Can = map[string]bool{}
 	actions := append([]string{}, consoleActions...)

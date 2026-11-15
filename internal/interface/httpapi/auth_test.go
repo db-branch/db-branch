@@ -168,3 +168,59 @@ func TestEvents_変化をSSEで流す(t *testing.T) {
 		t.Errorf("stream = %q", got)
 	}
 }
+
+func loginWith(t *testing.T, f *fixture, password string) (*http.Cookie, string) {
+	t.Helper()
+	resp, body := send(t, f.srv.Handler(false), "POST", "/v1/auth/login", map[string]any{"username": "admin", "password": password}, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("login: %d %v", resp.StatusCode, body)
+	}
+	for _, c := range resp.Cookies() {
+		if c.Name == "dbb_session" {
+			return c, body["csrf_token"].(string)
+		}
+	}
+	t.Fatal("no session cookie")
+	return nil, ""
+}
+
+func TestConsole_初期パスワードのままなら変更するまで他の操作を断る(t *testing.T) {
+	f := newFixture(t)
+	h := f.srv.Handler(false)
+	if err := f.srv.Auth.SetInitialPassword("admin"); err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := loginWith(t, f, "admin")
+
+	resp, body := send(t, h, "GET", "/v1/auth/session", nil, withSession(cookie, ""))
+	if resp.StatusCode != 200 || body["must_change_password"] != true {
+		t.Errorf("session: %d %v", resp.StatusCode, body)
+	}
+	for _, tc := range []struct{ method, path string }{{"GET", "/v1/branches"}, {"POST", "/v1/branches"}, {"GET", "/v1/bases"}} {
+		resp, body := send(t, h, tc.method, tc.path, map[string]any{"name": "x", "base": "prod"}, withSession(cookie, csrf))
+		if resp.StatusCode != 403 || errCode(body) != "password_change_required" {
+			t.Errorf("%s %s: %d %v", tc.method, tc.path, resp.StatusCode, body)
+		}
+	}
+	resp, _ = send(t, h, "PUT", "/v1/auth/password",
+		map[string]any{"current_password": "admin", "new_password": "a much better passphrase"}, withSession(cookie, csrf))
+	if resp.StatusCode != 204 {
+		t.Fatalf("change: %d", resp.StatusCode)
+	}
+	cookie, _ = loginWith(t, f, "a much better passphrase")
+	if resp, _ := send(t, h, "GET", "/v1/branches", nil, withSession(cookie, "")); resp.StatusCode != 200 {
+		t.Errorf("after the change: %d", resp.StatusCode)
+	}
+	if _, body := send(t, h, "GET", "/v1/auth/session", nil, withSession(cookie, "")); body["must_change_password"] != false {
+		t.Errorf("session after the change: %v", body)
+	}
+}
+
+func TestConsole_初期パスワードのままでもログアウトはできる(t *testing.T) {
+	f := newFixture(t)
+	_ = f.srv.Auth.SetInitialPassword("admin")
+	cookie, csrf := loginWith(t, f, "admin")
+	if resp, _ := send(t, f.srv.Handler(false), "POST", "/v1/auth/logout", nil, withSession(cookie, csrf)); resp.StatusCode != 204 {
+		t.Errorf("logout: %d", resp.StatusCode)
+	}
+}

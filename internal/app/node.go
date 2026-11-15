@@ -124,6 +124,17 @@ func (n Node) initialPassword(cfg config.Config) (string, error) {
 	return password, svc.SetPassword(password)
 }
 
+// UseEvaluationPassword makes the admin password "admin", which the console
+// makes the person change at the first sign-in (`db-branch init --evaluation`,
+// for a throwaway VM). The saved random password is no longer valid, so it is removed.
+func (n Node) UseEvaluationPassword(cfg config.Config) error {
+	if err := authService(cfg).SetInitialPassword("admin"); err != nil {
+		return err
+	}
+	_ = os.Remove(n.InitialPasswordFile)
+	return nil
+}
+
 // ResetPassword sets a new random admin password, which ends every console
 // session on the next request.
 func (n Node) ResetPassword(cfg config.Config) (string, error) {

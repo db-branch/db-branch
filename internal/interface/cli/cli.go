@@ -31,6 +31,9 @@ type App struct {
 	// Init prepares the node on pool and returns the initial admin password
 	// (empty when one was already set).
 	Init func(ctx context.Context, cfg config.Config, pool string) (string, error)
+	// UseEvaluationPassword sets the password "admin" that has to be changed at
+	// the first console sign-in (init --evaluation).
+	UseEvaluationPassword func(cfg config.Config) error
 	// ResetPassword sets a new random admin password and returns it.
 	ResetPassword func(cfg config.Config) (string, error)
 	// ClusterInit turns this node into a one-node cluster.
@@ -124,6 +127,7 @@ func (a *App) agentCommand() *cobra.Command {
 
 func (a *App) initCommand() *cobra.Command {
 	var pool, storage string
+	var evaluation bool
 	cmd := &cobra.Command{
 		Use:   "init --pool <pool> | --storage <module>",
 		Short: "Prepare this node: ZFS datasets (or a module's storage), ARC limit, admin password, TLS certificate",
@@ -154,7 +158,16 @@ func (a *App) initCommand() *cobra.Command {
 			} else {
 				fmt.Fprintf(cmd.OutOrStdout(), "Initialized db-branch on pool %s.\n", pool)
 			}
-			if password != "" {
+			if password != "" && evaluation {
+				if a.UseEvaluationPassword == nil {
+					return fmt.Errorf("--evaluation is not available here")
+				}
+				if err := a.UseEvaluationPassword(cfg); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "\nWeb console: https://<this host>%s  user: admin  password: admin\n", cfg.Console.Listen)
+				fmt.Fprintln(cmd.OutOrStdout(), "The console asks you to change the password at the first sign-in. Use this only for a throwaway evaluation VM.")
+			} else if password != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "\nWeb console: https://<this host>%s  user: admin  password: %s\n", cfg.Console.Listen, password)
 				fmt.Fprintln(cmd.OutOrStdout(), "The password is shown only once (also saved in /etc/db-branch/initial-admin-password).")
 			}
@@ -162,6 +175,7 @@ func (a *App) initCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&pool, "pool", "", "ZFS pool to use")
+	cmd.Flags().BoolVar(&evaluation, "evaluation", false, "for a throwaway evaluation VM: the first password is \"admin\" and must be changed at the first console sign-in")
 	cmd.Flags().StringVar(&storage, "storage", "", "use this module's storage instead of a ZFS pool (e.g. fsx)")
 	return cmd
 }

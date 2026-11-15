@@ -4392,6 +4392,7 @@ components:
         csrf_token: {type: string, description: Send it as `X-CSRF-Token` on every request other than GET.}
         expires_at: {type: string, format: date-time}
         can_change_password: {type: boolean, description: False when a sign-in provider manages the password.}
+        must_change_password: {type: boolean, description: 'True after signing in with an initial password (`db-branch init --evaluation`). Until it is changed with `PUT /v1/auth/password`, every other call except this one and `POST /v1/auth/logout` fails with 403 `password_change_required`.'}
         language:
           type: string
           description: The user's chosen console language (`en`, `ja`), empty to follow the browser.

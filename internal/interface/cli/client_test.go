@@ -1103,3 +1103,38 @@ func TestBranchPauseとResume_メモリを解放して止め_同じ接続情報�
 		t.Error("a name is needed")
 	}
 }
+
+func TestInit_評価用ならパスワードをadminにして最初のログインで変更を求めると伝える(t *testing.T) {
+	var out, errOut bytes.Buffer
+	var used bool
+	app := cli.App{
+		Stdout: &out, Stderr: &errOut,
+		Init: func(context.Context, config.Config, string) (string, error) { return "random-secret", nil },
+		UseEvaluationPassword: func(config.Config) error {
+			used = true
+			return nil
+		},
+	}
+	cfgPath := filepath.Join(t.TempDir(), "x.toml")
+	if code := app.Run(context.Background(), []string{"--config", cfgPath, "init", "--pool", "tank", "--evaluation"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	got := out.String()
+	if !used || strings.Contains(got, "random-secret") || !strings.Contains(got, "password: admin") || !strings.Contains(got, "change") {
+		t.Errorf("used %v out %q", used, got)
+	}
+
+	// Without the flag the generated password is shown and the evaluation one is not used.
+	used = false
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"--config", cfgPath, "init", "--pool", "tank"}); code != 0 || used || !strings.Contains(out.String(), "random-secret") {
+		t.Errorf("plain init: used %v out %q", used, out.String())
+	}
+
+	// An already initialised node (no new password) is left alone.
+	app.Init = func(context.Context, config.Config, string) (string, error) { return "", nil }
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"--config", cfgPath, "init", "--pool", "tank", "--evaluation"}); code != 0 || used || strings.Contains(out.String(), "password: admin") {
+		t.Errorf("re-init: used %v out %q", used, out.String())
+	}
+}
