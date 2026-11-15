@@ -46,12 +46,20 @@ The repository signing key fingerprint is `3F404C4E5D49FA653F8385692C6E89E341D4D
 db-branch needs Linux and ZFS. To try it on a Mac or Windows machine, run it in an Ubuntu VM with [Multipass](https://multipass.run/). This one command makes the VM, installs db-branch, initialises it on a file-backed ZFS pool and loads a small sample base, `shop` (MySQL 8.4; about two minutes):
 
 ```sh
-multipass launch 24.04 --name db-branch-eval --memory 4G --disk 30G \
+multipass launch 24.04 --name db-branch-eval --memory 4G --disk 30G --timeout 900 \
   --cloud-init https://raw.githubusercontent.com/db-branch/db-branch/main/scripts/eval-cloud-init.yaml
 multipass exec db-branch-eval -- cloud-init status --wait    # wait for the setup (about two minutes)
-multipass exec db-branch-eval -- cat /etc/motd    # console URL and sign-in (admin / admin)
+multipass exec db-branch-eval -- cat /etc/motd    # console URL and sign-in (admin / admin), or what failed
 multipass shell db-branch-eval                    # then: sudo db-branch branch create try --base shop --ttl 1h --record
 ```
+
+On Windows (PowerShell or cmd), put the `multipass launch` command on one line (drop the `\`):
+
+```powershell
+multipass launch 24.04 --name db-branch-eval --memory 4G --disk 30G --timeout 900 --cloud-init https://raw.githubusercontent.com/db-branch/db-branch/main/scripts/eval-cloud-init.yaml
+```
+
+On Apple Silicon (and other arm64 machines) the setup downloads more, about 800 MB for MySQL against 80 MB on Intel, as Oracle ships no minimal build for arm64; `--timeout 900` keeps `launch` from giving up on a slow connection while the setup is still running. If the setup fails, `/etc/motd` says so and `sudo tail -n 30 /var/log/cloud-init-output.log` in the VM shows why.
 
 The history module is turned on, and the paid modules run for 30 days without a key (`--record` records a branch so it can be restored to any point). The pool is a file, so it is slower and is not meant for real data, and the first admin password is `admin` (the console asks for a new one at the first sign-in). Delete the VM with `multipass delete --purge db-branch-eval`.
 

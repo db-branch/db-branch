@@ -152,3 +152,67 @@ func TestFixup_mysqlとmysqldの両方を見て直す(t *testing.T) {
 		t.Error("libaio missing everywhere")
 	}
 }
+
+func TestDropDebug_デバッグ版のサーバーとプラグインを消し通常版は残す(t *testing.T) {
+	rt := t.TempDir()
+	for _, p := range []string{"bin/mysqld", "bin/mysqld-debug", "bin/mysql", "lib/plugin/auth_socket.so", "lib/plugin/debug/auth_socket.so"} {
+		touch(t, filepath.Join(rt, p))
+	}
+	if err := mysql.DropDebug(rt); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"bin/mysqld-debug", "lib/plugin/debug"} {
+		if _, err := os.Lstat(filepath.Join(rt, p)); !os.IsNotExist(err) {
+			t.Errorf("%s should be removed: %v", p, err)
+		}
+	}
+	for _, p := range []string{"bin/mysqld", "bin/mysql", "lib/plugin/auth_socket.so"} {
+		if _, err := os.Stat(filepath.Join(rt, p)); err != nil {
+			t.Errorf("%s should be kept: %v", p, err)
+		}
+	}
+}
+
+func TestDropDebug_デバッグ版がない最小版では何もしない(t *testing.T) {
+	rt := t.TempDir()
+	touch(t, filepath.Join(rt, "bin", "mysqld"))
+	if err := mysql.DropDebug(rt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(rt, "bin", "mysqld")); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestFixup_デバッグ版を消してから直す(t *testing.T) {
+	rt, sys := t.TempDir(), t.TempDir()
+	touch(t, filepath.Join(sys, "libaio.so.1"))
+	touch(t, filepath.Join(rt, "bin", "mysqld-debug"))
+	fix := mysql.Fixup([]string{sys}, func(string) ([]string, error) { return nil, nil })
+	if err := fix(rt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(rt, "bin", "mysqld-debug")); !os.IsNotExist(err) {
+		t.Errorf("mysqld-debug should be removed: %v", err)
+	}
+}
+
+func TestDropDebug_消せなければ失敗しFixupも止まる(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove from a read-only directory")
+	}
+	rt := t.TempDir()
+	touch(t, filepath.Join(rt, "bin", "mysqld-debug"))
+	bin := filepath.Join(rt, "bin")
+	if err := os.Chmod(bin, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(bin, 0o755) })
+	if err := mysql.DropDebug(rt); err == nil {
+		t.Error("DropDebug: want error")
+	}
+	fix := mysql.Fixup([]string{t.TempDir()}, func(string) ([]string, error) { return nil, nil })
+	if err := fix(rt); err == nil {
+		t.Error("Fixup: want error")
+	}
+}

@@ -8,6 +8,11 @@
           "url": "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.13-linux-glibc2.28-x86_64-minimal.tar.xz",
           "sha256": "5dfbb764f731df40ef9e4f5d69aed32bdac8ba1af20bd96b7d40a942d83d4ed2",
           "size": 79753532
+        },
+        "arm64": {
+          "url": "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.13-linux-glibc2.28-aarch64.tar.xz",
+          "sha256": "6531bb50f64c986a2abdab6b647cbd553e8740b3e5d3867f5415e33568879fc9",
+          "size": 823781920
         }
       }
     },
@@ -19,6 +24,11 @@
           "url": "https://cdn.mysql.com/Downloads/MySQL-9.6/mysql-9.6.0-linux-glibc2.28-x86_64-minimal.tar.xz",
           "sha256": "06ebd32ab32ccac2132c602ec3bfb4d5791b6ff9e98393b2fb04d1e97ff925b7",
           "size": 69934940
+        },
+        "arm64": {
+          "url": "https://cdn.mysql.com/Downloads/MySQL-9.6/mysql-9.6.0-linux-glibc2.28-aarch64.tar.xz",
+          "sha256": "fe6141f6069534724b0eb9a5d235a7616c7829d74bd1509e624c9466485843a0",
+          "size": 981838316
         }
       }
     },
@@ -30,6 +40,11 @@
           "url": "https://cdn.mysql.com/Downloads/MySQL-8.0/mysql-8.0.46-linux-glibc2.17-x86_64-minimal.tar.xz",
           "sha256": "e2777d490fcaadc5a4be06db89b6935c78909bd9c3382af859ab284af0c950b0",
           "size": 61608108
+        },
+        "arm64": {
+          "url": "https://cdn.mysql.com/Downloads/MySQL-8.0/mysql-8.0.46-linux-glibc2.28-aarch64.tar.xz",
+          "sha256": "49cda0de886b021df1c2e3e382164ca3c61e93e7e5c4ee90849e13862e30dd7f",
+          "size": 880055484
         }
       }
     },
@@ -236,4 +251,4 @@
       }
     }
   ]
-}\n
+}

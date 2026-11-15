@@ -4,6 +4,7 @@
 # history module (the 30-day trial of the paid modules starts now), and writes the
 # console URL and the sign-in (admin / admin, changed at the first sign-in) to /etc/motd.
 # Not for real data: the pool is a file, and the first password is a known one.
+# If a step fails, /etc/motd says so and points at the log instead of staying empty.
 write_files:
   - path: /var/lib/db-branch-eval/shop.sql
     permissions: '0644'
@@ -59,6 +60,7 @@ write_files:
 runcmd:
   - |
     set -e
+    trap 'rc=$?; [ "$rc" -eq 0 ] || printf "\ndb-branch evaluation VM: the setup FAILED (exit %s).\n  See what went wrong: sudo tail -n 30 /var/log/cloud-init-output.log\n\n" "$rc" > /etc/motd' EXIT
     curl -fsSL https://apt.db-branch.com/db-branch.gpg | tee /usr/share/keyrings/db-branch.gpg >/dev/null
     echo "deb [signed-by=/usr/share/keyrings/db-branch.gpg] https://apt.db-branch.com stable main" > /etc/apt/sources.list.d/db-branch.list
     apt-get update

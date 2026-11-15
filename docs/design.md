@@ -90,6 +90,7 @@ db-branch runtime import mysql@8.4.3-custom --path /opt/mysql   # 手元のビ�
 
 - 配置先: `/var/lib/db-branch/runtimes/<engine>/<version>/`（`bin/`, `lib/`, `share/`）
 - 取得はユーザーの明示的な操作でのみ行う（パッケージのインストール時には何もダウンロードしない）
+- **MySQL 8.0 以上の arm64 版**: Oracle が aarch64 の `-minimal` 版を出していないので、通常版（`glibc2.28-aarch64` の `.tar.xz`、800 MB〜1 GB）を使う。amd64 は `-minimal` 版。通常版に入っているデバッグ版のサーバーとプラグイン（`bin/*-debug`、`lib/plugin/debug`）は使わないので、導入時に消す（8.4.13 で 1.5 GB → 1.1 GB）
 - **MySQL 5.7 と 5.6**（移行の検証用）: `mysql@5.7.44`、`mysql@5.6.51` を入れられる（amd64 のみ。Oracle が 5.x の arm64 版を出していない）。公式の汎用版（`glibc2.12` の `.tar.gz`）を使う。5.x のバイナリは RPATH を持たないので、`libaio` や ncurses 5 を使うものは、導入時に `lib/private` へ互換リンクを張り、それを見つける起動ラッパー（`<名前>.real` に本体を移す）に差し替える。サーバーの設定は、`mysqlx=OFF` を 8.0 以上だけに書き、5.6 の初期化は `mysql_install_db`（5.7 は `--initialize-insecure`）、ブランチのユーザーは `GRANT … IDENTIFIED BY …` で作る（5.6 は `CREATE USER IF NOT EXISTS` がない。匿名ユーザーと、ほかのホストの root も消す）。ブランチを作り、Checkpoint を使い、5.6 → 5.7 → 8.0 と上げられる（[upgrade.md](upgrade.md)）。**履歴（history）モジュールは 5.x では記録しない**（記録を求めると、理由を添えて断る）。マスキングは確かめていない。5.x は公式のサポートが終わっており、移行の検証のための機能として扱う
 
 ### クラスタでの配布
