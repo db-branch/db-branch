@@ -43,13 +43,13 @@ The repository signing key fingerprint is `3F404C4E5D49FA653F8385692C6E89E341D4D
 
 ### Evaluate locally (macOS / Windows)
 
-db-branch needs Linux and ZFS. To try it on a Mac or Windows machine, run it in an Ubuntu VM with [Multipass](https://multipass.run/). This one command makes the VM, installs db-branch and initialises it on a file-backed ZFS pool (about a minute and a half):
+db-branch needs Linux and ZFS. To try it on a Mac or Windows machine, run it in an Ubuntu VM with [Multipass](https://multipass.run/). This one command makes the VM, installs db-branch, initialises it on a file-backed ZFS pool and loads a small sample base, `shop` (MySQL 8.4; about two minutes):
 
 ```sh
 multipass launch 24.04 --name db-branch-eval --memory 4G --disk 30G \
   --cloud-init https://raw.githubusercontent.com/db-branch/db-branch/main/scripts/eval-cloud-init.yaml
 multipass exec db-branch-eval -- cat /etc/motd    # console URL and the admin password
-multipass shell db-branch-eval                    # then: sudo db-branch ... (see First branch below)
+multipass shell db-branch-eval                    # then: sudo db-branch branch create try --base shop --ttl 1h
 ```
 
 The pool is a file, so it is slower and is not meant for real data, and the admin password is kept in a readable file. Delete the VM with `multipass delete --purge db-branch-eval`.

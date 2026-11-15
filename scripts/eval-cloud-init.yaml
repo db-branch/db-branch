@@ -1,7 +1,60 @@
 #cloud-config
 # Evaluation VM for db-branch (Multipass): installs db-branch, makes a file-backed ZFS pool,
-# initialises it, and writes the console URL and the admin password to /etc/motd.
+# initialises it, loads a small sample base (`shop`, MySQL 8.4, synthetic data), and writes the
+# console URL and the admin password to /etc/motd.
 # Not for real data: the pool is a file, and the password is stored in a readable file.
+write_files:
+  - path: /var/lib/db-branch-eval/shop.sql
+    permissions: '0644'
+    content: |
+      -- Sample data for the db-branch evaluation VM: a small shop (synthetic, generated here).
+      CREATE DATABASE IF NOT EXISTS shop;
+      USE shop;
+
+      CREATE TABLE customers (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        name VARCHAR(100) NOT NULL,
+        email VARCHAR(150) NOT NULL UNIQUE,
+        created_at DATETIME NOT NULL
+      );
+      CREATE TABLE products (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        name VARCHAR(100) NOT NULL,
+        price DECIMAL(10,2) NOT NULL
+      );
+      CREATE TABLE orders (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        customer_id INT NOT NULL,
+        status VARCHAR(20) NOT NULL,
+        created_at DATETIME NOT NULL,
+        FOREIGN KEY (customer_id) REFERENCES customers (id)
+      );
+      CREATE TABLE order_items (
+        order_id INT NOT NULL,
+        product_id INT NOT NULL,
+        quantity INT NOT NULL,
+        PRIMARY KEY (order_id, product_id),
+        FOREIGN KEY (order_id) REFERENCES orders (id),
+        FOREIGN KEY (product_id) REFERENCES products (id)
+      );
+
+      SET SESSION cte_max_recursion_depth = 200000;
+
+      INSERT INTO customers (name, email, created_at)
+      WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+      SELECT CONCAT('Customer ', i), CONCAT('customer', i, '@example.com'), NOW() - INTERVAL (i MOD 365) DAY FROM n;
+
+      INSERT INTO products (name, price)
+      WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 100)
+      SELECT CONCAT('Product ', i), 5 + (i MOD 20) * 2.5 FROM n;
+
+      INSERT INTO orders (customer_id, status, created_at)
+      WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50000)
+      SELECT 1 + (i * 7) MOD 10000, ELT(1 + i MOD 3, 'paid', 'shipped', 'delivered'), NOW() - INTERVAL (i MOD 300) DAY FROM n;
+
+      INSERT INTO order_items (order_id, product_id, quantity)
+      WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50000)
+      SELECT i, 1 + (i * 13) MOD 100, 1 + i MOD 5 FROM n;
 runcmd:
   - |
     set -e
@@ -12,11 +65,15 @@ runcmd:
     truncate -s 20G /var/lib/db-branch-eval.img
     zpool create tank /var/lib/db-branch-eval.img
     db-branch init --pool tank > /tmp/db-branch-init.txt 2>&1
+    for i in $(seq 1 60); do db-branch runtime list >/dev/null 2>&1 && break; sleep 1; done
+    db-branch runtime install mysql@8.4.13
+    db-branch base create shop --runtime mysql@8.4.13 --dump /var/lib/db-branch-eval/shop.sql
     ip=$(hostname -I | cut -d' ' -f1)
     {
       echo
       echo "db-branch evaluation VM"
       echo "  Console:  https://$ip:7080/  (self-signed certificate; admin console: /admin)"
+      echo "  Base:     shop (MySQL 8.4, sample data). Try: sudo db-branch branch create try --base shop --ttl 1h"
       echo "  Pool:     file-backed, for evaluation only"
       echo
       cat /tmp/db-branch-init.txt
