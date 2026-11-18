@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-18
+
 ### Security
 
 - **Anyone who could reach the console or API port could run commands as root on a node.** A branch made from a public snapshot needs no login, and the SQL it takes (`init_sql`) ran through `psql` or `mysql` as the agent (root): a client command in it (`\!` in `psql`, `system` in `mysql`) ran on the node. On PostgreSQL, the branch login was a superuser as well, so `COPY ... TO PROGRAM` ran commands as the `db-branch` OS user, which could use the agent's socket and reset the admin password. Fixed:
