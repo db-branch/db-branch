@@ -4,6 +4,7 @@ package postgres
 import (
 	"compress/gzip"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -40,6 +41,9 @@ type Server struct {
 	// CheckOwner fails with domain.ErrOwnership when path does not belong to
 	// User. Optional.
 	CheckOwner func(path string) error
+
+	// Open opens a database connection for init SQL (default sql.Open).
+	Open func(driver, dsn string) (*sql.DB, error)
 
 	StartTimeout time.Duration
 	PollInterval time.Duration

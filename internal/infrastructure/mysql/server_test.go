@@ -184,6 +184,7 @@ func TestInitialize_設定ファイルを書いてデータディレクトリを
 		// No file import or export through SQL, whatever a login may do.
 		"secure_file_priv=NULL",
 		"local_infile=OFF",
+		"partial_revokes=ON",
 	} {
 		if !strings.Contains(cnf, want+"\n") {
 			t.Errorf("my.cnf lacks %q:\n%s", want, cnf)
@@ -702,6 +703,39 @@ func TestCreateUser_5_7は従来の文で_5_6はGRANTでユーザーを作り匿
 	for _, want := range []string{"GRANT USAGE ON *.* TO 'feature-x'@'%' IDENTIFIED BY 'pw1'", "REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'feature-x'@'%'", "DELETE FROM mysql.user WHERE User = ''", "User = 'root' AND Host <> 'localhost'", "FLUSH PRIVILEGES"} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("5.6 sql lacks %q: %s", want, sql)
+		}
+	}
+}
+
+func TestCreateUser_mysqlスキーマの権限を外すのは8_0_16以降だけ(t *testing.T) {
+	for _, tc := range []struct {
+		version string
+		revoke  bool
+	}{{"5.6.51", false}, {"5.7.44", false}, {"8.0", false}, {"8.0.x", false}, {"8.0.15", false}, {"8.0.16", true}, {"8.0.46", true}, {"8.4.13", true}, {"9.6.0", true}} {
+		f := newFixture(t).with(tc.version)
+		if err := f.srv.CreateUser(ctx, f.spec, "feature-x", "pw1"); err != nil {
+			t.Fatal(err)
+		}
+		sql := strings.Join(f.sys.calls, "\n")
+		if got := strings.Contains(sql, " ON mysql.* FROM 'feature-x'@'%'") && strings.Contains(sql, "SET GLOBAL partial_revokes = ON"); got != tc.revoke {
+			t.Errorf("%s: revoke on the mysql schema = %v, want %v", tc.version, got, tc.revoke)
+		}
+		// The option is written to my.cnf only where the runtime knows it.
+		if err := f.srv.Initialize(ctx, f.spec); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(read(t, filepath.Join(f.state, f.spec.ID, "my.cnf")), "partial_revokes=ON\n"); got != tc.revoke {
+			t.Errorf("%s: partial_revokes in my.cnf = %v, want %v", tc.version, got, tc.revoke)
+		}
+	}
+}
+
+func TestCreateUser_権限を外す文の失敗は返す(t *testing.T) {
+	for name, fail := range map[string]string{"set": "SET GLOBAL partial_revokes", "revoke": " ON mysql.* FROM"} {
+		f := newFixture(t)
+		f.sys.failOn = fail
+		if err := f.srv.CreateUser(ctx, f.spec, "feature-x", "pw1"); err == nil {
+			t.Errorf("%s: want an error", name)
 		}
 	}
 }
