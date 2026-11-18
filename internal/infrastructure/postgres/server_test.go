@@ -29,6 +29,8 @@ type fakeSystem struct {
 	failOn     string
 	crashes    bool
 	initdb     func(dataDir string)
+	// outputs answers a call whose text contains the key with the value on stdout.
+	outputs map[string]string
 }
 
 func (f *fakeSystem) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -51,6 +53,11 @@ func (f *fakeSystem) RunInput(_ context.Context, in io.Reader, name string, args
 	}
 	if f.failOn != "" && strings.Contains(call, f.failOn) {
 		return nil, &execx.Error{Command: call, Stderr: "injected failure", Err: errors.New("exit 1")}
+	}
+	for k, v := range f.outputs {
+		if strings.Contains(call, k) {
+			return []byte(v), nil
+		}
 	}
 	switch {
 	case strings.Contains(call, " initdb "):

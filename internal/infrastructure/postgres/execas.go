@@ -169,7 +169,11 @@ func (p *Server) ExecAs(ctx context.Context, s domain.Server, user, _ string, sc
 func (p *Server) execIn(ctx context.Context, s domain.Server, user string, part scriptPart) error {
 	dsn := fmt.Sprintf("host=%s port=%d user=%s dbname=%s sslmode=disable connect_timeout=10",
 		kv(p.sockDir(s)), s.Port, kv(user), kv(part.DB))
-	db, err := sql.Open("pgx", dsn)
+	open := p.Open
+	if open == nil {
+		open = sql.Open
+	}
+	db, err := open("pgx", dsn)
 	if err != nil {
 		return err
 	}
