@@ -310,6 +310,9 @@ func (s *Service) continueRestore(ctx context.Context, brp *domain.Branch, in re
 			return err
 		}
 	}
+	if err := s.putLoginRight(ctx, br, srv, spec); err != nil {
+		return err
+	}
 	if err := s.clearIntent(ctx, br.Name); err != nil {
 		return err
 	}

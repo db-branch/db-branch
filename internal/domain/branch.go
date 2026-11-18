@@ -411,10 +411,16 @@ type DBServer interface {
 	Start(ctx context.Context, s Server) error
 	Stop(ctx context.Context, s Server, mode StopMode) error
 	Running(ctx context.Context, s Server) (bool, error)
-	// Exec runs SQL as the local admin.
+	// Exec runs SQL as the local admin. Only SQL db-branch wrote itself goes here.
 	Exec(ctx context.Context, s Server, sql string) error
-	// CreateUser makes (or keeps) a login with every privilege for clients.
-	// The name is a branch name and the password letters and digits only.
+	// ExecAs runs SQL as the branch login, never as the admin: init SQL comes
+	// from whoever asked for the branch, who may not be an admin. A client
+	// command inside it (psql's \!, mysql's system) must not run on the node.
+	ExecAs(ctx context.Context, s Server, user, password, sql string) error
+	// CreateUser makes (or keeps, and puts right) the login clients use. The
+	// login may read and change the data and the objects in it, and nothing
+	// else: no superuser, no server files, no programs. The name is a branch
+	// name and the password letters and digits only.
 	CreateUser(ctx context.Context, s Server, user, password string) error
 	// Load imports a SQL dump (optionally gzip-compressed) as the local admin.
 	Load(ctx context.Context, s Server, dumpPath string) error

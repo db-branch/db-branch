@@ -200,7 +200,7 @@ PUT  /v1/auth/password     {"current_password":"...","new_password":"..."} → 2
 ### 3.2 ローカル CLI（UNIX ソケット）
 
 - `/run/db-branch/agent.sock` で同じ API を提供する。HTTP をソケット上で話す
-- 接続元のプロセスの UID/GID を `SO_PEERCRED` で確かめ、root か `db-branch` グループなら認証済みとして扱う。Cookie・CSRF は不要
+- 接続元のプロセスの UID/GID を `SO_PEERCRED` で確かめ、root か `db-branch-admin` グループなら認証済みとして扱う（DB サーバーが動く `db-branch` グループは含めない）。Cookie・CSRF は不要
 - 主体（principal）は `local:<ユーザー名>` として監査イベントに記録する
 - ソケット限定の操作: `POST /v1/runtimes/import`（ノード上のパスを読むため）。TCP から呼ぶと `403 socket_only`
 - クラスタの初期化・参加（`cluster init` / `join`）は API にせず CLI だけで行う（参加トークンと証明書の発行を伴うため）
@@ -318,7 +318,7 @@ POST /v1/branches
 ```
 
 - `snapshot` を省略するとベースの最新スナップショットを使う
-- `init_sql` はリクエストに直接入れる（上限 1 MiB）。適用後にリセットポイントを取る
+- `init_sql` はリクエストに直接入れる（上限 1 MiB）。適用後にリセットポイントを取る。**ブランチのログインとして**実行するので、管理者の権限が要る SQL（`CREATE USER`、`GRANT`、`COPY ... PROGRAM` など）は使えない。PostgreSQL は平文の SQL と `\connect` だけを受け付け、MySQL はクライアントのコマンド（`system` など）を無効にして流す。ログインなしの呼び出しは `init_sql` を渡せない（403）
 - `ttl` を省略すると期限なし。`"0"` は不可（省略で表す）
 
 表現:

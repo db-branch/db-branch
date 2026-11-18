@@ -246,19 +246,29 @@ func (p *Server) Exec(ctx context.Context, s domain.Server, sql string) error {
 	return err
 }
 
-// CreateUser makes a superuser login for clients, or resets its password.
-// Names are branch names and passwords letters and digits: the quoting below
-// is enough.
+// CreateUser makes the login for clients, or puts it right and resets its
+// password. It is no superuser (a superuser can run programs on the node with
+// COPY ... TO PROGRAM and read any file the server can): it is a member of
+// OwnerRole, which owns the objects in the databases. Names are branch names
+// and passwords letters and digits: the quoting below is enough.
 func (p *Server) CreateUser(ctx context.Context, s domain.Server, user, password string) error {
-	return p.Exec(ctx, s, fmt.Sprintf(`DO $$
+	err := p.Exec(ctx, s, fmt.Sprintf(`DO $$
 BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '%[3]s') THEN
+    CREATE ROLE "%[3]s" NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = '%[1]s') THEN
-    ALTER ROLE "%[1]s" WITH LOGIN SUPERUSER PASSWORD '%[2]s';
+    ALTER ROLE "%[1]s" WITH LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%[2]s';
   ELSE
-    CREATE ROLE "%[1]s" WITH LOGIN SUPERUSER PASSWORD '%[2]s';
+    CREATE ROLE "%[1]s" WITH LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%[2]s';
   END IF;
 END
-$$;`, user, password))
+$$;
+GRANT "%[3]s" TO "%[1]s";`, user, password, OwnerRole))
+	if err != nil {
+		return err
+	}
+	return p.ownObjects(ctx, s)
 }
 
 // Load streams a SQL dump (plain or .gz) into psql.
@@ -293,6 +303,18 @@ func (p *Server) Remove(ctx context.Context, s domain.Server) error {
 // for the planner, and rows marked visible and frozen so that branches do not
 // rewrite every page they read to set hint bits.
 func (p *Server) UpdateStats(ctx context.Context, s domain.Server) error {
+	// The snapshot this is for carries the objects owned by OwnerRole, so a
+	// branch's login finds them in order at once.
+	if err := p.Exec(ctx, s, `DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'db_branch_owner') THEN
+    CREATE ROLE db_branch_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  END IF;
+END $$;`); err != nil {
+		return err
+	}
+	if err := p.ownObjects(ctx, s); err != nil {
+		return err
+	}
 	name, args := p.tool(s, "vacuumdb", "-h", p.sockDir(s), "-p", fmt.Sprint(s.Port), "-U", Superuser, "--all", "--freeze", "--analyze", "--quiet")
 	_, err := p.Run.Run(ctx, name, args...)
 	return err
