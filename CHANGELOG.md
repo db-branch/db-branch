@@ -4,7 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-## [0.2.6] - 2026-11-18
+## [0.2.7] - 2026-11-18
+
+This is the security fix first tagged v0.2.6. That release run stopped at a test-coverage check before anything was published, and the tag cannot be moved, so the release is 0.2.7. There is no 0.2.6 package.
 
 ### Security
 
