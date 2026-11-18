@@ -15,7 +15,14 @@ import (
 	"github.com/db-branch/db-branch/pkg/ext"
 )
 
-// listenSocket opens the API socket, readable only by root and the db-branch group.
+// AdminGroup may use the agent's socket (with root). The database servers run
+// as ServiceUser, which is not in it: whoever gets a shell as that user (a
+// bug in a database server, say) must not be able to call the agent as its
+// admin.
+const AdminGroup = "db-branch-admin"
+
+// listenSocket opens the API socket, readable only by root and AdminGroup
+// (by root alone when the group does not exist).
 func listenSocket(path string) (net.Listener, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -25,13 +32,21 @@ func listenSocket(path string) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(path, 0o660); err != nil {
+	mode, gid := os.FileMode(0o600), -1
+	if g, err := user.LookupGroup(AdminGroup); err == nil {
+		if n, err := strconv.Atoi(g.Gid); err == nil {
+			mode, gid = 0o660, n
+		}
+	}
+	if gid >= 0 {
+		// Only root may change the group: without it the socket stays root's alone.
+		if err := os.Chown(path, -1, gid); err != nil {
+			mode = 0o600
+		}
+	}
+	if err := os.Chmod(path, mode); err != nil {
 		l.Close()
 		return nil, err
-	}
-	if g, err := user.LookupGroup(ServiceUser); err == nil {
-		gid, _ := strconv.Atoi(g.Gid)
-		_ = os.Chown(path, -1, gid) // best effort: only root may change the group
 	}
 	return l, nil
 }

@@ -154,6 +154,8 @@ type fakeServer struct {
 	sql     map[string][]string
 	// started are the specs the server was started with, in order.
 	started []domain.Server
+	// ranAs are the logins init SQL ran as (never the admin), in order.
+	ranAs []string
 
 	// Upgrader behaviour (see upgrade_test.go).
 	plan       domain.UpgradePlan
@@ -217,6 +219,12 @@ func (f *fakeServer) Exec(_ context.Context, s domain.Server, sql string) error 
 	f.j.add("exec %s", s.ID)
 	f.sql[s.ID] = append(f.sql[s.ID], sql)
 	return f.fail("exec")
+}
+
+// ExecAs records the SQL like Exec and the login it ran as.
+func (f *fakeServer) ExecAs(ctx context.Context, s domain.Server, user, _, sql string) error {
+	f.ranAs = append(f.ranAs, user)
+	return f.Exec(ctx, s, sql)
 }
 
 // CreateUser records the MySQL statement, so tests can read what was made.

@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Security
+
+- **Anyone who could reach the console or API port could run commands as root on a node.** A branch made from a public snapshot needs no login, and the SQL it takes (`init_sql`) ran through `psql` or `mysql` as the agent (root): a client command in it (`\!` in `psql`, `system` in `mysql`) ran on the node. On PostgreSQL, the branch login was a superuser as well, so `COPY ... TO PROGRAM` ran commands as the `db-branch` OS user, which could use the agent's socket and reset the admin password. Fixed:
+  - `init_sql` runs as the branch login, never as the admin. On PostgreSQL the server reads the SQL (no `psql`: only plain SQL and `\connect` are accepted); on MySQL the client runs with `--binary-mode`, which switches its commands off.
+  - A call without a login may not send `init_sql` (`403`).
+  - The PostgreSQL branch login is no longer a superuser: it is a member of a `db_branch_owner` role that owns the objects in the databases, so it can still create, alter and drop them. The MySQL branch login has no `FILE`, `SUPER`, `SHUTDOWN`, `RELOAD`, `PROCESS`, `CREATE USER`, replication or `GRANT OPTION` privilege, and `my.cnf` sets `secure_file_priv=NULL` and `local_infile=OFF`.
+  - Branches that exist already are put right when the agent starts and whenever a branch server starts (so after a reset, a restore or a resume too).
+  - The agent's socket and `/etc/db-branch/config.toml` belong to a new group, `db-branch-admin`, not to `db-branch`, the group the database servers run in. The package adds people who were in `db-branch` to `db-branch-admin`; without that group the socket is root's alone. The database server units cannot see `/run/db-branch` and `/etc/db-branch`.
+  - What changes for you: `init_sql` can no longer use `CREATE USER`, `GRANT`, `COPY ... PROGRAM`, `CREATE EXTENSION` of an extension that is not trusted, or psql commands other than `\connect`; a branch login is no longer allowed to do what a superuser can. Run such work as the admin on a base, before the snapshot.
+
 ## [0.2.5] - 2026-11-15
 
 ### Fixed

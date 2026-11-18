@@ -88,7 +88,7 @@ func TestResumeBranch_サーバーを起動して準備完了に戻す(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"start branch-feature-x"}; !reflect.DeepEqual(e.j.entries, want) {
+	if want := []string{"start branch-feature-x", "exec branch-feature-x"}; !reflect.DeepEqual(e.j.entries, want) {
 		t.Errorf("journal %q", e.j.entries)
 	}
 	if !reflect.DeepEqual(phases, []string{"starting"}) {

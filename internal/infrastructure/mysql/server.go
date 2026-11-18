@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -95,6 +96,9 @@ func (m *Server) config(s domain.Server) (cnf string, notes []string) {
 		"pid-file=" + filepath.Join(m.RunRoot, s.ID, "mysqld.pid"),
 		"log-error=" + m.errLog(s),
 		"skip-name-resolve",
+		// No file import or export through SQL, whatever a login may do.
+		"secure_file_priv=NULL",
+		"local_infile=OFF",
 		fmt.Sprintf("innodb_buffer_pool_size=%dM", s.MemoryMB),
 		// ZFS is copy-on-write: torn pages cannot happen, so doublewrite only costs writes.
 		"innodb_doublewrite=OFF",
@@ -108,6 +112,10 @@ func (m *Server) config(s domain.Server) (cnf string, notes []string) {
 	if seriesAtLeast(series, "8.0") {
 		// The X plugin exists from 8.0; 5.x does not know the option and refuses to start.
 		lines = append(lines, "mysqlx=OFF")
+	}
+	if partialRevokes(s.Runtime.Version) {
+		// Branch logins are kept out of the mysql schema (see CreateUser).
+		lines = append(lines, "partial_revokes=ON")
 	}
 	if s.LegacyAuth && series == "8.4" {
 		// 8.4 ships mysql_native_password disabled; 8.0 has it, 9.0 removed it.
@@ -257,18 +265,72 @@ func (m *Server) Exec(ctx context.Context, s domain.Server, sql string) error {
 	return err
 }
 
+// clientPrivileges is what a branch login may do: read and change the data
+// and the objects in it. Not FILE (read and write files as the server's OS
+// user), SUPER, SHUTDOWN, RELOAD, PROCESS, CREATE USER, the replication
+// privileges, or GRANT OPTION.
+const clientPrivileges = "SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, ALTER, " +
+	"CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, EVENT, TRIGGER"
+
 // CreateUser makes a client account that may connect from anywhere with
-// every privilege. Names are branch names and passwords letters and digits,
-// so neither needs escaping inside the quotes.
+// clientPrivileges, or takes the privileges of an account that has more
+// (branches made before this had every privilege). Names are branch names and
+// passwords letters and digits, so neither needs escaping inside the quotes.
 func (m *Server) CreateUser(ctx context.Context, s domain.Server, user, password string) error {
+	if err := m.createUser(ctx, s, user, password); err != nil {
+		return err
+	}
+	if !partialRevokes(s.Runtime.Version) {
+		return nil
+	}
+	// INSERT on the mysql schema is enough to CREATE USER, and with UPDATE on it a login
+	// could rewrite the grant tables: the login gets nothing in that schema.
+	if err := m.Exec(ctx, s, "SET GLOBAL partial_revokes = ON"); err != nil {
+		return err
+	}
+	return m.Exec(ctx, s, fmt.Sprintf("REVOKE %s ON mysql.* FROM '%s'@'%%'", clientPrivileges, user))
+}
+
+// partialRevokes says whether the runtime can take a privilege away on one
+// schema while it is granted on all (MySQL 8.0.16 and later).
+func partialRevokes(version string) bool {
+	series := domain.MySQLSeries(version)
+	if !seriesAtLeast(series, "8.0") {
+		return false
+	}
+	if series != "8.0" {
+		return true
+	}
+	parts := strings.Split(version, ".")
+	if len(parts) < 3 {
+		return false
+	}
+	patch, err := strconv.Atoi(parts[2])
+	return err == nil && patch >= 16
+}
+
+func (m *Server) createUser(ctx context.Context, s domain.Server, user, password string) error {
 	if !seriesAtLeast(domain.MySQLSeries(s.Runtime.Version), "5.7") {
 		// 5.6: no CREATE USER IF NOT EXISTS (GRANT ... IDENTIFIED BY makes the account), and the
 		// install script left anonymous accounts and root for other hosts without a password.
 		return m.Exec(ctx, s, fmt.Sprintf("DELETE FROM mysql.user WHERE User = '' OR (User = 'root' AND Host <> 'localhost'); FLUSH PRIVILEGES; "+
-			"GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%' IDENTIFIED BY '%s' WITH GRANT OPTION", user, password))
+			"GRANT USAGE ON *.* TO '%[1]s'@'%%' IDENTIFIED BY '%[2]s'; "+
+			"REVOKE ALL PRIVILEGES, GRANT OPTION FROM '%[1]s'@'%%'; "+
+			"GRANT %[3]s ON *.* TO '%[1]s'@'%%'", user, password, clientPrivileges))
 	}
-	return m.Exec(ctx, s, fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%' WITH GRANT OPTION",
-		user, password, user))
+	return m.Exec(ctx, s, fmt.Sprintf("CREATE USER IF NOT EXISTS '%[1]s'@'%%' IDENTIFIED BY '%[2]s'; "+
+		"REVOKE ALL PRIVILEGES, GRANT OPTION FROM '%[1]s'@'%%'; "+
+		"GRANT %[3]s ON *.* TO '%[1]s'@'%%'", user, password, clientPrivileges))
+}
+
+// ExecAs runs sql as the branch login over the local socket. The client runs
+// with --binary-mode, which switches off its own commands (system, \!,
+// source): they would run on the node as the agent. DELIMITER still works.
+// The password goes in the environment, not on the command line.
+func (m *Server) ExecAs(ctx context.Context, s domain.Server, user, password, sql string) error {
+	_, err := m.Run.Run(ctx, "env", "MYSQL_PWD="+password, m.bin(s, "mysql"),
+		"--socket="+m.socket(s), "--binary-mode", "--batch", "-u", user, "-e", sql)
+	return err
 }
 
 // Load streams a SQL dump (plain or .gz) into the mysql client.

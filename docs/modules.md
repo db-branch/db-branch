@@ -16,7 +16,7 @@
 - 監査は全モジュールに届く。失敗しても API は止めず、agent のログに残す
 - 振り分けは最初に見つかった Router だけを使う（ノードあたりプロキシは 1 つ）。`Module.Ports`（`mysql`・`postgres`）が接続先 URL のポートになる
 - ノード間で転送された要求は、最初に受けたノードで認可・監査し、転送先では元の利用者として認可だけを行う（二重に記録しない）
-- ローカルソケット（root と db-branch グループ）からの呼び出しの利用者は `local`
+- ローカルソケット（root と db-branch-admin グループ）からの呼び出しの利用者は `local`
 
 アクション名の一覧は `internal/interface/httpapi/server.go` の `routes`。
 

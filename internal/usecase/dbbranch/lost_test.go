@@ -277,13 +277,14 @@ func TestRecover_共通ユーザーの古いブランチに自分の名前のユ
 		t.Fatal(err)
 	}
 	got, _ := e.store.GetBranch(ctx, name("old"))
-	if got.User != "old" || len(e.server.sql["branch-old"]) != 1 || !strings.Contains(e.server.sql["branch-old"][0], "'old'@'%' IDENTIFIED BY '"+b.Password+"'") {
+	// The own-name login is made, and each login is put right once when the agent starts.
+	if got.User != "old" || len(e.server.sql["branch-old"]) != 2 || !strings.Contains(e.server.sql["branch-old"][0], "'old'@'%' IDENTIFIED BY '"+b.Password+"'") {
 		t.Errorf("branch %+v sql %v", got, e.server.sql)
 	}
 	e.server.sql = map[string][]string{}
 	_ = e.svc.Recover(ctx)
-	if len(e.server.sql["branch-old"]) != 0 {
-		t.Errorf("done once only: %v", e.server.sql)
+	if len(e.server.sql["branch-old"]) != 1 {
+		t.Errorf("the own-name login is made once, the login is put right at every start: %v", e.server.sql)
 	}
 	b.User = dbbranch.BranchUser
 	_ = e.store.PutBranch(ctx, b)

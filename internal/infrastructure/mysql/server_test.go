@@ -181,6 +181,9 @@ func TestInitialize_設定ファイルを書いてデータディレクトリを
 		"innodb_doublewrite=OFF",
 		"innodb_flush_neighbors=0",
 		"mysqlx=OFF",
+		// No file import or export through SQL, whatever a login may do.
+		"secure_file_priv=NULL",
+		"local_infile=OFF",
 	} {
 		if !strings.Contains(cnf, want+"\n") {
 			t.Errorf("my.cnf lacks %q:\n%s", want, cnf)
@@ -508,14 +511,42 @@ func TestInitialize_サービスユーザーが辿れるよう親ディレクト
 	}
 }
 
-func TestCreateUser_どこからでも全権限で入れるユーザーを作る(t *testing.T) {
+func TestCreateUser_どこからでも入れるがサーバーのファイルや管理の権限は持たない(t *testing.T) {
 	f := newFixture(t)
 	if err := f.srv.CreateUser(ctx, f.spec, "feature-x", "pw1"); err != nil {
 		t.Fatal(err)
 	}
-	sql := f.sys.calls[len(f.sys.calls)-1]
-	if !strings.Contains(sql, "CREATE USER IF NOT EXISTS 'feature-x'@'%' IDENTIFIED BY 'pw1'") || !strings.Contains(sql, "GRANT ALL PRIVILEGES ON *.* TO 'feature-x'@'%' WITH GRANT OPTION") {
+	sql := strings.Join(f.sys.calls, "\n")
+	if !strings.Contains(sql, "CREATE USER IF NOT EXISTS 'feature-x'@'%' IDENTIFIED BY 'pw1'") || !strings.Contains(sql, "TO 'feature-x'@'%'") {
 		t.Errorf("sql = %s", sql)
+	}
+	// 8.0.16 and later: nothing in the mysql schema (INSERT there is enough to CREATE USER).
+	if !strings.Contains(sql, "SET GLOBAL partial_revokes = ON") || !strings.Contains(sql, " ON mysql.* FROM 'feature-x'@'%'") {
+		t.Errorf("the login can reach the mysql schema: %s", sql)
+	}
+	// What an older branch had is taken back first, and the grant names no server-level privilege.
+	if !strings.Contains(sql, "REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'feature-x'@'%'") {
+		t.Errorf("an old account keeps its privileges: %s", sql)
+	}
+	grant := sql[strings.Index(sql, "GRANT SELECT"):strings.Index(sql, "SET GLOBAL")]
+	for _, bad := range []string{"ALL PRIVILEGES", "FILE", "SUPER", "SHUTDOWN", "RELOAD", "PROCESS", "CREATE USER", "REPLICATION", "GRANT OPTION"} {
+		if strings.Contains(grant, bad) {
+			t.Errorf("the grant has %s: %s", bad, grant)
+		}
+	}
+}
+
+func TestExecAs_binary_modeでクライアントのコマンドを止め_パスワードは環境変数で渡す(t *testing.T) {
+	f := newFixture(t)
+	if err := f.srv.ExecAs(ctx, f.spec, "feature-x", "pw1", "UPDATE t SET a = 1"); err != nil {
+		t.Fatal(err)
+	}
+	call := f.sys.calls[len(f.sys.calls)-1]
+	if !strings.Contains(call, "--binary-mode") || !strings.Contains(call, "-u feature-x") || strings.Contains(call, "-uroot") {
+		t.Errorf("call = %s", call)
+	}
+	if !strings.HasPrefix(call, "env MYSQL_PWD=pw1 ") || strings.Contains(strings.TrimPrefix(call, "env MYSQL_PWD=pw1 "), "pw1") {
+		t.Errorf("the password is on the command line: %s", call)
 	}
 }
 
@@ -668,7 +699,7 @@ func TestCreateUser_5_7は従来の文で_5_6はGRANTでユーザーを作り匿
 	if strings.Contains(sql, "CREATE USER IF NOT EXISTS") {
 		t.Errorf("5.6 cannot CREATE USER IF NOT EXISTS: %s", sql)
 	}
-	for _, want := range []string{"GRANT ALL PRIVILEGES ON *.* TO 'feature-x'@'%' IDENTIFIED BY 'pw1' WITH GRANT OPTION", "DELETE FROM mysql.user WHERE User = ''", "User = 'root' AND Host <> 'localhost'", "FLUSH PRIVILEGES"} {
+	for _, want := range []string{"GRANT USAGE ON *.* TO 'feature-x'@'%' IDENTIFIED BY 'pw1'", "REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'feature-x'@'%'", "DELETE FROM mysql.user WHERE User = ''", "User = 'root' AND Host <> 'localhost'", "FLUSH PRIVILEGES"} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("5.6 sql lacks %q: %s", want, sql)
 		}

@@ -149,6 +149,7 @@ create ──▶ provisioning ──▶ ready ⇄ (reset) ──▶ deleting ─
 1. リーダーが配置ノードを決定（ベーススナップショットを保持し、空き容量・ブランチ数に余裕があるノード）
 2. 状態 `provisioning` を Raft に記録
 3. 配置ノードの agent が実行
+   - 注意: `--init` の SQL は呼び出し側の入力であり、管理者の SQL ではない。**ブランチのログインとして**実行する（管理者接続では流さない）。PostgreSQL は psql を通さずサーバーが直接読み（受け付けるのは平文の SQL と `\connect` だけ）、MySQL は `mysql --binary-mode`（クライアントのコマンド `system`・`\!`・`source` を無効にする）で流す。ログインなしの呼び出しは `init_sql` を渡せない（403）
    1. `zfs clone tank/bases/prod-masked@<snap> tank/branches/feature-x`
    2. ポートを払い出し、ベースのランタイムで DB サーバーを起動（datadir = クローン）
       - ブランチのポート範囲（既定 40000-40999）は Linux のエフェメラルポート（32768-60999）と重なるので、agent は起動時と範囲の変更時に `net.ipv4.ip_local_reserved_ports` へこの範囲を足す（既存の値は残す）。外向きの接続がブランチのポートを使ってしまい、サーバーが `Address already in use` で起動できなくなるのを防ぐ
@@ -425,7 +426,8 @@ OSS 版のユーザーは `admin` の 1 人だけ。ユーザーの追加はで�
 - **パスワードのリセット**: パスワードを忘れたときは、ノードの root が `sudo db-branch admin reset-password` を実行する。新しいランダムパスワードを表示し、既存のセッションはすべて無効にする
 - **保存**: パスワードは argon2id でハッシュ化して Raft に保存する（どのノードでも同じパスワードでログインできる）
 - **セッション**: Cookie（`HttpOnly`・`Secure`・`SameSite=Strict`）と CSRF トークン。ログインの試行回数には上限を設ける
-- **CLI**: ノード上の CLI は UNIX ソケット経由で agent に接続し、root か `db-branch` グループのメンバーなら操作できる（パスワード不要）
+- **CLI**: ノード上の CLI は UNIX ソケット経由で agent に接続し、root か `db-branch-admin` グループのメンバーなら操作できる（パスワード不要）。DB サーバーは `db-branch` ユーザーで動くので、このグループには入れない。DB サーバーを乗っ取った者が agent の管理者になれないようにするためである（ソケットは `db-branch-admin` がなければ root だけ）。DB サーバーの unit は `/run/db-branch` と `/etc/db-branch` を見られない
+- **ブランチのログインの権限**: クライアントが使うログインは、データとその中のオブジェクトを読み書きできるだけで、サーバーのファイルやプログラムの実行には触れない。PostgreSQL ではスーパーユーザーにしない（`COPY ... TO PROGRAM` で OS のコマンドが走る）。代わりにベースの全オブジェクトを `db_branch_owner` ロールの持ち物にし（ベースのスナップショットを取る前と、ブランチのログインを作るとき）、ログインをそのメンバーにする。MySQL は `FILE`・`SUPER`・`SHUTDOWN`・`RELOAD`・`PROCESS`・`CREATE USER`・レプリケーション・`GRANT OPTION` を与えず、`my.cnf` で `secure_file_priv=NULL`・`local_infile=OFF` にする。以前に作ったブランチは、agent の起動時と DB サーバーの起動のたびに、この権限に直す
 
 ## 12. 拡張モジュール（有償）
 

@@ -17,6 +17,8 @@ ExecStart=/bin/sh -c 'exec "$PG_BIN/postgres" -D "$PG_DATA" -p "$PG_PORT" -c lis
 RuntimeDirectory=db-branch-postgres/%i
 RuntimeDirectoryMode=0750
 LimitNOFILE=65535
+# The agent's socket and configuration are not for the database server.
+InaccessiblePaths=/run/db-branch /etc/db-branch
 # SIGINT is PostgreSQL's fast shutdown: clients are disconnected and a
 # shutdown checkpoint is written, so a snapshot afterwards needs no recovery.
 KillSignal=SIGINT

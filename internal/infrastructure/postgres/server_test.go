@@ -282,7 +282,7 @@ func TestStop_即時停止はシグナルで落とす(t *testing.T) {
 	}
 }
 
-func TestExecとCreateUser_ソケットからスーパーユーザーとして流す(t *testing.T) {
+func TestExecとCreateUser_ソケットからスーパーユーザーとして流し_ログインは持たせない(t *testing.T) {
 	f := newFixture(t)
 	if err := f.srv.Exec(ctx, f.spec, "CREATE TABLE t (id int)"); err != nil {
 		t.Fatal(err)
@@ -294,8 +294,49 @@ func TestExecとCreateUser_ソケットからスーパーユーザーとして�
 		t.Fatal(err)
 	}
 	sql := f.sys.stdin[1]
-	if !strings.Contains(sql, `CREATE ROLE "feature-x" WITH LOGIN SUPERUSER PASSWORD 'pw1'`) || !strings.Contains(sql, `ALTER ROLE "feature-x"`) {
+	// The branch login is no superuser (COPY ... TO PROGRAM would run programs on the node).
+	if !strings.Contains(sql, `CREATE ROLE "feature-x" WITH LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'pw1'`) ||
+		!strings.Contains(sql, `ALTER ROLE "feature-x" WITH LOGIN NOSUPERUSER`) || !strings.Contains(sql, `GRANT "db_branch_owner" TO "feature-x"`) {
 		t.Errorf("sql = %s", sql)
+	}
+	if strings.Contains(strings.ReplaceAll(sql, "NOSUPERUSER", ""), "SUPERUSER") {
+		t.Errorf("a superuser login is made: %s", sql)
+	}
+	// The objects in the databases go to the owner role.
+	if !f.sys.called("-c SELECT datname FROM pg_database") {
+		t.Errorf("databases are not listed: %q", f.sys.calls)
+	}
+}
+
+func TestSplitScript_connect行だけを受け_psqlのコマンドは断る(t *testing.T) {
+	parts, err := postgres.SplitScript("UPDATE a SET b = 1;\n\\c shop\nDELETE FROM c;\n\\connect \"my db\"\nSELECT 1;\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 3 || parts[0].DB != "postgres" || parts[1].DB != "shop" || parts[2].DB != "my db" ||
+		!strings.Contains(parts[0].SQL, "UPDATE a") || !strings.Contains(parts[1].SQL, "DELETE FROM c") || strings.Contains(parts[1].SQL, "connect") {
+		t.Errorf("parts = %+v", parts)
+	}
+	for _, bad := range []string{"\\! id", "  \\! id > /tmp/x", "\\i /etc/passwd", "\\copy t to program 'id'", "\\c shop someone", "\\c", "\\\\"} {
+		if _, err := postgres.SplitScript("SELECT 1;\n" + bad + "\nSELECT 2;"); err == nil {
+			t.Errorf("%q is accepted", bad)
+		}
+	}
+	// A backslash inside a line is for the server to read (and, in plain SQL, to refuse); psql never sees it.
+	if _, err := postgres.SplitScript("SELECT 1 \\! id;"); err != nil {
+		t.Errorf("a backslash after SQL is the server's business: %v", err)
+	}
+}
+
+func TestExecAs_psqlに通さず_コマンドを書いたスクリプトは走らせない(t *testing.T) {
+	f := newFixture(t)
+	if err := f.srv.ExecAs(ctx, f.spec, "feature-x", "pw1", "\\! id > /tmp/x\nSELECT 1;"); err == nil || !strings.Contains(err.Error(), "psql command") {
+		t.Errorf("err = %v", err)
+	}
+	for _, c := range f.sys.calls {
+		if strings.Contains(c, "psql") {
+			t.Errorf("psql ran the caller's text: %q", f.sys.calls)
+		}
 	}
 }
 

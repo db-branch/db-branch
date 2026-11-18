@@ -148,7 +148,8 @@ func TestResetBranch_即時停止してリセット点に戻し起動する(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"stop branch-feature-x immediate", "zfs rollback tank/db-branch/branches/feature-x@reset", "start branch-feature-x"}
+	// The data comes back from the reset point: the login is put right again after the start.
+	want := []string{"stop branch-feature-x immediate", "zfs rollback tank/db-branch/branches/feature-x@reset", "start branch-feature-x", "exec branch-feature-x"}
 	if !reflect.DeepEqual(e.j.entries, want) {
 		t.Errorf("journal %q", e.j.entries)
 	}

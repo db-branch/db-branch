@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -34,7 +35,12 @@ func TestRunAgent_ソケットでAPIを出し止める指示で終わる(t *test
 		time.Sleep(10 * time.Millisecond)
 	}
 	info, _ := os.Stat(c.Socket)
-	if info.Mode().Perm() != 0o660 {
+	// Without the db-branch-admin group (a test machine) the socket is root's alone.
+	if _, err := user.LookupGroup(app.AdminGroup); err != nil {
+		if info.Mode().Perm() != 0o600 {
+			t.Errorf("socket mode = %v, want root only without the %s group", info.Mode().Perm(), app.AdminGroup)
+		}
+	} else if info.Mode().Perm() != 0o660 {
 		t.Errorf("socket mode = %v", info.Mode().Perm())
 	}
 	var caps map[string]any

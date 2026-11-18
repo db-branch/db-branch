@@ -129,6 +129,9 @@ func (s *Server) branchOwner(ctx context.Context, svc Branches, p ext.Principal,
 		}
 		return nil
 	}
+	if strings.TrimSpace(in.InitSQL) != "" {
+		return fmt.Errorf("%w: log in to run SQL after the copy (init_sql); branches made without a login take none", ext.ErrForbidden)
+	}
 	base, err := domain.ParseName(in.Base)
 	if err != nil {
 		return err

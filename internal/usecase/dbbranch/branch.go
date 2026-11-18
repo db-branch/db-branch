@@ -191,7 +191,8 @@ func (s *Service) buildBranch(ctx context.Context, br *domain.Branch, initSQL st
 		return err
 	}
 	if initSQL != "" {
-		if err := srv.Exec(ctx, spec, initSQL); err != nil {
+		// As the branch login, not the admin: the SQL comes from whoever asked for the branch.
+		if err := srv.ExecAs(ctx, spec, br.User, br.Password, initSQL); err != nil {
 			return fmt.Errorf("init sql: %w", err)
 		}
 	}
@@ -291,6 +292,9 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 	if err := srv.Start(ctx, spec); err != nil {
 		return br, s.fail(ctx, br, err)
 	}
+	if err := s.putLoginRight(ctx, br, srv, spec); err != nil {
+		return br, s.fail(ctx, br, err)
+	}
 	now := s.Clock()
 	br.Status, br.ResetAt, br.Error = domain.BranchReady, &now, ""
 	return br, s.Store.PutBranch(ctx, br)
@@ -377,13 +381,16 @@ func (s *Service) Recover(ctx context.Context) error {
 		}
 		switch br.Status {
 		case domain.BranchReady:
-			err := s.ensureRunning(ctx, br)
+			started, err := s.startIfDown(ctx, br)
 			if errors.Is(err, ErrRecordRequired) {
 				// Say why it is down; the next start retries (resumeFailedRestore).
 				err = errors.Join(err, s.markFailed(ctx, br, err))
 			}
 			if err == nil {
 				err = s.ownUser(ctx, br)
+			}
+			if err == nil && !started {
+				err = s.hardenRunning(ctx, br)
 			}
 			errs = append(errs, err)
 		case domain.BranchResetting:
@@ -410,7 +417,9 @@ func (s *Service) Recover(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func (s *Service) ensureRunning(ctx context.Context, br domain.Branch) error {
+// hardenRunning puts the login of a branch right when the agent starts and
+// finds the branch's server running already.
+func (s *Service) hardenRunning(ctx context.Context, br domain.Branch) error {
 	srv, err := s.server(br.Runtime)
 	if err != nil {
 		return err
@@ -419,10 +428,43 @@ func (s *Service) ensureRunning(ctx context.Context, br domain.Branch) error {
 	if err != nil {
 		return err
 	}
+	return s.putLoginRight(ctx, br, srv, spec)
+}
+
+func (s *Service) ensureRunning(ctx context.Context, br domain.Branch) error {
+	_, err := s.startIfDown(ctx, br)
+	return err
+}
+
+// startIfDown starts the branch's server when it is not running (and puts the
+// login right then), and says whether it did.
+func (s *Service) startIfDown(ctx context.Context, br domain.Branch) (started bool, err error) {
+	srv, err := s.server(br.Runtime)
+	if err != nil {
+		return false, err
+	}
+	spec, err := s.branchSpec(ctx, br, s.branchDataset(br.Name), false, false)
+	if err != nil {
+		return false, err
+	}
 	if ok, _ := srv.Running(ctx, spec); ok {
+		return false, nil
+	}
+	if err := srv.Start(ctx, spec); err != nil {
+		return false, err
+	}
+	return true, s.putLoginRight(ctx, br, srv, spec)
+}
+
+// putLoginRight makes the branch's login what clients get now (see
+// DBServer.CreateUser). A branch made before that has the old login in its
+// data, and a reset or a restore brings that data back, so this runs whenever
+// a branch server starts and when the agent starts.
+func (s *Service) putLoginRight(ctx context.Context, br domain.Branch, srv domain.DBServer, spec domain.Server) error {
+	if br.User == "" {
 		return nil
 	}
-	return srv.Start(ctx, spec)
+	return srv.CreateUser(ctx, spec, br.User, br.Password)
 }
 
 // GetBranch returns one branch.
