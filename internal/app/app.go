@@ -178,7 +178,8 @@ func New(cfg config.Config) (*App, error) {
 			domain.MySQL:    mysqlServer,
 			domain.Postgres: postgresServer,
 		},
-		Runtimes: store,
+		Runtimes:  store,
+		Providers: a.providers,
 		// Scheduled refreshes: dumps (unmasked data) live here only while loading.
 		Dumper:    srcdump.Dumper{WorkDir: filepath.Join(cfg.DataDir, "refresh"), Providers: a.providers},
 		AutoPrune: pruneSnapshots.Load,
