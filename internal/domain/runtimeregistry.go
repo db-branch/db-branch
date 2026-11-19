@@ -19,20 +19,6 @@ type ProtocolPort struct {
 	Primary bool
 }
 
-// RuntimeCaps says which optional features an engine supports. A feature
-// that is false is refused up front (ErrFeatureNotSupported), never faked.
-type RuntimeCaps struct {
-	Query           bool
-	Checkpoints     bool
-	LiveFreeze      bool
-	Upgrade         bool
-	SourceDump      bool
-	BranchMerge     bool
-	HistoryRecord   bool
-	UpdateStats     bool
-	InstanceMetrics bool
-}
-
 // EngineSpec declares what one database engine is and needs.
 type EngineSpec struct {
 	// Engine matches enginePattern, e.g. "mysql", "clickhouse".
