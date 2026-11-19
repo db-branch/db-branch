@@ -59,6 +59,9 @@ func TestPrepareStart_envを書き_unitが実行するpostgresのコマンドを
 			t.Errorf("args lack %q: %s", want, args)
 		}
 	}
+	if plan.KillMode != "mixed" || plan.NotifyAccess != "main" {
+		t.Errorf("the unit's KillMode and NotifyAccess = %q, %q", plan.KillMode, plan.NotifyAccess)
+	}
 	if plan.ServiceType != "notify" || plan.KillSignal != "SIGINT" || plan.TimeoutStopSec != 900 {
 		t.Errorf("unit settings = %+v", plan)
 	}

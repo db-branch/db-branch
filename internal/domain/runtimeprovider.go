@@ -147,6 +147,13 @@ type LaunchPlan struct {
 	KillSignal string
 	// TimeoutStopSec is how long a stop may take, in seconds.
 	TimeoutStopSec int
+	// KillMode is systemd's KillMode= (control-group, mixed, process or none);
+	// empty: the unit'"'"'s default. PostgreSQL asks for mixed: SIGINT to the
+	// postmaster, then SIGKILL to what is left.
+	KillMode string
+	// NotifyAccess is systemd's NotifyAccess= (none, main, exec or all) for
+	// ServiceType notify; empty: the unit'"'"'s default.
+	NotifyAccess string
 }
 
 // ErrInvalidLaunchPlan is returned for a LaunchPlan that could not be written
@@ -158,6 +165,8 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var (
 	serviceTypes = map[string]bool{"": true, "simple": true, "exec": true, "notify": true, "forking": true}
 	killSignals  = map[string]bool{"": true, "SIGTERM": true, "SIGINT": true, "SIGQUIT": true, "SIGHUP": true}
+	killModes    = map[string]bool{"": true, "control-group": true, "mixed": true, "process": true, "none": true}
+	notifyAccess = map[string]bool{"": true, "none": true, "main": true, "exec": true, "all": true}
 )
 
 // Validate refuses a plan a provider could use to inject systemd directives
@@ -194,6 +203,12 @@ func (p LaunchPlan) Validate() error {
 	}
 	if !killSignals[p.KillSignal] {
 		return bad("kill signal %q", p.KillSignal)
+	}
+	if !killModes[p.KillMode] {
+		return bad("kill mode %q", p.KillMode)
+	}
+	if !notifyAccess[p.NotifyAccess] {
+		return bad("notify access %q", p.NotifyAccess)
 	}
 	if p.TimeoutStopSec < 0 {
 		return bad("negative stop timeout")

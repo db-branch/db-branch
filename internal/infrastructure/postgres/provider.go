@@ -35,8 +35,8 @@ func NewProvider(srv *Server, extra runtimeprovider.Hooks) *runtimeprovider.Prov
 }
 
 // prepareStart writes the env file and says how the unit launches postgres
-// (what db-branch-postgres@.service runs). The unit also sets KillMode=mixed
-// and NotifyAccess=main, which a LaunchPlan cannot yet express.
+// (what db-branch-postgres@.service runs, with its Type, KillSignal, KillMode
+// and NotifyAccess).
 func (p *Server) prepareStart(_ context.Context, s domain.Server) (domain.LaunchPlan, error) {
 	if p.CheckOwner != nil {
 		if err := p.CheckOwner(s.DataDir); err != nil {
@@ -59,6 +59,8 @@ func (p *Server) prepareStart(_ context.Context, s domain.Server) (domain.Launch
 		ServiceType: "notify",
 		// SIGINT is PostgreSQL's fast shutdown: it writes a shutdown checkpoint.
 		KillSignal:     "SIGINT",
+		KillMode:       "mixed",
+		NotifyAccess:   "main",
 		TimeoutStopSec: 900,
 	}, nil
 }
