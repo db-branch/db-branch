@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -136,3 +137,47 @@ func TestLaunchPlan_systemdディレクティブを注入できる計画を拒�
 		}
 	}
 }
+
+func TestProviderSet_エンジンからプロバイダを引き未登録は偽(t *testing.T) {
+	p := domain.ProviderSet{"mysql": fakeProvider{}}
+	if got, ok := p.Provider("mysql"); !ok || got == nil {
+		t.Errorf("Provider(mysql) = %v, %v", got, ok)
+	}
+	if _, ok := p.Provider("oracle"); ok {
+		t.Error("Provider(oracle) found")
+	}
+	var nilSet domain.ProviderSet
+	if _, ok := nilSet.Provider("mysql"); ok {
+		t.Error("a nil set found a provider")
+	}
+}
+
+func TestQueryResult_JSONは従来のSQL実行結果と同じ形で返す(t *testing.T) {
+	v := "x"
+	n := int64(2)
+	got, _ := json.Marshal(domain.QueryResult{Columns: []string{"a"}, Rows: [][]*string{{&v, nil}}, Truncated: true, Millis: 3})
+	if string(got) != `{"columns":["a"],"rows":[["x",null]],"truncated":true,"millis":3}` {
+		t.Errorf("select = %s", got)
+	}
+	got, _ = json.Marshal(domain.QueryResult{Affected: &n})
+	if string(got) != `{"affected":2,"millis":0}` {
+		t.Errorf("update = %s", got)
+	}
+}
+
+func TestBranch_InstanceはブランチをInstanceSpecへ写す(t *testing.T) {
+	spec := domain.EngineSpec{Engine: "mysql", Protocols: []domain.ProtocolPort{{Name: "mysql", Primary: true}}}
+	n, err := domain.ParseName("feature-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := domain.Branch{Name: n, Runtime: domain.RuntimeRef{Engine: "mysql", Version: "8.4.13"}, Port: 40001}
+
+	got := b.Instance(spec)
+	if got.ID != "branch-feature-x" || got.Runtime != b.Runtime || got.Ports["mysql"] != 40001 || got.PrimaryPort(spec) != 40001 {
+		t.Errorf("Instance = %+v", got)
+	}
+}
+
+// fakeProvider is a RuntimeProvider whose methods are not called.
+type fakeProvider struct{ domain.RuntimeProvider }

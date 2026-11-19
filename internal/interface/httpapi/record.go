@@ -48,11 +48,20 @@ func (s *Server) checkRecord(ctx context.Context, svc Branches, p ext.Principal,
 
 // recordAvailable reports whether a branch can be created with recording:
 // a module that records is loaded and accepts a recorded branch (it is
-// licensed). The console shows its checkbox only then.
+// licensed) of an engine that can be recorded. The console shows its checkbox
+// only then.
 func (s *Server) recordAvailable(ctx context.Context) bool {
 	if s.Ext.ServerOptioner == nil {
 		return false
 	}
-	_, err := s.Ext.ServerOptioner.ServerOptions(ctx, ext.ServerBranch{Name: "probe", Owner: "probe", Engine: string(domain.MySQL), Record: true})
-	return err == nil
+	for _, e := range domain.DefaultRuntimes.Engines() {
+		spec, _ := domain.DefaultRuntimes.Spec(e)
+		if !spec.Capabilities.HistoryRecord {
+			continue
+		}
+		if _, err := s.Ext.ServerOptioner.ServerOptions(ctx, ext.ServerBranch{Name: "probe", Owner: "probe", Engine: string(e), Record: true}); err == nil {
+			return true
+		}
+	}
+	return false
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/infrastructure/runtimeprovider"
 	"github.com/db-branch/db-branch/internal/infrastructure/srcdump"
 )
 
@@ -37,9 +38,21 @@ func job(engine domain.Engine, dbs ...string) domain.SourceDumpJob {
 	}
 }
 
+// providers wires the dump hooks of both engines into runtime providers, as the agent does.
+func providers(r *recorder) domain.ProviderSet {
+	set := domain.ProviderSet{}
+	for e, hook := range map[domain.Engine]func(srcdump.StreamFunc) func(context.Context, domain.SourceDumpJob, string) error{
+		domain.Postgres: srcdump.PostgresDump, domain.MySQL: srcdump.MySQLDump,
+	} {
+		spec, _ := domain.DefaultRuntimes.Spec(e)
+		set[e] = runtimeprovider.New(spec, nil, runtimeprovider.Hooks{DumpSource: hook(r.stream)})
+	}
+	return set
+}
+
 func newDumper(t *testing.T) (srcdump.Dumper, *recorder) {
 	r := &recorder{}
-	return srcdump.Dumper{WorkDir: filepath.Join(t.TempDir(), "work"), Stream: r.stream}, r
+	return srcdump.Dumper{WorkDir: filepath.Join(t.TempDir(), "work"), Providers: providers(r)}, r
 }
 
 func TestDump_PostgreSQLはデータベースごとにpg_dumpして一つの0600ファイルにまとめる(t *testing.T) {
@@ -172,5 +185,60 @@ func TestDump_MySQLの失敗とファイルを作れない作業ディレクト�
 	d.WorkDir = ro
 	if _, err := d.Dump(context.Background(), job(domain.Postgres, "app")); err == nil {
 		t.Error("read-only work dir accepted")
+	}
+}
+
+func TestDump_ダンプを実装していないプロバイダにはErrFeatureNotSupportedで断る(t *testing.T) {
+	d, r := newDumper(t)
+	spec, _ := domain.DefaultRuntimes.Spec(domain.MySQL)
+	d.Providers = domain.ProviderSet{domain.MySQL: runtimeprovider.New(spec, nil, runtimeprovider.Hooks{})}
+
+	if _, err := d.Dump(context.Background(), job(domain.MySQL, "app")); !errors.Is(err, domain.ErrFeatureNotSupported) {
+		t.Errorf("Dump = %v, want ErrFeatureNotSupported", err)
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("a dump tool ran: %+v", r.calls)
+	}
+	if left, _ := os.ReadDir(d.WorkDir); len(left) != 0 {
+		t.Errorf("left behind: %v", left)
+	}
+}
+
+func TestDump_未登録のエンジンはErrUnsupportedEngine(t *testing.T) {
+	d, _ := newDumper(t)
+	if _, err := d.Dump(context.Background(), job(domain.Engine("sqlite"), "app")); !errors.Is(err, domain.ErrUnsupportedEngine) {
+		t.Errorf("Dump = %v, want ErrUnsupportedEngine", err)
+	}
+}
+
+func TestDump_プロバイダが宣言を返せなければ失敗する(t *testing.T) {
+	d, _ := newDumper(t)
+	d.Providers = domain.ProviderSet{domain.MySQL: brokenProvider{}}
+	if _, err := d.Dump(context.Background(), job(domain.MySQL, "app")); err == nil {
+		t.Error("a provider that cannot describe itself was used")
+	}
+}
+
+type brokenProvider struct{ domain.RuntimeProvider }
+
+func (brokenProvider) Describe(context.Context) (domain.EngineSpec, error) {
+	return domain.EngineSpec{}, errors.New("not ready")
+}
+
+func TestPostgresDumpとMySQLDump_指定のファイルに書き込み既存の内容は残さない(t *testing.T) {
+	r := &recorder{}
+	out := filepath.Join(t.TempDir(), "out.sql")
+	if err := os.WriteFile(out, []byte("stale content that is longer than the dump"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := srcdump.MySQLDump(r.stream)(context.Background(), job(domain.MySQL, "app"), out); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(out)
+	if string(b) != "-- dump app\n" {
+		t.Errorf("dump = %q", b)
+	}
+	if err := srcdump.PostgresDump(r.stream)(context.Background(), job(domain.Postgres, "app"), filepath.Join(t.TempDir(), "missing", "out.sql")); err == nil {
+		t.Error("an unwritable target was accepted")
 	}
 }

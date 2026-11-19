@@ -45,7 +45,10 @@ func (s *Server) listRuntimes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) availableRuntimes(w http.ResponseWriter, _ *http.Request) {
-	refs := append(s.Runtimes.Available(domain.MySQL), s.Runtimes.Available(domain.Postgres)...)
+	var refs []domain.RuntimeRef
+	for _, e := range domain.DefaultRuntimes.Engines() {
+		refs = append(refs, s.Runtimes.Available(e)...)
+	}
 	writeJSON(w, http.StatusOK, items(runtimeViews(refs)))
 }
 

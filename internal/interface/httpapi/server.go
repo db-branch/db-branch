@@ -133,8 +133,9 @@ type Server struct {
 	// Tokens manages API tokens; TokenAuth checks them. Optional.
 	Tokens    Tokens
 	TokenAuth ext.Authenticator
-	// Query runs SQL on branches (API and MCP). Optional.
-	Query Querier
+	// Providers are the engines' runtime providers; SQL runs on branches
+	// through them (API and MCP). Optional.
+	Providers domain.RuntimeProviders
 	// TLSCertPEM is served at /tls.pem so clients (MCP) can trust the node.
 	TLSCertPEM []byte
 	// Settings manages cluster-wide settings. Optional.
@@ -464,6 +465,8 @@ func fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "in_use", err.Error())
 	case errors.Is(err, domain.ErrUncleanShutdown):
 		writeError(w, http.StatusConflict, "unclean_shutdown", err.Error())
+	case errors.Is(err, domain.ErrFeatureNotSupported):
+		writeError(w, http.StatusConflict, "feature_not_supported", err.Error())
 	case errors.Is(err, dbbranch.ErrOtherNode):
 		writeError(w, http.StatusConflict, "other_node", err.Error())
 	case errors.Is(err, domain.ErrNoCapacity):

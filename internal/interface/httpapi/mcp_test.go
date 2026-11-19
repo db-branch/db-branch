@@ -12,7 +12,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/db-branch/db-branch/internal/domain"
-	"github.com/db-branch/db-branch/internal/infrastructure/sqlquery"
 	"github.com/db-branch/db-branch/internal/interface/httpapi"
 	"github.com/db-branch/db-branch/pkg/ext"
 )
@@ -54,17 +53,29 @@ func (f *fakeTokens) Revoke(_ context.Context, id string) error {
 	return f.err
 }
 
+// fakeQuery is the runtime provider of mysql that answers every statement with 42.
 type fakeQuery struct {
-	got sqlquery.Target
-	sql string
-	err error
+	domain.RuntimeProvider
+	gotInst  domain.InstanceSpec
+	got      domain.QueryRequest
+	err      error
+	noSQL    bool // the engine declares no query support
+	describe error
 }
 
-func (q *fakeQuery) Run(_ context.Context, t sqlquery.Target, sql string, _ int) (sqlquery.Result, error) {
-	q.got, q.sql = t, sql
-	v := "42"
-	return sqlquery.Result{Columns: []string{"answer"}, Rows: [][]*string{{&v}}}, q.err
+func (q *fakeQuery) Describe(context.Context) (domain.EngineSpec, error) {
+	spec, _ := domain.DefaultRuntimes.Spec(domain.MySQL)
+	spec.Capabilities.Query = !q.noSQL
+	return spec, q.describe
 }
+
+func (q *fakeQuery) Query(_ context.Context, s domain.InstanceSpec, r domain.QueryRequest) (domain.QueryResult, error) {
+	q.gotInst, q.got = s, r
+	v := "42"
+	return domain.QueryResult{Columns: []string{"answer"}, Rows: [][]*string{{&v}}}, q.err
+}
+
+func providersOf(q *fakeQuery) domain.ProviderSet { return domain.ProviderSet{domain.MySQL: q} }
 
 func TestTokens_発行は一度だけ秘密を返し一覧には出さない(t *testing.T) {
 	f := newFixture(t)
@@ -112,10 +123,13 @@ func TestQuery_ブランチ自身のユーザーで実行する(t *testing.T) {
 		t.Errorf("without querier: %d", resp.StatusCode)
 	}
 	q := &fakeQuery{}
-	f.srv.Query = q
+	f.srv.Providers = providersOf(q)
 	resp, body := f.do(t, "POST", "/v1/branches/x/query", map[string]any{"sql": "SELECT 42"})
-	if resp.StatusCode != 200 || body["columns"].([]any)[0] != "answer" || q.got.Host != "192.0.2.10" || q.got.User != "x" || q.got.Engine != "mysql" {
+	if resp.StatusCode != 200 || body["columns"].([]any)[0] != "answer" || q.got.Host != "192.0.2.10" || q.got.User != "x" || q.got.Password != "pw" || q.got.SQL != "SELECT 42" {
 		t.Errorf("%d %v %+v", resp.StatusCode, body, q.got)
+	}
+	if q.gotInst.Runtime != mysql84 || q.gotInst.Ports["mysql"] != 40001 || q.gotInst.ID != "branch-x" {
+		t.Errorf("instance = %+v", q.gotInst)
 	}
 	if resp, _ := f.do(t, "POST", "/v1/branches/busy/query", map[string]any{"sql": "SELECT 1"}); resp.StatusCode != 409 {
 		t.Errorf("not ready: %d", resp.StatusCode)
@@ -189,7 +203,7 @@ func TestMCP_トークンで接続しブランチを作って使える(t *testin
 	httpapi.MCPPoll = time.Millisecond
 	f := newFixture(t)
 	sink := &recordingSink{}
-	f.srv.TokenAuth, f.srv.Query, f.srv.Ext = &fakeTokens{}, &fakeQuery{}, ext.Module{AuditSink: sink}
+	f.srv.TokenAuth, f.srv.Providers, f.srv.Ext = &fakeTokens{}, providersOf(&fakeQuery{}), ext.Module{AuditSink: sink}
 	s, err := mcpSession(t, f, "t-branches")
 	if err != nil {
 		t.Fatal(err)
@@ -340,5 +354,86 @@ func TestTLSCert_証明書を配る(t *testing.T) {
 	f.srv.Handler(false).ServeHTTP(rec, httptest.NewRequest("GET", "/tls.pem", nil))
 	if rec.Code != 200 || !strings.HasPrefix(rec.Body.String(), "-----BEGIN CERTIFICATE") {
 		t.Errorf("%d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestQuery_エンジンがqueryを宣言していなければ409_feature_not_supported(t *testing.T) {
+	f := newFixture(t)
+	f.branches.branches["x"] = domain.Branch{Name: name("x"), Runtime: mysql84, Status: domain.BranchReady, Port: 40001, User: "x", Password: "pw"}
+	q := &fakeQuery{noSQL: true}
+	f.srv.Providers = providersOf(q)
+
+	resp, body := f.do(t, "POST", "/v1/branches/x/query", map[string]any{"sql": "SELECT 1"})
+	if resp.StatusCode != 409 || errCode(body) != "feature_not_supported" {
+		t.Errorf("no query support: %d %v", resp.StatusCode, body)
+	}
+	if q.got.SQL != "" {
+		t.Error("the statement was sent to an engine that declares no query support")
+	}
+	f.srv.Providers = domain.ProviderSet{}
+	if resp, body := f.do(t, "POST", "/v1/branches/x/query", map[string]any{"sql": "SELECT 1"}); resp.StatusCode != 409 || errCode(body) != "feature_not_supported" {
+		t.Errorf("no provider: %d %v", resp.StatusCode, body)
+	}
+	f.srv.Providers = providersOf(&fakeQuery{describe: errors.New("module down")})
+	if resp, _ := f.do(t, "POST", "/v1/branches/x/query", map[string]any{"sql": "SELECT 1"}); resp.StatusCode != 500 {
+		t.Errorf("describe failure: %d", resp.StatusCode)
+	}
+}
+
+// swapRuntimes gives the test its own engine registry (the built-in engines).
+func swapRuntimes(t *testing.T) *domain.RuntimeRegistry {
+	t.Helper()
+	old := domain.DefaultRuntimes
+	domain.DefaultRuntimes = domain.NewBuiltinRuntimes()
+	t.Cleanup(func() { domain.DefaultRuntimes = old })
+	return domain.DefaultRuntimes
+}
+
+func TestRuntimesAvailable_登録されたすべてのエンジンを列挙する(t *testing.T) {
+	reg := swapRuntimes(t)
+	if err := reg.Register(domain.EngineSpec{Engine: "clickhouse"}); err != nil {
+		t.Fatal(err)
+	}
+	f := newFixture(t)
+	_, body := f.do(t, "GET", "/v1/runtimes/available", nil)
+	var engines []string
+	for _, it := range body["items"].([]any) {
+		engines = append(engines, it.(map[string]any)["engine"].(string))
+	}
+	if strings.Join(engines, ",") != "clickhouse,mysql,postgres" {
+		t.Errorf("engines = %v", engines)
+	}
+}
+
+func TestCapabilities_記録の有無は履歴を記録できると宣言したエンジンで確かめる(t *testing.T) {
+	reg := domain.NewRuntimeRegistry()
+	_ = reg.Register(domain.EngineSpec{Engine: "mysql"})
+	_ = reg.Register(domain.EngineSpec{Engine: "journaled", Capabilities: domain.RuntimeCaps{HistoryRecord: true}})
+	old := domain.DefaultRuntimes
+	domain.DefaultRuntimes = reg
+	defer func() { domain.DefaultRuntimes = old }()
+
+	f := newFixture(t)
+	rec := &recorder{}
+	f.srv.Ext = ext.Module{ServerOptioner: rec}
+	if _, body := f.do(t, "GET", "/v1/capabilities", nil); body["record"] != true {
+		t.Errorf("record = %v", body["record"])
+	}
+	if len(rec.seen) != 1 || rec.seen[0].Engine != "journaled" {
+		t.Errorf("probed = %+v, want only the engine that records", rec.seen)
+	}
+
+	domain.DefaultRuntimes = domain.NewRuntimeRegistry()
+	if _, body := f.do(t, "GET", "/v1/capabilities", nil); body["record"] != false {
+		t.Errorf("no engine records: %v", body["record"])
+	}
+}
+
+func TestFail_ErrFeatureNotSupportedは409_feature_not_supported(t *testing.T) {
+	f := newFixture(t)
+	f.branches.fail = domain.FeatureNotSupported("branch_merge")
+	resp, body := f.do(t, "DELETE", "/v1/bases/prod", nil)
+	if resp.StatusCode != 409 || errCode(body) != "feature_not_supported" {
+		t.Errorf("%d %v", resp.StatusCode, body)
 	}
 }

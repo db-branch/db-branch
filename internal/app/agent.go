@@ -21,7 +21,6 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/execx"
 	"github.com/db-branch/db-branch/internal/infrastructure/nodesys"
 	"github.com/db-branch/db-branch/internal/infrastructure/raftstore"
-	"github.com/db-branch/db-branch/internal/infrastructure/sqlquery"
 	"github.com/db-branch/db-branch/internal/infrastructure/sysmetrics"
 	"github.com/db-branch/db-branch/internal/infrastructure/tlscert"
 	"github.com/db-branch/db-branch/internal/infrastructure/zfs"
@@ -286,7 +285,7 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 			return nil
 		}
 	}
-	srv.Query = sqlquery.Runner{}
+	srv.Providers = a.Providers()
 	if svc, err := a.Branches(); err == nil {
 		if st, ok := svc.Store.(domain.TokenStore); ok {
 			tokens := &token.Service{Store: st, Clock: time.Now}

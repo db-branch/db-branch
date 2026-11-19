@@ -26,7 +26,9 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/mysql"
 	"github.com/db-branch/db-branch/internal/infrastructure/osrelease"
 	"github.com/db-branch/db-branch/internal/infrastructure/postgres"
+	"github.com/db-branch/db-branch/internal/infrastructure/runtimeprovider"
 	"github.com/db-branch/db-branch/internal/infrastructure/runtimestore"
+	"github.com/db-branch/db-branch/internal/infrastructure/sqlquery"
 	"github.com/db-branch/db-branch/internal/infrastructure/srcdump"
 	"github.com/db-branch/db-branch/internal/infrastructure/svcids"
 	"github.com/db-branch/db-branch/internal/infrastructure/zfs"
@@ -48,9 +50,10 @@ const PostgresRunRoot = "/run/db-branch-postgres"
 
 // App holds the wired use cases.
 type App struct {
-	Config   config.Config
-	Runtimes runtime.Service
-	branches *dbbranch.Service
+	Config    config.Config
+	Runtimes  runtime.Service
+	branches  *dbbranch.Service
+	providers domain.ProviderSet
 	// modStorage is set when the node runs on a module's storage.
 	modStorage *modstorage.Storage
 }
@@ -136,37 +139,47 @@ func New(cfg config.Config) (*App, error) {
 		a.modStorage = &modstorage.Storage{Module: cfg.Storage}
 		storage = a.modStorage
 	}
+	mysqlServer := &mysql.Server{
+		Run:          run,
+		RuntimeDir:   store.Path,
+		StateRoot:    filepath.Join(cfg.DataDir, "instances"),
+		RunRoot:      MySQLRunRoot,
+		Bind:         cfg.Bind,
+		Chown:        ChownTo(ServiceUser),
+		CheckOwner:   svcids.OwnerCheck(serviceUID),
+		StartTimeout: 2 * time.Minute,
+		PollInterval: 200 * time.Millisecond,
+	}
+	postgresServer := &postgres.Server{
+		Run:          run,
+		RuntimeDir:   store.Path,
+		StateRoot:    filepath.Join(cfg.DataDir, "instances"),
+		RunRoot:      PostgresRunRoot,
+		Bind:         cfg.Bind,
+		User:         ServiceUser,
+		Chown:        ChownTo(ServiceUser),
+		CheckOwner:   svcids.OwnerCheck(serviceUID),
+		StartTimeout: 2 * time.Minute,
+		PollInterval: 200 * time.Millisecond,
+	}
+
+	// Each engine is run through its runtime provider where the core asks for
+	// SQL or a source dump; the servers themselves are shared.
+	queries := sqlquery.Runner{}
+	a.providers = domain.ProviderSet{
+		domain.MySQL:    mysql.NewProvider(mysqlServer, runtimeprovider.Hooks{Query: queries.QueryHook(), DumpSource: srcdump.MySQLDump(run.StreamEnv)}),
+		domain.Postgres: postgres.NewProvider(postgresServer, runtimeprovider.Hooks{Query: queries.QueryHook(), DumpSource: srcdump.PostgresDump(run.StreamEnv)}),
+	}
 	a.branches = &dbbranch.Service{
 		Store:   &filestore.Store{Path: filepath.Join(cfg.DataDir, "state.json")},
 		Storage: storage,
 		Servers: map[domain.Engine]domain.DBServer{
-			domain.MySQL: &mysql.Server{
-				Run:          run,
-				RuntimeDir:   store.Path,
-				StateRoot:    filepath.Join(cfg.DataDir, "instances"),
-				RunRoot:      MySQLRunRoot,
-				Bind:         cfg.Bind,
-				Chown:        ChownTo(ServiceUser),
-				CheckOwner:   svcids.OwnerCheck(serviceUID),
-				StartTimeout: 2 * time.Minute,
-				PollInterval: 200 * time.Millisecond,
-			},
-			domain.Postgres: &postgres.Server{
-				Run:          run,
-				RuntimeDir:   store.Path,
-				StateRoot:    filepath.Join(cfg.DataDir, "instances"),
-				RunRoot:      PostgresRunRoot,
-				Bind:         cfg.Bind,
-				User:         ServiceUser,
-				Chown:        ChownTo(ServiceUser),
-				CheckOwner:   svcids.OwnerCheck(serviceUID),
-				StartTimeout: 2 * time.Minute,
-				PollInterval: 200 * time.Millisecond,
-			},
+			domain.MySQL:    mysqlServer,
+			domain.Postgres: postgresServer,
 		},
 		Runtimes: store,
 		// Scheduled refreshes: dumps (unmasked data) live here only while loading.
-		Dumper:    srcdump.Dumper{WorkDir: filepath.Join(cfg.DataDir, "refresh"), Stream: run.StreamEnv},
+		Dumper:    srcdump.Dumper{WorkDir: filepath.Join(cfg.DataDir, "refresh"), Providers: a.providers},
 		AutoPrune: pruneSnapshots.Load,
 		// Checkpoints rename, promote and label ZFS datasets: only this node's own ZFS.
 		MaxCheckpoints: func() int { return int(maxCheckpoints.Load()) },
@@ -182,6 +195,14 @@ func New(cfg config.Config) (*App, error) {
 		a.branches.Lineage = zfs.New(run)
 	}
 	return a, nil
+}
+
+// Providers returns the engines' runtime providers, or nil on a node that is not initialized.
+func (a *App) Providers() domain.RuntimeProviders {
+	if a.providers == nil {
+		return nil
+	}
+	return a.providers
 }
 
 // Branches returns the base/branch service, or ErrNotInitialized.

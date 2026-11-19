@@ -219,6 +219,9 @@ type CatalogEntry struct {
 
 // QueryRequest is one statement to run on an instance as a login.
 type QueryRequest struct {
+	// Host is the address the instance is reached at (the node it runs on);
+	// empty: this node.
+	Host           string
 	User, Password string
 	SQL            string
 	MaxRows        int
@@ -226,13 +229,13 @@ type QueryRequest struct {
 
 // QueryResult is what a statement returned.
 type QueryResult struct {
-	Columns []string
+	Columns []string `json:"columns,omitempty"`
 	// Rows hold values as text (NULL is nil).
-	Rows      [][]*string
-	Truncated bool
+	Rows      [][]*string `json:"rows,omitempty"`
+	Truncated bool        `json:"truncated,omitempty"`
 	// Affected is set for statements that return no rows.
-	Affected *int64
-	Millis   int64
+	Affected *int64 `json:"affected,omitempty"`
+	Millis   int64  `json:"millis"`
 }
 
 // MetricSample is one instance metric.
@@ -325,4 +328,30 @@ func (UnsupportedFeatures) Load(context.Context, InstanceSpec, string) error {
 }
 func (UnsupportedFeatures) InstanceMetrics(context.Context, InstanceSpec) ([]MetricSample, error) {
 	return nil, FeatureNotSupported("instance_metrics")
+}
+
+// RuntimeProviders finds the provider of an engine.
+type RuntimeProviders interface {
+	Provider(e Engine) (RuntimeProvider, bool)
+}
+
+// ProviderSet is a RuntimeProviders over a map.
+type ProviderSet map[Engine]RuntimeProvider
+
+// Provider returns the provider registered for e.
+func (p ProviderSet) Provider(e Engine) (RuntimeProvider, bool) {
+	rp, ok := p[e]
+	return rp, ok
+}
+
+// Instance is the branch as a provider sees it. Only what a client needs is
+// known here: the port; directories and limits are the provider's own.
+func (b Branch) Instance(spec EngineSpec) InstanceSpec {
+	ports := map[string]int{}
+	for _, p := range spec.Protocols {
+		if p.Primary {
+			ports[p.Name] = b.Port
+		}
+	}
+	return InstanceSpec{ID: "branch-" + b.Name.String(), Runtime: b.Runtime, Ports: ports}
 }
