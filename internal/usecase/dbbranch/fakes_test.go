@@ -68,6 +68,8 @@ type fakeStorage struct {
 	datasets map[string]bool
 	snaps    map[string]bool
 	failOn   string
+	// props are the properties each dataset was created with.
+	props map[string]map[string]string
 }
 
 func (s *fakeStorage) fail(op string) error {
@@ -77,8 +79,12 @@ func (s *fakeStorage) fail(op string) error {
 	return nil
 }
 
-func (s *fakeStorage) Create(_ context.Context, ds string, _ map[string]string) error {
+func (s *fakeStorage) Create(_ context.Context, ds string, props map[string]string) error {
 	s.j.add("zfs create %s", ds)
+	if s.props == nil {
+		s.props = map[string]map[string]string{}
+	}
+	s.props[ds] = props
 	if err := s.fail("create"); err != nil {
 		return err
 	}

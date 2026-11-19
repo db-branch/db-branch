@@ -166,7 +166,7 @@ func (s *Service) normalizeReplicaNodes(ctx context.Context, origin, distro stri
 func (s *Service) buildBase(ctx context.Context, srv domain.DBServer, base *domain.Base, dump string, report Reporter) error {
 	ds := s.baseDataset(base.Name)
 	report.report("creating")
-	if err := s.Storage.Create(ctx, ds, nil); err != nil {
+	if err := s.Storage.Create(ctx, ds, engineProps(base.Runtime)); err != nil {
 		return err
 	}
 	spec, err := s.spec(ctx, baseServerID(base.Name), ds, base.Runtime, base.Port)

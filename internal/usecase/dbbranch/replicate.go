@@ -154,7 +154,15 @@ func (s *Service) receive(ctx context.Context, base domain.Base, ds, from, to st
 		return err
 	}
 	defer stream.Close()
-	return s.Streams.Receive(ctx, ds, stream)
+	if err := s.Streams.Receive(ctx, ds, stream); err != nil {
+		return err
+	}
+	if from == "" && s.Lineage != nil {
+		if props := engineProps(base.Runtime); props != nil {
+			return s.Lineage.SetProps(ctx, ds, props)
+		}
+	}
+	return nil
 }
 
 // pruneReplicas destroys copies of bases that no longer exist, and copies of
