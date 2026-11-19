@@ -191,7 +191,9 @@ func (s *Service) CreateCheckpoint(ctx context.Context, n domain.Name, name stri
 	if !ok {
 		return domain.Checkpoint{}, fmt.Errorf("branch %s: %w: its dataset is missing", n, domain.ErrNotFound)
 	}
-	if err := s.takeCheckpoint(ctx, liveLine, name, false, br.Runtime); err != nil {
+	if err := s.withLiveFreeze(ctx, br, liveLine.Dataset, func() error {
+		return s.takeCheckpoint(ctx, liveLine, name, false, br.Runtime)
+	}); err != nil {
 		return domain.Checkpoint{}, err
 	}
 	if err := s.Lineage.SetProps(ctx, liveLine.Dataset, map[string]string{domain.PropHead: name}); err != nil {

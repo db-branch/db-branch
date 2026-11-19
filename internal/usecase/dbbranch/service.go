@@ -97,6 +97,9 @@ type Service struct {
 	Streams domain.SnapshotStreams
 	Source  domain.SnapshotSource
 
+	// Providers are the engines' runtime providers. Optional: used for the
+	// optional contracts (live checkpoints: PreFreeze/PostFreeze).
+	Providers domain.RuntimeProviders
 	// Dumper dumps source databases for scheduled refreshes. Nil: none.
 	Dumper domain.SourceDumper
 	// AutoPrune says whether a refresh prunes old snapshots afterwards
