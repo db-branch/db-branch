@@ -103,7 +103,7 @@ There is no hosted or cloud version of db-branch.
 ## Documentation
 
 - [docs/README.md](docs/README.md): index of the design and reference documents (written in Japanese)
-- English user documentation: <https://db-branch.com/docs/>
+- English user documentation: <https://db-branch.com/docs/getting-started/>
 - Website: <https://db-branch.com> (English), <https://db-branch.com/ja/> (Japanese)
 - [api/openapi.yaml](api/openapi.yaml): machine-readable REST API definition
 - [CHANGELOG.md](CHANGELOG.md)

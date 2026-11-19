@@ -1,6 +1,6 @@
 # Documentation index
 
-The documents in this directory are written in **Japanese**. English user documentation is at <https://db-branch.com/docs/>. Japanese documentation is at <https://db-branch.com/ja/>.
+The documents in this directory are written in **Japanese**. English user documentation is at <https://db-branch.com/docs/getting-started/>. Japanese documentation is at <https://db-branch.com/ja/>.
 
 | File | What it covers |
 |---|---|
