@@ -178,7 +178,16 @@ func (r *RuntimeRegistry) CheckUpgradePath(from, to RuntimeRef) error {
 // A version becomes part of paths and unit names, so a custom pattern must
 // anchor the whole string (not one alternative of it) and must not let a path
 // separator, whitespace or a dot-dot through.
-var unsafeVersions = []string{"", ".", "..", "1/2", "1 2", "1\n2", "1\t2", "1\r2", "1\x002", "1\\2", "1.2/../x", "1%n", "-x", "$x", "1;2"}
+var unsafeVersions = unsafeProbes()
+
+func unsafeProbes() []string {
+	probes := []string{"", ".", "..", "a..b", "1.2/../x", "-x", "a\x00b"}
+	// each character a path or unit name cannot take, alone and between letters and digits
+	for _, c := range []string{"/", "\\", " ", "\t", "\n", "\r", "%", ";", "$", "\"", "'"} {
+		probes = append(probes, c, "a"+c+"b", "1"+c+"2")
+	}
+	return probes
+}
 
 func compileVersionPattern(pattern string) (*regexp.Regexp, error) {
 	tree, err := syntax.Parse(pattern, syntax.Perl)

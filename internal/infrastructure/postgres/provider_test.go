@@ -146,6 +146,9 @@ func TestVerifyCleanShutdown_制御ファイルがshut_downなら成功(t *testi
 	if err := p.VerifyCleanShutdown(ctx, inst); !errors.Is(err, domain.ErrUncleanShutdown) {
 		t.Errorf("in production = %v, want ErrUncleanShutdown", err)
 	}
+	if err := p.VerifyCleanShutdown(ctx, inst); err == nil || strings.Contains(err.Error(), "<nil>") {
+		t.Errorf("message = %v, want no <nil>", err)
+	}
 	f.sys.state = "shut down"
 	f.sys.failOn = "pg_controldata"
 	if err := p.VerifyCleanShutdown(ctx, inst); !errors.Is(err, domain.ErrUncleanShutdown) {

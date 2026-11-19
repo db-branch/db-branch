@@ -251,7 +251,7 @@ func TestRuntimeRegistry_登録したSpecは呼び出し側の変更から守ら
 }
 
 func TestRuntimeRegistry_VersionPatternの選択肢やパス区切りを許す式を拒否する(t *testing.T) {
-	for _, pat := range []string{`^[0-9]+\.[0-9]+|x$`, `^.+$`, `^[0-9./]+$`, `^\S+$`, `^(1|[^ ]+)$`, `^[0-9]*\.?[0-9]*$`, `^[^/\\ \n.]+$`, `^[0-9a-z%$;-]+$`} {
+	for _, pat := range []string{`^[0-9]+\.[0-9]+|x$`, `^.+$`, `^[0-9./]+$`, `^\S+$`, `^(1|[^ ]+)$`, `^[0-9]*\.?[0-9]*$`, `^[^/\\ \n.]+$`, `^[0-9a-z%$;-]+$`, `^[a-z/]+$`, `^[a-z ]+$`, `^[a-z%]+$`, `^[a-z;]+$`, `^[a-z\t]+$`, `^[a-z\\]+$`} {
 		reg := domain.NewRuntimeRegistry()
 		if err := reg.Register(domain.EngineSpec{Engine: "x", VersionPattern: pat}); !errors.Is(err, domain.ErrInvalidEngineSpec) {
 			t.Errorf("pattern %q: Register = %v, want ErrInvalidEngineSpec", pat, err)
