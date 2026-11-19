@@ -216,12 +216,7 @@ func (p *Server) Stop(ctx context.Context, s domain.Server, mode domain.StopMode
 	result, _ := p.Run.Run(ctx, "systemctl", "show", "--property=Result", "--value", unit(s))
 	name, args := p.tool(s, "pg_controldata", s.DataDir)
 	control, err := p.Run.Run(ctx, name, args...)
-	state := ""
-	for _, line := range strings.Split(string(control), "\n") {
-		if k, v, ok := strings.Cut(line, ":"); ok && strings.TrimSpace(k) == "Database cluster state" {
-			state = strings.TrimSpace(v)
-		}
-	}
+	state := controlState(string(control))
 	if err != nil || strings.TrimSpace(string(result)) != "success" || state != "shut down" {
 		return fmt.Errorf("%w: %s (result=%s, cluster state=%q): %v", domain.ErrUncleanShutdown, s.ID, strings.TrimSpace(string(result)), state, err)
 	}
