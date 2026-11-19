@@ -139,3 +139,23 @@ func (r *RuntimeRegistry) Parse(s string) (RuntimeRef, error) {
 	}
 	return RuntimeRef{Engine: Engine(engine), Version: version}, nil
 }
+
+// DSN is the URL a client uses to reach an instance of the engine.
+func (e EngineSpec) DSN(host string, port int, user, password string) string {
+	if e.FormatDSN != nil {
+		return e.FormatDSN(host, port, user, password)
+	}
+	return formatDSN(e.Engine, host, port, user, password, "/")
+}
+
+// CheckUpgradePath decides whether a branch on from may move to to: the
+// rules every engine shares, then the engine's own (EngineSpec.CheckUpgradePath).
+func (r *RuntimeRegistry) CheckUpgradePath(from, to RuntimeRef) error {
+	if err := checkUpgradeDirection(from, to); err != nil {
+		return err
+	}
+	if spec, ok := r.Spec(to.Engine); ok && spec.CheckUpgradePath != nil {
+		return spec.CheckUpgradePath(from, to)
+	}
+	return nil
+}

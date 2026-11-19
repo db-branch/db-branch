@@ -149,8 +149,11 @@ func parseVersion(s string) version {
 // mysqlLTS are the long-term-support series; an upgrade may not jump over one.
 var mysqlLTS = []version{{5, 7, 0}, {8, 0, 0}, {8, 4, 0}, {9, 7, 0}}
 
-// CheckUpgradePath decides whether a branch on from may move to to.
-func CheckUpgradePath(from, to RuntimeRef) error {
+// CheckUpgradePath decides whether a branch on from may move to to, by the
+// rules of the engines in DefaultRuntimes.
+func CheckUpgradePath(from, to RuntimeRef) error { return DefaultRuntimes.CheckUpgradePath(from, to) }
+
+func checkUpgradeDirection(from, to RuntimeRef) error {
 	if from.Engine != to.Engine {
 		return fmt.Errorf("%w: %s cannot become %s: an upgrade stays within one engine", ErrUpgradeRefused, from, to)
 	}
@@ -160,9 +163,6 @@ func CheckUpgradePath(from, to RuntimeRef) error {
 		return fmt.Errorf("%w: the branch already runs %s", ErrUpgradeRefused, from)
 	case b.less(a):
 		return fmt.Errorf("%w: %s to %s is a downgrade, and downgrades are not supported; restore a checkpoint taken on the older version instead", ErrUpgradeRefused, from, to)
-	}
-	if spec, ok := DefaultRuntimes.Spec(to.Engine); ok && spec.CheckUpgradePath != nil {
-		return spec.CheckUpgradePath(from, to)
 	}
 	return nil
 }

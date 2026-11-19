@@ -321,10 +321,11 @@ func (b Branch) CanRecreate() error {
 // DSN is the connection URL for clients reaching the branch at host. The
 // engine decides its shape (EngineSpec.FormatDSN).
 func (b Branch) DSN(host string) string {
-	if spec, ok := DefaultRuntimes.Spec(b.Runtime.Engine); ok && spec.FormatDSN != nil {
-		return spec.FormatDSN(host, b.Port, b.User, b.Password)
+	spec, ok := DefaultRuntimes.Spec(b.Runtime.Engine)
+	if !ok {
+		spec = EngineSpec{Engine: b.Runtime.Engine}
 	}
-	return formatDSN(b.Runtime.Engine, host, b.Port, b.User, b.Password, "/")
+	return spec.DSN(host, b.Port, b.User, b.Password)
 }
 
 // Store persists bases and branches. Single node: a local file; cluster: Raft.

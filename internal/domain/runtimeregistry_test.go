@@ -162,3 +162,30 @@ func TestCheckUpgradePath_検証を宣言しないエンジンは新しい版へ
 		t.Errorf("CheckUpgradePath = %v", err)
 	}
 }
+
+func TestEngineSpec_DSNは宣言したFormatDSNかなければ標準の形で組み立てる(t *testing.T) {
+	plain := domain.EngineSpec{Engine: "x"}
+	if got := plain.DSN("::1", 5, "u", "p"); got != "x://u:p@[::1]:5/" {
+		t.Errorf("DSN = %q", got)
+	}
+	custom := domain.EngineSpec{Engine: "x", FormatDSN: func(host string, port int, user, password string) string { return "custom" }}
+	if got := custom.DSN("h", 1, "u", "p"); got != "custom" {
+		t.Errorf("DSN = %q", got)
+	}
+}
+
+func TestRuntimeRegistry_CheckUpgradePathは自分のレジストリの宣言で判定する(t *testing.T) {
+	reg := domain.NewRuntimeRegistry()
+	veto := errors.New("veto")
+	if err := reg.Register(domain.EngineSpec{Engine: "x", CheckUpgradePath: func(from, to domain.RuntimeRef) error { return veto }}); err != nil {
+		t.Fatal(err)
+	}
+	from, to := domain.RuntimeRef{Engine: "x", Version: "1.0"}, domain.RuntimeRef{Engine: "x", Version: "1.1"}
+	if err := reg.CheckUpgradePath(from, to); !errors.Is(err, veto) {
+		t.Errorf("CheckUpgradePath = %v, want the engine's verdict", err)
+	}
+	// the same refs are unknown to the default registry, which has no verdict on them
+	if err := domain.CheckUpgradePath(from, to); err != nil {
+		t.Errorf("default registry = %v", err)
+	}
+}
