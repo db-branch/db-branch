@@ -5,7 +5,7 @@ db-branch is a Beta project maintained by one person. **No support is promised**
 Where to look first:
 
 1. The [README](README.md) and the [documents in docs/](docs/README.md) (written in Japanese).
-2. English user documentation: <https://db-branch.com/docs/>
+2. English user documentation: <https://db-branch.com/docs/getting-started/>
 3. The live console demo: <https://demo.db-branch.com/>
 4. Existing [Issues](https://github.com/db-branch/db-branch/issues), which may already answer your question.
 
