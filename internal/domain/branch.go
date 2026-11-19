@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"net/url"
-	"strconv"
 	"time"
 )
 
@@ -321,18 +318,13 @@ func (b Branch) CanRecreate() error {
 	return nil
 }
 
-// DSN is the connection URL for clients reaching the branch at host.
+// DSN is the connection URL for clients reaching the branch at host. The
+// engine decides its shape (EngineSpec.FormatDSN).
 func (b Branch) DSN(host string) string {
-	u := url.URL{
-		Scheme: string(b.Runtime.Engine),
-		User:   url.UserPassword(b.User, b.Password),
-		Host:   net.JoinHostPort(host, strconv.Itoa(b.Port)),
-		Path:   "/",
+	if spec, ok := DefaultRuntimes.Spec(b.Runtime.Engine); ok && spec.FormatDSN != nil {
+		return spec.FormatDSN(host, b.Port, b.User, b.Password)
 	}
-	if b.Runtime.Engine == Postgres {
-		u.Path = "/postgres"
-	}
-	return u.String()
+	return formatDSN(b.Runtime.Engine, host, b.Port, b.User, b.Password, "/")
 }
 
 // Store persists bases and branches. Single node: a local file; cluster: Raft.

@@ -161,10 +161,10 @@ func CheckUpgradePath(from, to RuntimeRef) error {
 	case b.less(a):
 		return fmt.Errorf("%w: %s to %s is a downgrade, and downgrades are not supported; restore a checkpoint taken on the older version instead", ErrUpgradeRefused, from, to)
 	}
-	if to.Engine == Postgres {
-		return checkPostgresPath(from, to, a, b)
+	if spec, ok := DefaultRuntimes.Spec(to.Engine); ok && spec.CheckUpgradePath != nil {
+		return spec.CheckUpgradePath(from, to)
 	}
-	return checkMySQLPath(from, to, a, b)
+	return nil
 }
 
 func pgMajor(v version) version {
@@ -174,14 +174,16 @@ func pgMajor(v version) version {
 	return version{v.major, v.minor, 0}
 }
 
-func checkPostgresPath(from, to RuntimeRef, a, b version) error {
+func checkPostgresPath(from, to RuntimeRef) error {
+	a, b := parseVersion(from.Version), parseVersion(to.Version)
 	if pgMajor(a) != pgMajor(b) {
 		return fmt.Errorf("%w: PostgreSQL major version upgrades (%s to %s, pg_upgrade) are not supported yet; minor upgrades within one major version, such as 17.2 to 17.5, are", ErrUpgradeRefused, from, to)
 	}
 	return nil
 }
 
-func checkMySQLPath(from, to RuntimeRef, a, b version) error {
+func checkMySQLPath(from, to RuntimeRef) error {
+	a, b := parseVersion(from.Version), parseVersion(to.Version)
 	if a.major < 5 || (a.major == 5 && a.minor < 6) {
 		return fmt.Errorf("%w: %s is too old; upgrades start from MySQL 5.6", ErrUpgradeRefused, from)
 	}

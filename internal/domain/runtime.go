@@ -3,7 +3,6 @@ package domain
 import (
 	"context"
 	"errors"
-	"fmt"
 	"regexp"
 	"strings"
 )
@@ -28,15 +27,8 @@ type RuntimeRef struct {
 // major.minor[.patch] with an optional suffix such as "-custom".
 var versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-z0-9]+(\.[a-z0-9]+)*)?$`)
 
-// ParseRuntimeRef parses "engine@version".
-func ParseRuntimeRef(s string) (RuntimeRef, error) {
-	engine, version, ok := strings.Cut(s, "@")
-	e := Engine(engine)
-	if !ok || (e != MySQL && e != Postgres) || !versionPattern.MatchString(version) {
-		return RuntimeRef{}, fmt.Errorf("%w %q: want engine@version, e.g. mysql@8.4.13 or postgres@17.2", ErrInvalidRuntime, s)
-	}
-	return RuntimeRef{Engine: e, Version: version}, nil
-}
+// ParseRuntimeRef parses "engine@version" for an engine of DefaultRuntimes.
+func ParseRuntimeRef(s string) (RuntimeRef, error) { return DefaultRuntimes.Parse(s) }
 
 func (r RuntimeRef) String() string { return string(r.Engine) + "@" + r.Version }
 
