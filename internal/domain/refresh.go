@@ -58,7 +58,7 @@ func (r BaseRefresh) Validate(engine Engine) error {
 	bad := func(format string, args ...any) error {
 		return fmt.Errorf("%w: %s", ErrInvalidRefresh, fmt.Sprintf(format, args...))
 	}
-	if engine != Postgres && engine != MySQL {
+	if spec, ok := DefaultRuntimes.Spec(engine); !ok || !spec.Capabilities.SourceDump {
 		return bad("engine %q cannot be refreshed", engine)
 	}
 	if r.Every < MinRefreshEvery {

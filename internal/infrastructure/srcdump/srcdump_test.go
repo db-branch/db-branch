@@ -242,3 +242,10 @@ func TestPostgresDumpとMySQLDump_指定のファイルに書き込み既存の�
 		t.Error("an unwritable target was accepted")
 	}
 }
+
+func TestDump_プロバイダが未設定でもpanicせずErrUnsupportedEngine(t *testing.T) {
+	d := srcdump.Dumper{WorkDir: filepath.Join(t.TempDir(), "work")}
+	if _, err := d.Dump(context.Background(), job(domain.MySQL, "app")); !errors.Is(err, domain.ErrUnsupportedEngine) {
+		t.Errorf("Dump = %v, want ErrUnsupportedEngine", err)
+	}
+}

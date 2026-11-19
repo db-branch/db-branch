@@ -437,3 +437,33 @@ func TestFail_ErrFeatureNotSupportedは409_feature_not_supported(t *testing.T) {
 		t.Errorf("%d %v", resp.StatusCode, body)
 	}
 }
+
+func TestCapabilities_記録できるエンジンが複数あれば受け付けたものがあれば真(t *testing.T) {
+	reg := domain.NewRuntimeRegistry()
+	caps := domain.RuntimeCaps{HistoryRecord: true}
+	_ = reg.Register(domain.EngineSpec{Engine: "aaa", Capabilities: caps})
+	_ = reg.Register(domain.EngineSpec{Engine: "bbb", Capabilities: caps})
+	old := domain.DefaultRuntimes
+	domain.DefaultRuntimes = reg
+	defer func() { domain.DefaultRuntimes = old }()
+
+	f := newFixture(t)
+	f.srv.Ext = ext.Module{ServerOptioner: &pickyOptioner{accepts: "bbb"}}
+	if _, body := f.do(t, "GET", "/v1/capabilities", nil); body["record"] != true {
+		t.Errorf("the second engine records: %v", body["record"])
+	}
+	f.srv.Ext = ext.Module{ServerOptioner: &pickyOptioner{accepts: "none"}}
+	if _, body := f.do(t, "GET", "/v1/capabilities", nil); body["record"] != false {
+		t.Errorf("no engine is accepted: %v", body["record"])
+	}
+}
+
+// pickyOptioner accepts a recorded branch of one engine only.
+type pickyOptioner struct{ accepts string }
+
+func (p *pickyOptioner) ServerOptions(_ context.Context, b ext.ServerBranch) (ext.ServerOptions, error) {
+	if b.Engine != p.accepts {
+		return ext.ServerOptions{}, errors.New("cannot record " + b.Engine)
+	}
+	return ext.ServerOptions{}, nil
+}

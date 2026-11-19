@@ -167,11 +167,12 @@ func checkUpgradeDirection(from, to RuntimeRef) error {
 }
 
 // compareVersions orders two versions of one engine: -1 if a is older, 0 if
-// they are the same, 1 if a is newer. Versions that start with a number
-// ("8.4.13", "17.2-custom") compare by that number (a suffix does not count);
-// others ("v10", "2026a") compare naturally: runs of digits by value.
+// they are the same, 1 if a is newer. Versions of the form major.minor.patch
+// ("8.4.13", "17.2-custom": a suffix after "-" does not count) compare by those
+// numbers; all others ("v10", "2026a", "25.3.1.2703") compare naturally: runs of
+// digits by value.
 func compareVersions(a, b string) int {
-	if startsWithDigit(a) && startsWithDigit(b) {
+	if isPlainVersion(a) && isPlainVersion(b) {
 		pa, pb := parseVersion(a), parseVersion(b)
 		switch {
 		case pa == pb:
@@ -184,7 +185,20 @@ func compareVersions(a, b string) int {
 	return naturalCompare(a, b)
 }
 
-func startsWithDigit(s string) bool { return s != "" && isDigitByte(s[0]) }
+// isPlainVersion: one to three numbers separated by dots, then maybe "-suffix".
+func isPlainVersion(s string) bool {
+	s, _, _ = strings.Cut(s, "-")
+	parts := strings.Split(s, ".")
+	if len(parts) > 3 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" || strings.TrimLeft(p, "0123456789") != "" {
+			return false
+		}
+	}
+	return true
+}
 
 // naturalCompare compares strings with runs of digits taken by value.
 func naturalCompare(a, b string) int {

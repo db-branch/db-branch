@@ -67,7 +67,11 @@ func (p *Provider) Catalog(context.Context) ([]domain.CatalogEntry, error) { ret
 
 // FormatDSN is the client URL for the instance at host.
 func (p *Provider) FormatDSN(_ context.Context, s domain.InstanceSpec, host, user, password string) (string, error) {
-	return p.spec.DSN(host, s.PrimaryPort(p.spec), user, password), nil
+	srv, err := p.srv(s)
+	if err != nil {
+		return "", err
+	}
+	return p.spec.DSN(host, srv.Port, user, password), nil
 }
 
 // ErrNoPrimaryPort is returned when an instance has no port for the engine's
@@ -76,8 +80,10 @@ var ErrNoPrimaryPort = errors.New("instance has no port for the primary protocol
 
 // srv is the instance as the DBServer sees it, refused when it has no port.
 func (p *Provider) srv(s domain.InstanceSpec) (domain.Server, error) {
-	if len(p.spec.Protocols) > 0 && s.PrimaryPort(p.spec) == 0 {
-		return domain.Server{}, fmt.Errorf("%w: %s", ErrNoPrimaryPort, s.ID)
+	if len(p.spec.Protocols) > 0 {
+		if port := s.PrimaryPort(p.spec); port < 1 || port > 65535 {
+			return domain.Server{}, fmt.Errorf("%w: %s (port %d)", ErrNoPrimaryPort, s.ID, port)
+		}
 	}
 	return s.Server(p.spec), nil
 }
@@ -230,6 +236,9 @@ func (p *Provider) UpdateStats(ctx context.Context, s domain.InstanceSpec) error
 
 // CheckUpgradePath judges a move between two versions of the engine.
 func (p *Provider) CheckUpgradePath(_ context.Context, fromVersion, toVersion string) error {
+	if _, ok := p.server.(domain.Upgrader); !ok {
+		return domain.FeatureNotSupported("upgrade")
+	}
 	e := string(p.spec.Engine)
 	from, err := p.registry.Parse(e + "@" + fromVersion)
 	if err != nil {

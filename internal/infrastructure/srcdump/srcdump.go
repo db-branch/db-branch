@@ -33,7 +33,11 @@ var _ domain.SourceDumper = Dumper{}
 
 // Dump writes the source databases into one new SQL script and returns its path.
 func (d Dumper) Dump(ctx context.Context, job domain.SourceDumpJob) (string, error) {
-	p, ok := d.Providers.Provider(job.Tools.Engine)
+	var p domain.RuntimeProvider
+	ok := false
+	if d.Providers != nil {
+		p, ok = d.Providers.Provider(job.Tools.Engine)
+	}
 	if !ok {
 		return "", fmt.Errorf("%w: %s", domain.ErrUnsupportedEngine, job.Tools.Engine)
 	}

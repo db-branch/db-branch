@@ -306,3 +306,45 @@ func TestRuntimeRegistry_CheckUpgradePath_数字で始まらない版は文字�
 		}
 	}
 }
+
+func TestRuntimeRegistry_CheckUpgradePath_段数が多い版や末尾が英字の版も順序づける(t *testing.T) {
+	reg := domain.NewRuntimeRegistry()
+	if err := reg.Register(domain.EngineSpec{Engine: "ch", VersionPattern: `^v?[0-9]+(\.[0-9]+)*[a-z]*$`}); err != nil {
+		t.Fatal(err)
+	}
+	ref := func(v string) domain.RuntimeRef { return domain.RuntimeRef{Engine: "ch", Version: v} }
+	cases := []struct {
+		from, to string
+		want     string // "" = allowed
+	}{
+		{"25.3.1.2703", "25.3.2.100", ""},
+		{"25.3.2.100", "25.3.1.2703", "downgrade"},
+		{"25.3.1", "25.3.2.100", ""},
+		{"25.3.2.100", "25.3.1", "downgrade"},
+		{"25.3.1.2703", "25.3.1.2703", "already runs"},
+		{"25.3.1.9", "25.3.1.10", ""},
+		{"2026a", "2027a", ""},
+		{"2027a", "2026a", "downgrade"},
+		{"v1", "v1a", ""},
+		{"v1a", "v1", "downgrade"},
+		{"v1a", "v1b", ""},
+		{"v1b", "v1a", "downgrade"},
+		{"v007", "v7", "already runs"},
+	}
+	for _, c := range cases {
+		err := reg.CheckUpgradePath(ref(c.from), ref(c.to))
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s -> %s: %v", c.from, c.to, err)
+		case c.want != "" && (!errors.Is(err, domain.ErrUpgradeRefused) || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s -> %s: err = %v, want %q", c.from, c.to, err, c.want)
+		}
+	}
+}
+
+func TestCheckUpgradePath_組み込みエンジンの版の接尾辞は従来どおり数に含めない(t *testing.T) {
+	err := domain.CheckUpgradePath(rt("mysql@8.4.13"), rt("mysql@8.4.13-custom"))
+	if !errors.Is(err, domain.ErrUpgradeRefused) || !strings.Contains(err.Error(), "already runs") {
+		t.Errorf("err = %v", err)
+	}
+}

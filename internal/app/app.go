@@ -113,11 +113,12 @@ func New(cfg config.Config) (*App, error) {
 	// system libraries then fail to install with an error saying so.
 	distro, _ := osrelease.Distro(osrelease.Path)
 	run := execx.Runner{}
+	mysqlFixup := mysql.Fixup(mysql.SystemLibDirs(goruntime.GOARCH), mysql.NeededLibs)
 	store := runtimestore.Store{
 		Dir: filepath.Join(cfg.DataDir, "runtimes"),
 		Run: run,
 		Fixups: map[domain.Engine]func(string) error{
-			domain.MySQL:    mysql.Fixup(mysql.SystemLibDirs(goruntime.GOARCH), mysql.NeededLibs),
+			domain.MySQL:    mysqlFixup,
 			domain.Postgres: postgres.Fixup,
 		},
 	}
@@ -167,7 +168,7 @@ func New(cfg config.Config) (*App, error) {
 	// SQL or a source dump; the servers themselves are shared.
 	queries := sqlquery.Runner{}
 	a.providers = domain.ProviderSet{
-		domain.MySQL:    mysql.NewProvider(mysqlServer, runtimeprovider.Hooks{Query: queries.QueryHook(), DumpSource: srcdump.MySQLDump(run.StreamEnv)}),
+		domain.MySQL:    mysql.NewProvider(mysqlServer, runtimeprovider.Hooks{PrepareRuntime: mysqlFixup, Query: queries.QueryHook(), DumpSource: srcdump.MySQLDump(run.StreamEnv)}),
 		domain.Postgres: postgres.NewProvider(postgresServer, runtimeprovider.Hooks{Query: queries.QueryHook(), DumpSource: srcdump.PostgresDump(run.StreamEnv)}),
 	}
 	a.branches = &dbbranch.Service{
