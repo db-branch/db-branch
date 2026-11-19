@@ -121,12 +121,12 @@ func TestQuiesce_クリーン停止の前にInnoDBを完全にフラッシュさ
 func TestQuiesce_即時停止と停止済みでは何もしない(t *testing.T) {
 	f, p, inst := providerFixture(t)
 	f.sys.active = true
-	if err := p.Quiesce(ctx, inst, domain.StopImmediate); err != nil || len(f.sys.calls) > 1 {
+	if err := p.Quiesce(ctx, inst, domain.StopImmediate); err != nil || len(f.sys.calls) != 0 {
 		t.Errorf("immediate: %v %q", err, f.sys.calls)
 	}
 	f.sys.calls, f.sys.active = nil, false
-	if err := p.Quiesce(ctx, inst, domain.StopClean); err != nil || f.sys.called("mysql") {
-		t.Errorf("not running: %v %q", err, f.sys.calls)
+	if err := p.Quiesce(ctx, inst, domain.StopClean); err != nil || len(f.sys.calls) != 1 || !f.sys.called("systemctl is-active") {
+		t.Errorf("not running: want only the state check, got %v %q", err, f.sys.calls)
 	}
 }
 
@@ -173,17 +173,34 @@ func TestTailLog_エラーログの末尾の行を返す(t *testing.T) {
 	}
 }
 
-func TestCheckUpgradePath_既存のMySQL規則と同じ結果を返す(t *testing.T) {
+func TestCheckUpgradePath_MySQLのLTS規則で判定する(t *testing.T) {
 	_, p, _ := providerFixture(t)
-	for _, c := range []struct{ from, to string }{
-		{"8.0.40", "8.4.3"}, {"5.7.44", "8.4.3"}, {"8.4.3", "8.0.40"}, {"8.4.3", "8.4.3"}, {"8.4.3", "9.7.0"},
+	for _, c := range []struct {
+		from, to string
+		ok       bool
+	}{
+		{"8.0.40", "8.4.3", true}, {"8.4.3", "8.4.9", true}, {"5.7.44", "8.0.40", true},
+		{"5.7.44", "8.4.3", false}, // skips 8.0
+		{"8.4.3", "9.7.0", true}, {"8.0.40", "9.7.0", false},
+		{"8.4.3", "8.0.40", false}, {"8.4.3", "8.4.3", false}, {"5.5.1", "5.7.44", false},
 	} {
-		want := domain.CheckUpgradePath(domain.RuntimeRef{Engine: domain.MySQL, Version: c.from}, domain.RuntimeRef{Engine: domain.MySQL, Version: c.to})
-		got := p.CheckUpgradePath(ctx, c.from, c.to)
-		if (got == nil) != (want == nil) || (got != nil && got.Error() != want.Error()) {
-			t.Errorf("%s -> %s: provider %v, domain %v", c.from, c.to, got, want)
+		err := p.CheckUpgradePath(ctx, c.from, c.to)
+		if (err == nil) != c.ok || (err != nil && !errors.Is(err, domain.ErrUpgradeRefused)) {
+			t.Errorf("%s -> %s: %v, want ok=%v", c.from, c.to, err, c.ok)
 		}
 	}
+}
+
+func TestNewProvider_MySQLが登録されていなければ起動時に気づけるようpanicする(t *testing.T) {
+	old := domain.DefaultRuntimes
+	domain.DefaultRuntimes = domain.NewRuntimeRegistry()
+	defer func() { domain.DefaultRuntimes = old }()
+	defer func() {
+		if recover() == nil {
+			t.Error("NewProvider accepted a registry without mysql")
+		}
+	}()
+	mysql.NewProvider(newFixture(t).srv, runtimeprovider.Hooks{})
 }
 
 func TestPrepareStart_設定を書けなければ失敗を返す(t *testing.T) {

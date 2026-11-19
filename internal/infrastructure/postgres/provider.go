@@ -14,7 +14,10 @@ import (
 // PrepareRuntime, Query and DumpSource are used (see mysql.NewProvider); the
 // PostgreSQL runtime fixup is the default PrepareRuntime.
 func NewProvider(srv *Server, extra runtimeprovider.Hooks) *runtimeprovider.Provider {
-	spec, _ := domain.DefaultRuntimes.Spec(domain.Postgres)
+	spec, ok := domain.DefaultRuntimes.Spec(domain.Postgres)
+	if !ok {
+		panic("postgres is not registered in domain.DefaultRuntimes")
+	}
 	prepare := extra.PrepareRuntime
 	if prepare == nil {
 		prepare = Fixup
@@ -92,6 +95,9 @@ func controlState(control string) string {
 }
 
 func (p *Server) tailLines(ctx context.Context, s domain.Server, n int) (string, error) {
+	if n <= 0 {
+		return "", nil
+	}
 	out, _ := p.Run.Run(ctx, "journalctl", "-u", unit(s), "-n", fmt.Sprint(n), "--no-pager", "-o", "cat")
 	return strings.TrimSpace(string(out)), nil
 }

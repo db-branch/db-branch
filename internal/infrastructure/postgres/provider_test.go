@@ -164,15 +164,45 @@ func TestTailLog_unitのジャーナルの末尾を返す(t *testing.T) {
 	}
 }
 
-func TestCheckUpgradePath_既存のPostgreSQL規則と同じ結果を返す(t *testing.T) {
+func TestCheckUpgradePath_PostgreSQLは同じメジャーの中だけ許す(t *testing.T) {
 	_, p, _ := providerFixture(t)
-	for _, c := range []struct{ from, to string }{{"17.2", "17.5"}, {"17.2", "18.1"}, {"17.5", "17.2"}, {"17.2", "17.2"}, {"9.6.1", "9.6.5"}} {
-		want := domain.CheckUpgradePath(domain.RuntimeRef{Engine: domain.Postgres, Version: c.from}, domain.RuntimeRef{Engine: domain.Postgres, Version: c.to})
-		got := p.CheckUpgradePath(ctx, c.from, c.to)
-		if (got == nil) != (want == nil) || (got != nil && got.Error() != want.Error()) {
-			t.Errorf("%s -> %s: provider %v, domain %v", c.from, c.to, got, want)
+	for _, c := range []struct {
+		from, to string
+		ok       bool
+	}{
+		{"17.2", "17.5", true}, {"9.6.1", "9.6.5", true},
+		{"17.2", "18.1", false}, {"9.5.1", "9.6.1", false},
+		{"17.5", "17.2", false}, {"17.2", "17.2", false},
+	} {
+		err := p.CheckUpgradePath(ctx, c.from, c.to)
+		if (err == nil) != c.ok || (err != nil && !errors.Is(err, domain.ErrUpgradeRefused)) {
+			t.Errorf("%s -> %s: %v, want ok=%v", c.from, c.to, err, c.ok)
 		}
 	}
+}
+
+func TestTailLog_行数が正でなければ外部コマンドを呼ばない(t *testing.T) {
+	f, p, inst := providerFixture(t)
+	for _, n := range []int{0, -5} {
+		if got, err := p.TailLog(ctx, inst, n); err != nil || got != "" {
+			t.Errorf("TailLog(%d) = %q, %v", n, got, err)
+		}
+	}
+	if len(f.sys.calls) != 0 {
+		t.Errorf("calls = %q", f.sys.calls)
+	}
+}
+
+func TestNewProvider_PostgreSQLが登録されていなければ起動時に気づけるようpanicする(t *testing.T) {
+	old := domain.DefaultRuntimes
+	domain.DefaultRuntimes = domain.NewRuntimeRegistry()
+	defer func() { domain.DefaultRuntimes = old }()
+	defer func() {
+		if recover() == nil {
+			t.Error("NewProvider accepted a registry without postgres")
+		}
+	}()
+	postgres.NewProvider(newFixture(t).srv, runtimeprovider.Hooks{})
 }
 
 func TestNewProvider_全フックを配線するとレジストリの宣言と一致する(t *testing.T) {

@@ -303,14 +303,13 @@ func TestCheckUpgradePath_バージョン文字列をエンジンの規則で判
 }
 
 func TestProviderはRuntimeProviderの契約を満たす(t *testing.T) {
-	var _ domain.RuntimeProvider = runtimeprovider.New(testSpec(), &fakeServer{}, runtimeprovider.Hooks{})
 	p := runtimeprovider.New(testSpec(), &fakeServer{}, runtimeprovider.Hooks{})
 	if _, err := p.PreFreeze(ctx, testInstance()); !errors.Is(err, domain.ErrFeatureNotSupported) {
 		t.Errorf("PreFreeze = %v", err)
 	}
 }
 
-func TestStartUpgraded_起動の失敗と計画の失敗をそのまま返す(t *testing.T) {
+func TestStartUpgraded_サーバーの起動失敗をそのまま返す(t *testing.T) {
 	f := &fakeFull{}
 	f.err = errBoom
 	p := runtimeprovider.New(testSpec(), f, runtimeprovider.Hooks{})

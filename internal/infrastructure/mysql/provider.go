@@ -15,7 +15,10 @@ import (
 // from packages this one does not depend on, and a feature without its hook is
 // declared unsupported.
 func NewProvider(srv *Server, extra runtimeprovider.Hooks) *runtimeprovider.Provider {
-	spec, _ := domain.DefaultRuntimes.Spec(domain.MySQL)
+	spec, ok := domain.DefaultRuntimes.Spec(domain.MySQL)
+	if !ok {
+		panic("mysql is not registered in domain.DefaultRuntimes")
+	}
 	return runtimeprovider.New(spec, srv, runtimeprovider.Hooks{
 		PrepareRuntime: extra.PrepareRuntime,
 		PrepareStart:   srv.prepareStart,
