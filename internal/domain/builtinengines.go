@@ -7,10 +7,13 @@ import (
 )
 
 // DefaultRuntimes is the registry the process works with. It starts with the
-// built-in engines (MySQL, PostgreSQL); further engines register at start-up.
-var DefaultRuntimes = newBuiltinRegistry()
+// built-in engines (MySQL, PostgreSQL); further engines must be registered
+// before anything is decoded (stored state names runtimes, and
+// RuntimeRef.UnmarshalText refuses an engine it does not know).
+var DefaultRuntimes = NewBuiltinRuntimes()
 
-func newBuiltinRegistry() *RuntimeRegistry {
+// NewBuiltinRuntimes returns a new registry holding only MySQL and PostgreSQL.
+func NewBuiltinRuntimes() *RuntimeRegistry {
 	r := NewRuntimeRegistry()
 	for _, s := range []EngineSpec{mysqlSpec(), postgresSpec()} {
 		if err := r.Register(s); err != nil {

@@ -198,3 +198,18 @@ func TestPrepareStart_設定を書けなければ失敗を返す(t *testing.T) {
 		t.Error("PrepareStart succeeded without being able to write the configuration")
 	}
 }
+
+func TestNewProvider_全フックを配線するとレジストリの宣言と一致する(t *testing.T) {
+	f := newFixture(t)
+	wired := runtimeprovider.Hooks{
+		Query: func(context.Context, domain.Server, domain.QueryRequest) (domain.QueryResult, error) {
+			return domain.QueryResult{}, nil
+		},
+		DumpSource: func(context.Context, domain.SourceDumpJob, string) error { return nil },
+	}
+	got, _ := mysql.NewProvider(f.srv, wired).Describe(ctx)
+	want, _ := domain.DefaultRuntimes.Spec(domain.MySQL)
+	if got.Capabilities != want.Capabilities {
+		t.Errorf("Describe %+v differs from the registry %+v", got.Capabilities, want.Capabilities)
+	}
+}

@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -171,5 +172,20 @@ func TestCheckUpgradePath_既存のPostgreSQL規則と同じ結果を返す(t *t
 		if (got == nil) != (want == nil) || (got != nil && got.Error() != want.Error()) {
 			t.Errorf("%s -> %s: provider %v, domain %v", c.from, c.to, got, want)
 		}
+	}
+}
+
+func TestNewProvider_全フックを配線するとレジストリの宣言と一致する(t *testing.T) {
+	f := newFixture(t)
+	wired := runtimeprovider.Hooks{
+		Query: func(context.Context, domain.Server, domain.QueryRequest) (domain.QueryResult, error) {
+			return domain.QueryResult{}, nil
+		},
+		DumpSource: func(context.Context, domain.SourceDumpJob, string) error { return nil },
+	}
+	got, _ := postgres.NewProvider(f.srv, wired).Describe(ctx)
+	want, _ := domain.DefaultRuntimes.Spec(domain.Postgres)
+	if got.Capabilities != want.Capabilities {
+		t.Errorf("Describe %+v differs from the registry %+v", got.Capabilities, want.Capabilities)
 	}
 }

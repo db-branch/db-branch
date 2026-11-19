@@ -153,7 +153,9 @@ var (
 // Validate refuses a plan a provider could use to inject systemd directives
 // (a newline, NUL or other control character in anything written into the
 // unit) or to ask for a setting outside the allowed ones. The core calls it
-// before it writes the unit's drop-in.
+// before it writes the unit's drop-in. It does not quote: the writer of the
+// drop-in must escape spaces, quotes, "%" and "$" the way systemd reads
+// ExecStart=, so an argument stays one argument.
 func (p LaunchPlan) Validate() error {
 	bad := func(format string, a ...any) error {
 		return fmt.Errorf("%w: %s", ErrInvalidLaunchPlan, fmt.Sprintf(format, a...))

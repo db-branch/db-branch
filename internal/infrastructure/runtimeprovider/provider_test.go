@@ -318,14 +318,6 @@ func TestStartUpgraded_起動の失敗と計画の失敗をそのまま返す(t 
 		t.Errorf("server failure = %v", err)
 	}
 
-	g := &fakeFull{}
-	hooks := runtimeprovider.Hooks{PrepareStart: func(context.Context, domain.Server) (domain.LaunchPlan, error) {
-		return domain.LaunchPlan{}, errBoom
-	}}
-	q := runtimeprovider.New(testSpec(), g, hooks)
-	if _, _, err := q.StartUpgraded(ctx, testInstance(), domain.Login{}); !errors.Is(err, errBoom) {
-		t.Errorf("plan failure = %v", err)
-	}
 }
 
 func TestPrepareStart_フックの失敗をそのまま返す(t *testing.T) {
@@ -349,5 +341,27 @@ func TestCheckUpgradePath_移行先の版が読めなければ断る(t *testing.
 	q := runtimeprovider.New(testSpec(), &fakeServer{}, runtimeprovider.Hooks{}).WithRegistry(reg)
 	if err := q.CheckUpgradePath(ctx, "1.0", "2.0"); !errors.Is(err, domain.ErrInvalidRuntime) {
 		t.Errorf("target outside the pattern = %v", err)
+	}
+}
+
+func TestStartUpgraded_計画を先に作り検証してからサーバーを起動する(t *testing.T) {
+	bad := runtimeprovider.Hooks{PrepareStart: func(context.Context, domain.Server) (domain.LaunchPlan, error) {
+		return domain.LaunchPlan{Command: "/bin/db", Args: []string{"a\nUser=root"}}, nil
+	}}
+	f := &fakeFull{}
+	p := runtimeprovider.New(testSpec(), f, bad)
+	if _, _, err := p.StartUpgraded(ctx, testInstance(), domain.Login{}); !errors.Is(err, domain.ErrInvalidLaunchPlan) {
+		t.Errorf("StartUpgraded = %v, want ErrInvalidLaunchPlan", err)
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("the server was started although the plan was refused: %q", f.calls)
+	}
+
+	failing := runtimeprovider.Hooks{PrepareStart: func(context.Context, domain.Server) (domain.LaunchPlan, error) {
+		return domain.LaunchPlan{}, errBoom
+	}}
+	g := &fakeFull{}
+	if _, _, err := runtimeprovider.New(testSpec(), g, failing).StartUpgraded(ctx, testInstance(), domain.Login{}); !errors.Is(err, errBoom) || len(g.calls) != 0 {
+		t.Errorf("plan failure = %v, calls %q", err, g.calls)
 	}
 }

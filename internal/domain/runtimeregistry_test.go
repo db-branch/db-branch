@@ -40,7 +40,7 @@ func TestRuntimeRegistry_不正なEngineSpecの登録を拒否する(t *testing.
 		"Primaryが2つ": {Engine: "x", Protocols: []domain.ProtocolPort{{Name: "a", Primary: true}, {Name: "b", Primary: true}}},
 		"プロトコル名の重複":  {Engine: "x", Protocols: []domain.ProtocolPort{{Name: "a", Primary: true}, {Name: "a"}}},
 		"プロトコル名が空":   {Engine: "x", Protocols: []domain.ProtocolPort{{Primary: true}}},
-		"正規表現が壊れている": {Engine: "x", VersionPattern: "("},
+		"正規表現が壊れている": {Engine: "x", VersionPattern: "^($"},
 	}
 	for name, spec := range cases {
 		reg := domain.NewRuntimeRegistry()
@@ -90,6 +90,7 @@ func TestDefaultRuntimes_MySQLとPostgreSQLが組み込みで登録されてい�
 }
 
 func TestParseRuntimeRef_既定のレジストリに後から登録したエンジンも受理する(t *testing.T) {
+	swapDefaultRuntimes(t)
 	if err := domain.DefaultRuntimes.Register(domain.EngineSpec{Engine: "parsetest", VersionPattern: `^[0-9]{2}\.[0-9]+$`}); err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +107,7 @@ func TestParseRuntimeRef_既定のレジストリに後から登録したエン�
 }
 
 func TestCollationBound_登録されたエンジンの宣言に従い未登録は偽(t *testing.T) {
+	swapDefaultRuntimes(t)
 	if err := domain.DefaultRuntimes.Register(domain.EngineSpec{Engine: "collbound", CollationBound: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +117,7 @@ func TestCollationBound_登録されたエンジンの宣言に従い未登録�
 }
 
 func TestBranchDSN_エンジンの宣言したFormatDSNに委譲する(t *testing.T) {
+	swapDefaultRuntimes(t)
 	err := domain.DefaultRuntimes.Register(domain.EngineSpec{Engine: "dsntest", FormatDSN: func(host string, port int, user, password string) string {
 		return "dsntest://" + user + ":" + password + "@" + host + ":" + strconv.Itoa(port) + "/db1"
 	}})
@@ -128,6 +131,7 @@ func TestBranchDSN_エンジンの宣言したFormatDSNに委譲する(t *testin
 }
 
 func TestBranchDSN_FormatDSNのないエンジンは標準の形になる(t *testing.T) {
+	swapDefaultRuntimes(t)
 	if err := domain.DefaultRuntimes.Register(domain.EngineSpec{Engine: "plaindsn"}); err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +142,7 @@ func TestBranchDSN_FormatDSNのないエンジンは標準の形になる(t *tes
 }
 
 func TestCheckUpgradePath_エンジンの宣言した検証に委譲する(t *testing.T) {
+	swapDefaultRuntimes(t)
 	veto := errors.New("veto")
 	err := domain.DefaultRuntimes.Register(domain.EngineSpec{Engine: "uptest", CheckUpgradePath: func(from, to domain.RuntimeRef) error { return veto }})
 	if err != nil {
@@ -154,6 +159,7 @@ func TestCheckUpgradePath_エンジンの宣言した検証に委譲する(t *te
 }
 
 func TestCheckUpgradePath_検証を宣言しないエンジンは新しい版への移行を許す(t *testing.T) {
+	swapDefaultRuntimes(t)
 	if err := domain.DefaultRuntimes.Register(domain.EngineSpec{Engine: "nocheck"}); err != nil {
 		t.Fatal(err)
 	}
@@ -187,5 +193,59 @@ func TestRuntimeRegistry_CheckUpgradePathは自分のレジストリの宣言で
 	// the same refs are unknown to the default registry, which has no verdict on them
 	if err := domain.CheckUpgradePath(from, to); err != nil {
 		t.Errorf("default registry = %v", err)
+	}
+}
+
+// swapDefaultRuntimes gives the test its own copy of the built-in registry, so
+// engines it registers do not outlive it (go test -count=2 stays green).
+func swapDefaultRuntimes(t *testing.T) {
+	t.Helper()
+	old := domain.DefaultRuntimes
+	domain.DefaultRuntimes = domain.NewBuiltinRuntimes()
+	t.Cleanup(func() { domain.DefaultRuntimes = old })
+}
+
+func TestNewBuiltinRuntimes_毎回独立したMySQLとPostgreSQLだけのレジストリを返す(t *testing.T) {
+	a, b := domain.NewBuiltinRuntimes(), domain.NewBuiltinRuntimes()
+	if err := a.Register(domain.EngineSpec{Engine: "extra"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := b.Spec("extra"); ok {
+		t.Error("registries share state")
+	}
+	if got := b.Engines(); len(got) != 2 || got[0] != domain.MySQL || got[1] != domain.Postgres {
+		t.Errorf("Engines = %v", got)
+	}
+}
+
+func TestRuntimeRegistry_VersionPatternは前後を固定した式だけを受理する(t *testing.T) {
+	for _, pat := range []string{`[0-9]+`, `^[0-9]+`, `[0-9]+$`} {
+		reg := domain.NewRuntimeRegistry()
+		if err := reg.Register(domain.EngineSpec{Engine: "x", VersionPattern: pat}); !errors.Is(err, domain.ErrInvalidEngineSpec) {
+			t.Errorf("pattern %q: Register = %v, want ErrInvalidEngineSpec", pat, err)
+		}
+	}
+	reg := domain.NewRuntimeRegistry()
+	if err := reg.Register(domain.EngineSpec{Engine: "x", VersionPattern: `^[0-9]+$`}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Parse("x@1/../../y"); !errors.Is(err, domain.ErrInvalidRuntime) {
+		t.Errorf("Parse with a path in the version = %v", err)
+	}
+}
+
+func TestRuntimeRegistry_登録したSpecは呼び出し側の変更から守られる(t *testing.T) {
+	props := map[string]string{"recordsize": "128K"}
+	ports := []domain.ProtocolPort{{Name: "http", Primary: true}}
+	reg := domain.NewRuntimeRegistry()
+	if err := reg.Register(domain.EngineSpec{Engine: "x", ZFSProps: props, Protocols: ports}); err != nil {
+		t.Fatal(err)
+	}
+	props["recordsize"], ports[0].Name = "8K", "evil" // the registrant changes its own values later
+	got, _ := reg.Spec("x")
+	got.ZFSProps["recordsize"], got.Protocols[0].Name = "4K", "worse" // so does a reader
+	again, _ := reg.Spec("x")
+	if again.ZFSProps["recordsize"] != "128K" || again.Protocols[0].Name != "http" {
+		t.Errorf("the registered spec changed: %+v", again)
 	}
 }

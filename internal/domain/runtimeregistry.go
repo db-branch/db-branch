@@ -45,6 +45,19 @@ type EngineSpec struct {
 	versionRE *regexp.Regexp
 }
 
+// clone copies the map and slice, so neither side can change the other's.
+func (s EngineSpec) clone() EngineSpec {
+	if s.ZFSProps != nil {
+		props := make(map[string]string, len(s.ZFSProps))
+		for k, v := range s.ZFSProps {
+			props[k] = v
+		}
+		s.ZFSProps = props
+	}
+	s.Protocols = append([]ProtocolPort(nil), s.Protocols...)
+	return s
+}
+
 var enginePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
 
 func (s EngineSpec) validate() (*regexp.Regexp, error) {
@@ -76,6 +89,10 @@ func (s EngineSpec) validate() (*regexp.Regexp, error) {
 	re := versionPattern
 	if s.VersionPattern != "" {
 		var err error
+		if !strings.HasPrefix(s.VersionPattern, "^") || !strings.HasSuffix(s.VersionPattern, "$") {
+			// A version becomes part of paths and unit names: it must match whole.
+			return nil, bad("version pattern must start with ^ and end with $")
+		}
 		if re, err = regexp.Compile(s.VersionPattern); err != nil {
 			return nil, bad("version pattern: %v", err)
 		}
@@ -101,6 +118,7 @@ func (r *RuntimeRegistry) Register(s EngineSpec) error {
 		return err
 	}
 	s.versionRE = re
+	s = s.clone()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, dup := r.specs[s.Engine]; dup {
@@ -115,7 +133,7 @@ func (r *RuntimeRegistry) Spec(e Engine) (EngineSpec, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	s, ok := r.specs[e]
-	return s, ok
+	return s.clone(), ok
 }
 
 // Engines lists the registered engines in name order.

@@ -5,7 +5,6 @@ package runtimeprovider
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/db-branch/db-branch/internal/domain"
 )
@@ -193,22 +192,24 @@ func (p *Provider) CheckUpgrade(ctx context.Context, s domain.InstanceSpec, toVe
 }
 
 // StartUpgraded starts the instance on its new runtime and reads its log. The
+// launch plan is made and checked first, so a refused plan starts nothing. The
 // built-in servers start the unit themselves (the core does not yet run
-// systemctl for them), so the returned plan only describes what was started.
+// systemctl for them), so the returned plan only describes what is started.
 func (p *Provider) StartUpgraded(ctx context.Context, s domain.InstanceSpec, own domain.Login) (domain.LaunchPlan, domain.UpgradeLog, error) {
 	u, ok := p.server.(domain.Upgrader)
 	if !ok {
 		return domain.LaunchPlan{}, domain.UpgradeLog{}, domain.FeatureNotSupported("upgrade")
 	}
+	var plan domain.LaunchPlan
+	if p.hooks.PrepareStart != nil {
+		var err error
+		if plan, err = p.PrepareStart(ctx, s); err != nil {
+			return domain.LaunchPlan{}, domain.UpgradeLog{}, err
+		}
+	}
 	log, err := u.StartUpgraded(ctx, p.srv(s), own)
 	if err != nil {
 		return domain.LaunchPlan{}, log, err
-	}
-	var plan domain.LaunchPlan
-	if p.hooks.PrepareStart != nil {
-		if plan, err = p.hooks.PrepareStart(ctx, p.srv(s)); err != nil {
-			return domain.LaunchPlan{}, log, fmt.Errorf("launch plan: %w", err)
-		}
 	}
 	return plan, log, nil
 }
