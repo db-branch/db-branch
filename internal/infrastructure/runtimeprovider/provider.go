@@ -5,6 +5,7 @@ package runtimeprovider
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/db-branch/db-branch/internal/domain"
 )
@@ -37,7 +38,7 @@ var _ domain.RuntimeProvider = (*Provider)(nil)
 
 // New adapts server, an engine described by spec.
 func New(spec domain.EngineSpec, server domain.DBServer, hooks Hooks) *Provider {
-	return &Provider{spec: spec, server: server, hooks: hooks, registry: domain.DefaultRuntimes}
+	return &Provider{spec: spec.Clone(), server: server, hooks: hooks, registry: domain.DefaultRuntimes}
 }
 
 // WithRegistry makes upgrade path checks use reg instead of domain.DefaultRuntimes.
@@ -50,7 +51,7 @@ func (p *Provider) WithRegistry(reg *domain.RuntimeRegistry) *Provider {
 // provider can do it: the DBServer lacks the port, or the hook is not set,
 // and the feature is declared false instead of failing on first use.
 func (p *Provider) Describe(context.Context) (domain.EngineSpec, error) {
-	s := p.spec
+	s := p.spec.Clone()
 	_, upgrader := p.server.(domain.Upgrader)
 	_, stats := p.server.(domain.StatsUpdater)
 	s.Capabilities.Upgrade = s.Capabilities.Upgrade && upgrader
@@ -92,11 +93,17 @@ func (p *Provider) PrepareStart(ctx context.Context, s domain.InstanceSpec) (dom
 	if p.hooks.PrepareStart == nil {
 		return domain.LaunchPlan{}, domain.FeatureNotSupported("prepare_start")
 	}
+	if len(p.spec.Protocols) > 0 && s.PrimaryPort(p.spec) == 0 {
+		return domain.LaunchPlan{}, fmt.Errorf("instance %s has no port for the primary protocol", s.ID)
+	}
 	plan, err := p.hooks.PrepareStart(ctx, p.srv(s))
 	if err != nil {
 		return domain.LaunchPlan{}, err
 	}
-	return plan, plan.Validate()
+	if err := plan.Validate(); err != nil {
+		return domain.LaunchPlan{}, err
+	}
+	return plan, nil
 }
 
 func (p *Provider) Health(ctx context.Context, s domain.InstanceSpec) (domain.HealthState, error) {

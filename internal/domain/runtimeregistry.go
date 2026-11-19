@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"regexp/syntax"
 	"sort"
 	"strings"
 	"sync"
@@ -45,8 +46,8 @@ type EngineSpec struct {
 	versionRE *regexp.Regexp
 }
 
-// clone copies the map and slice, so neither side can change the other's.
-func (s EngineSpec) clone() EngineSpec {
+// Clone copies the map and slice, so neither side can change the other's.
+func (s EngineSpec) Clone() EngineSpec {
 	if s.ZFSProps != nil {
 		props := make(map[string]string, len(s.ZFSProps))
 		for k, v := range s.ZFSProps {
@@ -89,11 +90,7 @@ func (s EngineSpec) validate() (*regexp.Regexp, error) {
 	re := versionPattern
 	if s.VersionPattern != "" {
 		var err error
-		if !strings.HasPrefix(s.VersionPattern, "^") || !strings.HasSuffix(s.VersionPattern, "$") {
-			// A version becomes part of paths and unit names: it must match whole.
-			return nil, bad("version pattern must start with ^ and end with $")
-		}
-		if re, err = regexp.Compile(s.VersionPattern); err != nil {
+		if re, err = compileVersionPattern(s.VersionPattern); err != nil {
 			return nil, bad("version pattern: %v", err)
 		}
 	}
@@ -118,7 +115,7 @@ func (r *RuntimeRegistry) Register(s EngineSpec) error {
 		return err
 	}
 	s.versionRE = re
-	s = s.clone()
+	s = s.Clone()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, dup := r.specs[s.Engine]; dup {
@@ -133,7 +130,7 @@ func (r *RuntimeRegistry) Spec(e Engine) (EngineSpec, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	s, ok := r.specs[e]
-	return s.clone(), ok
+	return s.Clone(), ok
 }
 
 // Engines lists the registered engines in name order.
@@ -176,4 +173,30 @@ func (r *RuntimeRegistry) CheckUpgradePath(from, to RuntimeRef) error {
 		return spec.CheckUpgradePath(from, to)
 	}
 	return nil
+}
+
+// A version becomes part of paths and unit names, so a custom pattern must
+// anchor the whole string (not one alternative of it) and must not let a path
+// separator, whitespace or a dot-dot through.
+var unsafeVersions = []string{"1/2", "1 2", "1\n2", "1\\2", "..", "1.2/../x"}
+
+func compileVersionPattern(pattern string) (*regexp.Regexp, error) {
+	tree, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return nil, err
+	}
+	n := len(tree.Sub)
+	if tree.Op != syntax.OpConcat || n < 2 || tree.Sub[0].Op != syntax.OpBeginText || tree.Sub[n-1].Op != syntax.OpEndText {
+		return nil, errors.New("must start with ^ and end with $ around the whole expression")
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range unsafeVersions {
+		if re.MatchString(v) {
+			return nil, fmt.Errorf("accepts %q, which is not safe in a path", v)
+		}
+	}
+	return re, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -83,7 +84,11 @@ type ResourceLimits struct {
 	CPUQuota int
 }
 
-// InstanceSpec is the run specification of one instance, given by the core to a provider.
+// InstanceSpec is the run specification of one instance, given by the core to
+// a provider. The built-in MySQL and PostgreSQL providers still take their
+// directories, bind address and limits other than MemoryMB from their own
+// configuration: of this spec they use ID, Runtime, DataDir, the primary port,
+// Limits.MemoryMB, Extra, LegacyAuth and Maintenance (Phase 2 hands over the rest).
 type InstanceSpec struct {
 	// ID is unique per node, e.g. "base-prod" or "branch-feature-x".
 	ID      string
@@ -133,7 +138,7 @@ type LaunchPlan struct {
 	Command string
 	Args    []string
 	Env     map[string]string
-	// ServiceType is systemd's Type= (simple, notify, exec, forking, oneshot).
+	// ServiceType is systemd's Type= (simple, notify, exec or forking).
 	ServiceType string
 	// KillSignal is systemd's KillSignal=, e.g. SIGTERM, or SIGINT for PostgreSQL's fast shutdown.
 	KillSignal string
@@ -144,6 +149,8 @@ type LaunchPlan struct {
 // ErrInvalidLaunchPlan is returned for a LaunchPlan that could not be written
 // into a systemd unit safely.
 var ErrInvalidLaunchPlan = errors.New("invalid launch plan")
+
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 var (
 	serviceTypes = map[string]bool{"": true, "simple": true, "exec": true, "notify": true, "forking": true}
@@ -160,7 +167,7 @@ func (p LaunchPlan) Validate() error {
 	bad := func(format string, a ...any) error {
 		return fmt.Errorf("%w: %s", ErrInvalidLaunchPlan, fmt.Sprintf(format, a...))
 	}
-	if !strings.HasPrefix(p.Command, "/") {
+	if !strings.HasPrefix(p.Command, "/") || p.Command == "/" || strings.HasSuffix(p.Command, "/") {
 		return bad("command %q must be an absolute path", p.Command)
 	}
 	if hasControl(p.Command) {
@@ -172,7 +179,7 @@ func (p LaunchPlan) Validate() error {
 		}
 	}
 	for k, v := range p.Env {
-		if k == "" || strings.ContainsAny(k, "= \t") || hasControl(k) {
+		if !envName.MatchString(k) {
 			return bad("environment variable name %q", k)
 		}
 		if hasControl(v) {

@@ -249,3 +249,32 @@ func TestRuntimeRegistry_登録したSpecは呼び出し側の変更から守ら
 		t.Errorf("the registered spec changed: %+v", again)
 	}
 }
+
+func TestRuntimeRegistry_VersionPatternの選択肢やパス区切りを許す式を拒否する(t *testing.T) {
+	for _, pat := range []string{`^[0-9]+\.[0-9]+|x$`, `^.+$`, `^[0-9./]+$`, `^\S+$`, `^(1|[^ ]+)$`} {
+		reg := domain.NewRuntimeRegistry()
+		if err := reg.Register(domain.EngineSpec{Engine: "x", VersionPattern: pat}); !errors.Is(err, domain.ErrInvalidEngineSpec) {
+			t.Errorf("pattern %q: Register = %v, want ErrInvalidEngineSpec", pat, err)
+		}
+	}
+	// an alternation inside the anchors is still fine
+	reg := domain.NewRuntimeRegistry()
+	if err := reg.Register(domain.EngineSpec{Engine: "x", VersionPattern: `^(25|26)\.[0-9]+$`}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Parse("x@25.3"); err != nil {
+		t.Errorf("Parse = %v", err)
+	}
+	if _, err := reg.Parse("x@27.3"); !errors.Is(err, domain.ErrInvalidRuntime) {
+		t.Errorf("Parse(27.3) = %v", err)
+	}
+}
+
+func TestEngineSpec_Cloneは元と独立した複製を返す(t *testing.T) {
+	a := domain.EngineSpec{Engine: "x", ZFSProps: map[string]string{"k": "v"}, Protocols: []domain.ProtocolPort{{Name: "p", Primary: true}}}
+	b := a.Clone()
+	b.ZFSProps["k"], b.Protocols[0].Name = "w", "q"
+	if a.ZFSProps["k"] != "v" || a.Protocols[0].Name != "p" {
+		t.Errorf("Clone shares state: %+v", a)
+	}
+}

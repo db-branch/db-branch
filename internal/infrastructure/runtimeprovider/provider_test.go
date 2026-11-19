@@ -365,3 +365,45 @@ func TestStartUpgraded_計画を先に作り検証してからサーバーを起
 		t.Errorf("plan failure = %v, calls %q", err, g.calls)
 	}
 }
+
+func TestDescribe_返した宣言を変えても内部の宣言は変わらない(t *testing.T) {
+	spec := testSpec()
+	spec.ZFSProps = map[string]string{"recordsize": "16K"}
+	p := runtimeprovider.New(spec, &fakeServer{}, runtimeprovider.Hooks{})
+
+	spec.ZFSProps["recordsize"] = "1M" // the caller of New keeps editing its map
+	got, _ := p.Describe(ctx)
+	got.ZFSProps["recordsize"] = "8K" // and so does a reader
+	again, _ := p.Describe(ctx)
+	if again.ZFSProps["recordsize"] != "16K" {
+		t.Errorf("ZFSProps = %v", again.ZFSProps)
+	}
+}
+
+func TestPrepareStart_不正な計画は空で返す(t *testing.T) {
+	hooks := runtimeprovider.Hooks{PrepareStart: func(context.Context, domain.Server) (domain.LaunchPlan, error) {
+		return domain.LaunchPlan{Command: "/bin/db", Args: []string{"a\nb"}}, nil
+	}}
+	plan, err := runtimeprovider.New(testSpec(), &fakeServer{}, hooks).PrepareStart(ctx, testInstance())
+	if err == nil || plan.Command != "" {
+		t.Errorf("PrepareStart = %+v, %v", plan, err)
+	}
+}
+
+func TestPrepareStart_主ポートが割り当てられていなければ断る(t *testing.T) {
+	called := false
+	hooks := runtimeprovider.Hooks{PrepareStart: func(context.Context, domain.Server) (domain.LaunchPlan, error) {
+		called = true
+		return domain.LaunchPlan{Command: "/bin/db"}, nil
+	}}
+	p := runtimeprovider.New(testSpec(), &fakeServer{}, hooks)
+	i := testInstance()
+	i.Ports = nil
+
+	if _, err := p.PrepareStart(ctx, i); err == nil || called {
+		t.Errorf("PrepareStart without a port = %v (hook called: %v)", err, called)
+	}
+	if _, _, err := runtimeprovider.New(testSpec(), &fakeFull{}, hooks).StartUpgraded(ctx, i, domain.Login{}); err == nil {
+		t.Error("StartUpgraded without a port succeeded")
+	}
+}
