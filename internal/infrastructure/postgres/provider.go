@@ -50,7 +50,7 @@ func (p *Server) prepareStart(_ context.Context, s domain.Server) (domain.Launch
 		Command: filepath.Join(p.RuntimeDir(s.Runtime), "bin", "postgres"),
 		Args: []string{
 			"-D", s.DataDir, "-p", fmt.Sprint(s.Port),
-			"-c", "listen_addresses=" + p.Bind,
+			"-c", "listen_addresses=" + p.listen(s),
 			"-c", "unix_socket_directories=" + p.sockDir(s),
 			"-c", fmt.Sprintf("shared_buffers=%dMB", s.MemoryMB),
 			"-c", "jit=off",

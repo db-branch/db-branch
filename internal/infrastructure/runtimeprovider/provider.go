@@ -5,6 +5,7 @@ package runtimeprovider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -69,7 +70,17 @@ func (p *Provider) FormatDSN(_ context.Context, s domain.InstanceSpec, host, use
 	return p.spec.DSN(host, s.PrimaryPort(p.spec), user, password), nil
 }
 
-func (p *Provider) srv(s domain.InstanceSpec) domain.Server { return s.Server(p.spec) }
+// ErrNoPrimaryPort is returned when an instance has no port for the engine's
+// primary protocol: a server would be configured on port 0.
+var ErrNoPrimaryPort = errors.New("instance has no port for the primary protocol")
+
+// srv is the instance as the DBServer sees it, refused when it has no port.
+func (p *Provider) srv(s domain.InstanceSpec) (domain.Server, error) {
+	if len(p.spec.Protocols) > 0 && s.PrimaryPort(p.spec) == 0 {
+		return domain.Server{}, fmt.Errorf("%w: %s", ErrNoPrimaryPort, s.ID)
+	}
+	return s.Server(p.spec), nil
+}
 
 // PrepareRuntime runs the engine's fixup on the unpacked runtime.
 func (p *Provider) PrepareRuntime(_ context.Context, _, stagingDir string) error {
@@ -80,11 +91,19 @@ func (p *Provider) PrepareRuntime(_ context.Context, _, stagingDir string) error
 }
 
 func (p *Provider) Initialize(ctx context.Context, s domain.InstanceSpec) error {
-	return p.server.Initialize(ctx, p.srv(s))
+	srv, err := p.srv(s)
+	if err != nil {
+		return err
+	}
+	return p.server.Initialize(ctx, srv)
 }
 
 func (p *Provider) PrepareClone(ctx context.Context, s domain.InstanceSpec) error {
-	return p.server.PrepareClone(ctx, p.srv(s))
+	srv, err := p.srv(s)
+	if err != nil {
+		return err
+	}
+	return p.server.PrepareClone(ctx, srv)
 }
 
 // PrepareStart writes the instance's configuration and returns how to launch
@@ -93,10 +112,11 @@ func (p *Provider) PrepareStart(ctx context.Context, s domain.InstanceSpec) (dom
 	if p.hooks.PrepareStart == nil {
 		return domain.LaunchPlan{}, domain.FeatureNotSupported("prepare_start")
 	}
-	if len(p.spec.Protocols) > 0 && s.PrimaryPort(p.spec) == 0 {
-		return domain.LaunchPlan{}, fmt.Errorf("instance %s has no port for the primary protocol", s.ID)
+	srv, err := p.srv(s)
+	if err != nil {
+		return domain.LaunchPlan{}, err
 	}
-	plan, err := p.hooks.PrepareStart(ctx, p.srv(s))
+	plan, err := p.hooks.PrepareStart(ctx, srv)
 	if err != nil {
 		return domain.LaunchPlan{}, err
 	}
@@ -110,55 +130,83 @@ func (p *Provider) Health(ctx context.Context, s domain.InstanceSpec) (domain.He
 	if p.hooks.Health == nil {
 		return domain.HealthStopped, domain.FeatureNotSupported("health")
 	}
-	return p.hooks.Health(ctx, p.srv(s))
+	srv, err := p.srv(s)
+	if err != nil {
+		return domain.HealthStopped, err
+	}
+	return p.hooks.Health(ctx, srv)
 }
 
 func (p *Provider) Quiesce(ctx context.Context, s domain.InstanceSpec, mode domain.StopMode) error {
 	if p.hooks.Quiesce == nil {
 		return domain.FeatureNotSupported("quiesce")
 	}
-	return p.hooks.Quiesce(ctx, p.srv(s), mode)
+	srv, err := p.srv(s)
+	if err != nil {
+		return err
+	}
+	return p.hooks.Quiesce(ctx, srv, mode)
 }
 
 func (p *Provider) VerifyCleanShutdown(ctx context.Context, s domain.InstanceSpec) error {
 	if p.hooks.VerifyShutdown == nil {
 		return domain.FeatureNotSupported("verify_clean_shutdown")
 	}
-	return p.hooks.VerifyShutdown(ctx, p.srv(s))
+	return p.hooks.VerifyShutdown(ctx, s.Server(p.spec))
 }
 
 func (p *Provider) RemoveInstance(ctx context.Context, s domain.InstanceSpec) error {
-	return p.server.Remove(ctx, p.srv(s))
+	return p.server.Remove(ctx, s.Server(p.spec))
 }
 
 func (p *Provider) CreateUser(ctx context.Context, s domain.InstanceSpec, user, password string) error {
-	return p.server.CreateUser(ctx, p.srv(s), user, password)
+	srv, err := p.srv(s)
+	if err != nil {
+		return err
+	}
+	return p.server.CreateUser(ctx, srv, user, password)
 }
 
 func (p *Provider) ExecAs(ctx context.Context, s domain.InstanceSpec, user, password, sql string) error {
-	return p.server.ExecAs(ctx, p.srv(s), user, password, sql)
+	srv, err := p.srv(s)
+	if err != nil {
+		return err
+	}
+	return p.server.ExecAs(ctx, srv, user, password, sql)
 }
 
 func (p *Provider) AdminAccess(_ context.Context, s domain.InstanceSpec) (domain.AdminAccess, error) {
-	return p.server.Admin(p.srv(s)), nil
+	srv, err := p.srv(s)
+	if err != nil {
+		return domain.AdminAccess{}, err
+	}
+	return p.server.Admin(srv), nil
 }
 
 func (p *Provider) Query(ctx context.Context, s domain.InstanceSpec, q domain.QueryRequest) (domain.QueryResult, error) {
 	if p.hooks.Query == nil {
 		return domain.QueryResult{}, domain.FeatureNotSupported("query")
 	}
-	return p.hooks.Query(ctx, p.srv(s), q)
+	srv, err := p.srv(s)
+	if err != nil {
+		return domain.QueryResult{}, err
+	}
+	return p.hooks.Query(ctx, srv, q)
 }
 
 func (p *Provider) TailLog(ctx context.Context, s domain.InstanceSpec, lines int) (string, error) {
 	if p.hooks.TailLog == nil {
 		return "", domain.FeatureNotSupported("tail_log")
 	}
-	return p.hooks.TailLog(ctx, p.srv(s), lines)
+	return p.hooks.TailLog(ctx, s.Server(p.spec), lines)
 }
 
 func (p *Provider) Load(ctx context.Context, s domain.InstanceSpec, dumpPath string) error {
-	return p.server.Load(ctx, p.srv(s), dumpPath)
+	srv, err := p.srv(s)
+	if err != nil {
+		return err
+	}
+	return p.server.Load(ctx, srv, dumpPath)
 }
 
 func (p *Provider) DumpSource(ctx context.Context, job domain.SourceDumpJob, outPath string) error {
@@ -173,7 +221,11 @@ func (p *Provider) UpdateStats(ctx context.Context, s domain.InstanceSpec) error
 	if !ok {
 		return domain.FeatureNotSupported("update_stats")
 	}
-	return u.UpdateStats(ctx, p.srv(s))
+	srv, err := p.srv(s)
+	if err != nil {
+		return err
+	}
+	return u.UpdateStats(ctx, srv)
 }
 
 // CheckUpgradePath judges a move between two versions of the engine.
@@ -195,7 +247,11 @@ func (p *Provider) CheckUpgrade(ctx context.Context, s domain.InstanceSpec, toVe
 	if !ok {
 		return domain.UpgradePlan{}, domain.FeatureNotSupported("upgrade")
 	}
-	return u.CheckUpgrade(ctx, p.srv(s), domain.RuntimeRef{Engine: p.spec.Engine, Version: toVersion}, own)
+	srv, err := p.srv(s)
+	if err != nil {
+		return domain.UpgradePlan{}, err
+	}
+	return u.CheckUpgrade(ctx, srv, domain.RuntimeRef{Engine: p.spec.Engine, Version: toVersion}, own)
 }
 
 // StartUpgraded starts the instance on its new runtime and reads its log. The
@@ -214,7 +270,11 @@ func (p *Provider) StartUpgraded(ctx context.Context, s domain.InstanceSpec, own
 			return domain.LaunchPlan{}, domain.UpgradeLog{}, err
 		}
 	}
-	log, err := u.StartUpgraded(ctx, p.srv(s), own)
+	srv, err := p.srv(s)
+	if err != nil {
+		return domain.LaunchPlan{}, domain.UpgradeLog{}, err
+	}
+	log, err := u.StartUpgraded(ctx, srv, own)
 	if err != nil {
 		return domain.LaunchPlan{}, log, err
 	}

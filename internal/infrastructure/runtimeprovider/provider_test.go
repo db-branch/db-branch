@@ -406,3 +406,48 @@ func TestPrepareStart_主ポートが割り当てられていなければ断る(
 		t.Error("StartUpgraded without a port succeeded")
 	}
 }
+
+func TestポートをDBServerに渡すメソッドは主ポート未割当を拒否し何も呼ばない(t *testing.T) {
+	hooks := runtimeprovider.Hooks{
+		Health:  func(context.Context, domain.Server) (domain.HealthState, error) { return domain.HealthReady, nil },
+		Quiesce: func(context.Context, domain.Server, domain.StopMode) error { return nil },
+		Query: func(context.Context, domain.Server, domain.QueryRequest) (domain.QueryResult, error) {
+			return domain.QueryResult{}, nil
+		},
+	}
+	f := &fakeFull{}
+	p := runtimeprovider.New(testSpec(), f, hooks)
+	i := testInstance()
+	i.Ports = map[string]int{"sql": 0}
+	calls := map[string]func() error{
+		"Initialize":   func() error { return p.Initialize(ctx, i) },
+		"PrepareClone": func() error { return p.PrepareClone(ctx, i) },
+		"Health":       func() error { _, err := p.Health(ctx, i); return err },
+		"Quiesce":      func() error { return p.Quiesce(ctx, i, domain.StopClean) },
+		"CreateUser":   func() error { return p.CreateUser(ctx, i, "u", "p") },
+		"ExecAs":       func() error { return p.ExecAs(ctx, i, "u", "p", "x") },
+		"AdminAccess":  func() error { _, err := p.AdminAccess(ctx, i); return err },
+		"Query":        func() error { _, err := p.Query(ctx, i, domain.QueryRequest{}); return err },
+		"Load":         func() error { return p.Load(ctx, i, "/d.sql") },
+		"UpdateStats":  func() error { return p.UpdateStats(ctx, i) },
+		"CheckUpgrade": func() error { _, err := p.CheckUpgrade(ctx, i, "1.3", domain.Login{}); return err },
+		"StartUpgraded": func() error {
+			_, _, err := p.StartUpgraded(ctx, i, domain.Login{})
+			return err
+		},
+	}
+	for name, call := range calls {
+		if err := call(); !errors.Is(err, runtimeprovider.ErrNoPrimaryPort) {
+			t.Errorf("%s = %v, want ErrNoPrimaryPort", name, err)
+		}
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("the server was called: %q", f.calls)
+	}
+	// without the primary port in the spec there is nothing to check
+	noPorts := domain.EngineSpec{Engine: "noports"}
+	q := runtimeprovider.New(noPorts, &fakeServer{}, runtimeprovider.Hooks{})
+	if err := q.Initialize(ctx, domain.InstanceSpec{ID: "x"}); err != nil {
+		t.Errorf("an engine without declared protocols = %v", err)
+	}
+}

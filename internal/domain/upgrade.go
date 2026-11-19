@@ -157,14 +157,89 @@ func checkUpgradeDirection(from, to RuntimeRef) error {
 	if from.Engine != to.Engine {
 		return fmt.Errorf("%w: %s cannot become %s: an upgrade stays within one engine", ErrUpgradeRefused, from, to)
 	}
-	a, b := parseVersion(from.Version), parseVersion(to.Version)
-	switch {
-	case a == b:
+	switch compareVersions(from.Version, to.Version) {
+	case 0:
 		return fmt.Errorf("%w: the branch already runs %s", ErrUpgradeRefused, from)
-	case b.less(a):
+	case 1:
 		return fmt.Errorf("%w: %s to %s is a downgrade, and downgrades are not supported; restore a checkpoint taken on the older version instead", ErrUpgradeRefused, from, to)
 	}
 	return nil
+}
+
+// compareVersions orders two versions of one engine: -1 if a is older, 0 if
+// they are the same, 1 if a is newer. Versions that start with a number
+// ("8.4.13", "17.2-custom") compare by that number (a suffix does not count);
+// others ("v10", "2026a") compare naturally: runs of digits by value.
+func compareVersions(a, b string) int {
+	if startsWithDigit(a) && startsWithDigit(b) {
+		pa, pb := parseVersion(a), parseVersion(b)
+		switch {
+		case pa == pb:
+			return 0
+		case pa.less(pb):
+			return -1
+		}
+		return 1
+	}
+	return naturalCompare(a, b)
+}
+
+func startsWithDigit(s string) bool { return s != "" && isDigitByte(s[0]) }
+
+// naturalCompare compares strings with runs of digits taken by value.
+func naturalCompare(a, b string) int {
+	for a != "" && b != "" {
+		if isDigitByte(a[0]) && isDigitByte(b[0]) {
+			na, ra := digitRun(a)
+			nb, rb := digitRun(b)
+			if c := cmpDigits(na, nb); c != 0 {
+				return c
+			}
+			a, b = ra, rb
+			continue
+		}
+		if a[0] != b[0] {
+			if a[0] < b[0] {
+				return -1
+			}
+			return 1
+		}
+		a, b = a[1:], b[1:]
+	}
+	switch {
+	case a == "" && b == "":
+		return 0
+	case a == "":
+		return -1
+	}
+	return 1
+}
+
+func isDigitByte(c byte) bool { return c >= '0' && c <= '9' }
+
+func digitRun(s string) (run, rest string) {
+	i := 0
+	for i < len(s) && isDigitByte(s[i]) {
+		i++
+	}
+	return s[:i], s[i:]
+}
+
+// cmpDigits compares two digit strings by value without converting them.
+func cmpDigits(a, b string) int {
+	a, b = strings.TrimLeft(a, "0"), strings.TrimLeft(b, "0")
+	switch {
+	case len(a) != len(b):
+		if len(a) < len(b) {
+			return -1
+		}
+		return 1
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
 }
 
 func pgMajor(v version) version {

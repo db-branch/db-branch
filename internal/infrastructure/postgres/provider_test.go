@@ -222,3 +222,36 @@ func TestNewProvider_全フックを配線するとレジストリの宣言と�
 		t.Errorf("Describe %+v differs from the registry %+v", got.Capabilities, want.Capabilities)
 	}
 }
+
+func TestPrepareStart_メンテナンス中はTCPを待ち受けずソケットだけにする(t *testing.T) {
+	f, p, inst := providerFixture(t)
+	inst.Maintenance = true
+
+	plan, err := p.PrepareStart(ctx, inst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(plan.Args, "listen_addresses=") {
+		t.Errorf("args = %q, want an empty listen_addresses", plan.Args)
+	}
+	if env := read(t, filepath.Join(f.state, "base-prod", "env")); !strings.Contains(env, "PG_BIND=\n") {
+		t.Errorf("env = %q, want PG_BIND empty", env)
+	}
+	inst.Maintenance = false
+	plan, _ = p.PrepareStart(ctx, inst)
+	if !contains(plan.Args, "listen_addresses=0.0.0.0") {
+		t.Errorf("normal start args = %q", plan.Args)
+	}
+	if env := read(t, filepath.Join(f.state, "base-prod", "env")); !strings.Contains(env, "PG_BIND=0.0.0.0\n") {
+		t.Errorf("env = %q", env)
+	}
+}
+
+func contains(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}

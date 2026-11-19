@@ -81,7 +81,7 @@ func (p *Server) writeConfig(s domain.Server) error {
 		"PG_BIN=" + filepath.Join(p.RuntimeDir(s.Runtime), "bin"),
 		"PG_DATA=" + s.DataDir,
 		fmt.Sprintf("PG_PORT=%d", s.Port),
-		"PG_BIND=" + p.Bind,
+		"PG_BIND=" + p.listen(s),
 		fmt.Sprintf("PG_MEM=%d", s.MemoryMB),
 		"LD_LIBRARY_PATH=" + p.lib(s),
 		"",
@@ -91,6 +91,15 @@ func (p *Server) writeConfig(s domain.Server) error {
 		return err
 	}
 	return p.chown(p.dir(s), envFile)
+}
+
+// listen is listen_addresses for the instance: none while it is in maintenance
+// (a module works on the data over the socket; no one connects over the network).
+func (p *Server) listen(s domain.Server) string {
+	if s.Maintenance {
+		return ""
+	}
+	return p.Bind
 }
 
 func (p *Server) chown(paths ...string) error {

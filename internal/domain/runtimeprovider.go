@@ -85,10 +85,13 @@ type ResourceLimits struct {
 }
 
 // InstanceSpec is the run specification of one instance, given by the core to
-// a provider. The built-in MySQL and PostgreSQL providers still take their
-// directories, bind address and limits other than MemoryMB from their own
-// configuration: of this spec they use ID, Runtime, DataDir, the primary port,
-// Limits.MemoryMB, Extra, LegacyAuth and Maintenance (Phase 2 hands over the rest).
+// a provider. The built-in MySQL and PostgreSQL providers use ID, Runtime,
+// DataDir, the primary port, Limits.MemoryMB, Extra, LegacyAuth and Maintenance
+// (no network: MySQL skip-networking, PostgreSQL an empty listen_addresses).
+// Their directories (StateDir, RunDir, RuntimeDir) and bind address come from
+// their own configuration, and the other limits (MaxConnections, NoFile,
+// CPUQuota) belong to the systemd unit, which only the db-branch-rt@ units of
+// external engines (Phase 3) take from the core.
 type InstanceSpec struct {
 	// ID is unique per node, e.g. "base-prod" or "branch-feature-x".
 	ID      string

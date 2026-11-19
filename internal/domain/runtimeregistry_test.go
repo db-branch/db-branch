@@ -278,3 +278,31 @@ func TestEngineSpec_Cloneは元と独立した複製を返す(t *testing.T) {
 		t.Errorf("Clone shares state: %+v", a)
 	}
 }
+
+func TestRuntimeRegistry_CheckUpgradePath_数字で始まらない版は文字列として順序づける(t *testing.T) {
+	reg := domain.NewRuntimeRegistry()
+	if err := reg.Register(domain.EngineSpec{Engine: "rolling", VersionPattern: `^[a-z]+[0-9]+$`}); err != nil {
+		t.Fatal(err)
+	}
+	ref := func(v string) domain.RuntimeRef { return domain.RuntimeRef{Engine: "rolling", Version: v} }
+	cases := []struct {
+		from, to string
+		want     string // "" = allowed
+	}{
+		{"v1", "v2", ""},
+		{"v2", "v10", ""}, // 10 is after 2, not before "2" as text
+		{"v10", "v2", "downgrade"},
+		{"v2", "v1", "downgrade"},
+		{"v2", "v2", "already runs"},
+		{"alpha1", "beta1", ""},
+	}
+	for _, c := range cases {
+		err := reg.CheckUpgradePath(ref(c.from), ref(c.to))
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s -> %s: %v", c.from, c.to, err)
+		case c.want != "" && (!errors.Is(err, domain.ErrUpgradeRefused) || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s -> %s: err = %v, want %q", c.from, c.to, err, c.want)
+		}
+	}
+}
