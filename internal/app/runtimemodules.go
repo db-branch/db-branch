@@ -12,6 +12,7 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/rtserver"
 	"github.com/db-branch/db-branch/internal/infrastructure/runtimegrpc"
 	"github.com/db-branch/db-branch/internal/infrastructure/runtimemodule"
+	"github.com/db-branch/db-branch/internal/infrastructure/runtimestore"
 )
 
 // attachRuntimeModules verifies the runtime modules installed on this node
@@ -19,12 +20,13 @@ import (
 // own OS user, accepts it only if its Describe() equals its signed manifest,
 // and makes it an engine of this node: registered, with its provider and its
 // DBServer. It returns the engines that are loaded, the warnings (a module
-// loaded without a signature, shown by GET /v1/capabilities) and a function
-// that stops the modules.
+// loaded without a signature, shown by GET /v1/capabilities), offer, which makes
+// the builds the modules list installable (call it once the runtime cache is
+// final: it wraps the cache), and a function that stops the modules.
 //
 // A module that fails is logged and not counted as loaded: with the cluster
 // recording it as wanted, this node then refuses the API until it is fixed.
-func attachRuntimeModules(a *App, cfg config.Config, log *slog.Logger) (engines, warnings []string, stop func()) {
+func attachRuntimeModules(a *App, cfg config.Config, log *slog.Logger) (engines, warnings []string, offer, stop func()) {
 	var stops []func()
 	stop = func() {
 		for _, s := range stops {
@@ -32,7 +34,7 @@ func attachRuntimeModules(a *App, cfg config.Config, log *slog.Logger) (engines,
 		}
 	}
 	catalogs := map[domain.Engine]modcatalog.Source{}
-	defer func() { offerModuleRuntimes(a, catalogs) }()
+	offer = func() { offerModuleRuntimes(a, catalogs) }
 	loader := runtimemodule.Loader{AllowUnsigned: cfg.AllowUnsignedRuntimes}
 	for _, r := range loader.LoadAll() {
 		if r.Err != nil {
@@ -63,7 +65,7 @@ func attachRuntimeModules(a *App, cfg config.Config, log *slog.Logger) (engines,
 		}
 		engines = append(engines, r.Engine)
 	}
-	return engines, warnings, stop
+	return engines, warnings, offer, stop
 }
 
 // attachEngine registers the engine m declares and gives it a provider and a
@@ -78,6 +80,12 @@ func attachEngine(a *App, cfg config.Config, m domain.RuntimeManifest, p *runtim
 	}
 	if err := domain.DefaultRuntimes.Register(spec); err != nil {
 		return err
+	}
+	if st, ok := a.Runtimes.Store.(runtimestore.Store); ok && st.RefFixups != nil {
+		// The module checks an unpacked runtime before it counts as installed.
+		st.RefFixups[domain.Engine(m.Engine)] = func(ctx context.Context, ref domain.RuntimeRef, dir string) error {
+			return p.PrepareRuntime(ctx, ref.Version, dir)
+		}
 	}
 	svc, err := a.Branches()
 	if err != nil {

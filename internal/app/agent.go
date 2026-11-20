@@ -87,6 +87,10 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	if err != nil {
 		return err
 	}
+	// The runtime modules come first: the cluster's state names their engines, and a
+	// state that names an engine nobody registered cannot be read.
+	loadedRuntimes, runtimeWarnings, offerRuntimes, stopRuntimes := attachRuntimeModules(a, cfg, log)
+	defer stopRuntimes()
 	if opts.Version != "" {
 		version = opts.Version
 	}
@@ -168,9 +172,14 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 			cache.Fetch = cl.fetchArtifact
 			a.Runtimes.Cache = cache
 		}
+		offerRuntimes() // the cache is final: the modules' builds join the catalog
 		srv.Runtimes = a.Runtimes
 		srv.Cluster = cl
 		go cl.runtimeLoop(ctx, a.Runtimes, ops, log)
+	}
+	if cl == nil {
+		offerRuntimes()
+		srv.Runtimes = a.Runtimes
 	}
 	mods, err := plugin.Load(ModulesDir, log)
 	if err != nil {
@@ -241,8 +250,6 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		if cl != nil {
 			leading = cl.store.IsLeader
 		}
-		loadedRuntimes, runtimeWarnings, stopRuntimes := attachRuntimeModules(a, cfg, log)
-		defer stopRuntimes()
 		srv.RuntimeWarnings = runtimeWarnings
 		mgr := wireModulesAndSettings(ctx, cfg, svc, srv, mods, moduleSettings, loadedNames, loadedRuntimes, nodes, problems, arc, rolled, leading, log)
 		if cl != nil {
