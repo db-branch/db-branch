@@ -53,7 +53,7 @@ func PublicOnlyRedirect(req *http.Request, via []*http.Request) error {
 func NewPublicOnlyClient() *http.Client {
 	dialer := &net.Dialer{Timeout: 30 * time.Second, Control: PublicOnlyControl}
 	return &http.Client{
-		Transport:     &http.Transport{DialContext: dialer.DialContext, ForceAttemptHTTP2: true, TLSHandshakeTimeout: 30 * time.Second, Proxy: nil},
+		Transport:     &http.Transport{DialContext: dialer.DialContext, ForceAttemptHTTP2: true, TLSHandshakeTimeout: 30 * time.Second, ResponseHeaderTimeout: 60 * time.Second, Proxy: nil},
 		CheckRedirect: PublicOnlyRedirect,
 	}
 }

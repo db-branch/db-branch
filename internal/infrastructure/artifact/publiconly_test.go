@@ -73,3 +73,10 @@ func TestSystemResolver_ホスト名のアドレスを返す(t *testing.T) {
 		t.Error("an unresolvable name resolved")
 	}
 }
+
+func TestNewPublicOnlyClient_応答の来ない相手を待ち続けない(t *testing.T) {
+	tr := artifact.NewPublicOnlyClient().Transport.(*http.Transport)
+	if tr.ResponseHeaderTimeout <= 0 || tr.TLSHandshakeTimeout <= 0 || tr.Proxy != nil {
+		t.Errorf("transport = response header %v, tls %v, proxy set %v", tr.ResponseHeaderTimeout, tr.TLSHandshakeTimeout, tr.Proxy != nil)
+	}
+}

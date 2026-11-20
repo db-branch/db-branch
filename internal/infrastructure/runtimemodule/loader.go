@@ -4,6 +4,7 @@
 package runtimemodule
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -22,7 +23,12 @@ import (
 	"github.com/db-branch/db-branch/internal/domain"
 )
 
-const defaultKeysDir = "/etc/db-branch/trusted-keys"
+const (
+	defaultKeysDir   = "/etc/db-branch/trusted-keys"
+	maxManifestBytes = 1 << 20  // 1 MiB
+	maxSigBytes      = 64 << 10 // 64 KiB
+	maxKeyBytes      = 4 << 10  // 4 KiB
+)
 
 var (
 	// ErrUnsigned is returned for a module without a signature, unless unsigned modules are allowed.
@@ -96,11 +102,17 @@ func (l Loader) Load(engine string) (Loaded, error) {
 		return Loaded{}, fmt.Errorf("invalid engine name %q", engine)
 	}
 	dir := filepath.Join(l.RootDir(), engine)
-	if err := l.checkTrust(dir, true, false); err != nil {
-		return Loaded{}, err
+	for _, d := range []string{l.RootDir(), l.TrustedKeysDir(), dir} {
+		if err := l.checkTrustDir(d); err != nil {
+			return Loaded{}, err
+		}
 	}
 	manPath := filepath.Join(dir, "manifest.json")
-	manData, err := l.readTrustedFile(manPath)
+	manData, err := l.readTrustedFile(manPath, maxManifestBytes, ErrUntrusted)
+	if err != nil {
+		return Loaded{}, err
+	}
+	signed, keyID, warning, err := l.verifySignature(engine, manPath+".sig", manData)
 	if err != nil {
 		return Loaded{}, err
 	}
@@ -115,10 +127,6 @@ func (l Loader) Load(engine string) (Loaded, error) {
 		return Loaded{}, err
 	}
 	if err := l.verifyDigest(manifest.Catalog, manifest.CatalogSHA256, false); err != nil {
-		return Loaded{}, err
-	}
-	signed, keyID, warning, err := l.verifySignature(engine, manPath+".sig", manData)
-	if err != nil {
 		return Loaded{}, err
 	}
 	return Loaded{
@@ -138,7 +146,7 @@ func (l Loader) LoadAll() []Result {
 	}
 	var results []Result
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() && e.Type()&fs.ModeSymlink == 0 {
 			continue
 		}
 		loaded, err := l.Load(e.Name())
@@ -157,14 +165,17 @@ func (l Loader) ownerOf(fi fs.FileInfo) (uint32, bool) {
 	return 0, false
 }
 
-func (l Loader) checkTrust(path string, wantDir, wantExec bool) error {
-	fi, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
+func (l Loader) checkTrustInfo(path string, fi fs.FileInfo, wantDir, wantExec bool) error {
 	mode := fi.Mode()
 	if wantDir && !mode.IsDir() || !wantDir && !mode.IsRegular() {
 		return fmt.Errorf("%w: %s has unexpected file type", ErrUntrusted, path)
+	}
+	special := fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky
+	if wantDir {
+		special = fs.ModeSetuid | fs.ModeSticky
+	}
+	if mode&special != 0 {
+		return fmt.Errorf("%w: %s has unsafe mode bits (%s)", ErrUntrusted, path, mode)
 	}
 	if uid, ok := l.ownerOf(fi); !ok || uid != 0 {
 		return fmt.Errorf("%w: %s is not owned by root", ErrUntrusted, path)
@@ -179,31 +190,75 @@ func (l Loader) checkTrust(path string, wantDir, wantExec bool) error {
 	return nil
 }
 
-func (l Loader) readTrustedFile(path string) ([]byte, error) {
-	if err := l.checkTrust(path, false, false); err != nil {
+func (l Loader) openTrusted(path string, wantDir, wantExec bool) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EMLINK) {
+			return nil, fmt.Errorf("%w: %s is a symbolic link: %w", ErrUntrusted, path, err)
+		}
 		return nil, err
 	}
-	return os.ReadFile(path)
+	fi, err := f.Stat()
+	if err == nil {
+		err = l.checkTrustInfo(path, fi, wantDir, wantExec)
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+func (l Loader) checkTrustDir(path string) error {
+	f, err := l.openTrusted(path, true, false)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+func (l Loader) readTrustedFile(path string, maxBytes int64, tooLargeErr error) ([]byte, error) {
+	f, err := l.openTrusted(path, false, false)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err == nil && int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("%w: %s exceeds %d bytes", tooLargeErr, path, maxBytes)
+	}
+	return data, err
 }
 
 func (l Loader) verifyDigest(path, want string, wantExec bool) error {
-	if err := l.checkTrust(path, false, wantExec); err != nil {
+	f, err := l.openTrusted(path, false, wantExec)
+	if err != nil {
 		return err
 	}
-	f, err := os.Open(path)
-	if err == nil {
-		defer f.Close()
-		h := sha256.New()
-		_, err = io.Copy(h, f)
-		if err == nil && hex.EncodeToString(h.Sum(nil)) != want {
-			return fmt.Errorf("%w: %s", ErrDigestMismatch, path)
-		}
+	defer f.Close()
+	h := sha256.New()
+	_, err = io.Copy(h, f)
+	if err == nil && hex.EncodeToString(h.Sum(nil)) != want {
+		return fmt.Errorf("%w: %s", ErrDigestMismatch, path)
 	}
 	return err
 }
 
+func decodeSignature(sigData []byte) (manifestSignature, error) {
+	dec := json.NewDecoder(bytes.NewReader(sigData))
+	dec.DisallowUnknownFields()
+	var sf manifestSignature
+	if err := dec.Decode(&sf); err != nil {
+		return manifestSignature{}, fmt.Errorf("%w: %v", ErrBadSignature, err)
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return manifestSignature{}, fmt.Errorf("%w: trailing data in signature file", ErrBadSignature)
+	}
+	return sf, nil
+}
+
 func (l Loader) verifySignature(engine, sigPath string, manifestData []byte) (bool, string, string, error) {
-	sigData, err := l.readTrustedFile(sigPath)
+	sigData, err := l.readTrustedFile(sigPath, maxSigBytes, ErrBadSignature)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			if !l.AllowUnsigned {
@@ -213,9 +268,9 @@ func (l Loader) verifySignature(engine, sigPath string, manifestData []byte) (bo
 		}
 		return false, "", "", err
 	}
-	var sf manifestSignature
-	if err := json.Unmarshal(sigData, &sf); err != nil {
-		return false, "", "", fmt.Errorf("%w: %v", ErrBadSignature, err)
+	sf, err := decodeSignature(sigData)
+	if err != nil {
+		return false, "", "", err
 	}
 	if !keyIDPattern.MatchString(sf.KeyID) {
 		return false, "", "", fmt.Errorf("%w: invalid key_id %q", ErrBadSignature, sf.KeyID)
@@ -225,9 +280,9 @@ func (l Loader) verifySignature(engine, sigPath string, manifestData []byte) (bo
 		return false, "", "", fmt.Errorf("%w: invalid signature", ErrBadSignature)
 	}
 	keyPath := filepath.Join(l.TrustedKeysDir(), sf.KeyID+".pub")
-	keyData, err := l.readTrustedFile(keyPath)
+	keyData, err := l.readTrustedFile(keyPath, maxKeyBytes, ErrBadSignature)
 	if err != nil {
-		if errors.Is(err, ErrUntrusted) {
+		if errors.Is(err, ErrUntrusted) || errors.Is(err, ErrBadSignature) {
 			return false, "", "", err
 		}
 		return false, "", "", fmt.Errorf("%w: %v", ErrBadSignature, err)

@@ -301,3 +301,129 @@ func TestLoader_既定の場所は設計書どおり(t *testing.T) {
 		t.Errorf("defaults = %q, %q", l.RootDir(), l.TrustedKeysDir())
 	}
 }
+
+func TestLoad_setuidとsetgidとstickyのファイルは拒否する(t *testing.T) {
+	for name, mode := range map[string]os.FileMode{
+		"setuid": os.ModeSetuid | 0o755, "setgid": os.ModeSetgid | 0o755, "sticky": os.ModeSticky | 0o755,
+	} {
+		tr := newTree(t)
+		if err := os.Chmod(tr.binary, mode); err != nil {
+			t.Skipf("cannot set %s here: %v", name, err)
+		}
+		l := tr.loader()
+		l.AllowUnsigned = true
+		if _, err := l.Load("clickhouse"); !errors.Is(err, runtimemodule.ErrUntrusted) {
+			t.Errorf("%s binary: err = %v, want ErrUntrusted", name, err)
+		}
+	}
+}
+
+func TestLoad_署名はマニフェストが指すファイルを開く前に検証する(t *testing.T) {
+	tr := newTree(t)
+	tr.writeManifest(func(m *domain.RuntimeManifest) { m.DisplayName = "Tampered" })
+	if err := os.Remove(tr.binary); err != nil { // nothing the manifest points at can even be read
+		t.Fatal(err)
+	}
+	if _, err := tr.loader().Load("clickhouse"); !errors.Is(err, runtimemodule.ErrBadSignature) {
+		t.Errorf("tampered manifest with a missing binary = %v, want ErrBadSignature first", err)
+	}
+	tr2 := newTree(t)
+	if err := os.Remove(tr2.man + ".sig"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(tr2.binary); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr2.loader().Load("clickhouse"); !errors.Is(err, runtimemodule.ErrUnsigned) {
+		t.Errorf("unsigned with a missing binary = %v, want ErrUnsigned first", err)
+	}
+}
+
+func TestLoad_署名ファイルは厳密に読み_未知の項目や後ろのゴミを許さない(t *testing.T) {
+	tr := newTree(t)
+	good, _ := os.ReadFile(tr.man + ".sig")
+	for name, body := range map[string]string{
+		"未知の項目": strings.Replace(string(good), `{`, `{"extra":1,`, 1),
+		"後ろのゴミ": string(good) + `{"x":1}`,
+		"大きすぎる": string(good) + strings.Repeat(" ", 100<<10),
+	} {
+		write(t, tr.man+".sig", []byte(body), 0o644)
+		l := tr.loader()
+		l.AllowUnsigned = true
+		if _, err := l.Load("clickhouse"); !errors.Is(err, runtimemodule.ErrBadSignature) {
+			t.Errorf("%s: err = %v, want ErrBadSignature", name, err)
+		}
+	}
+}
+
+func TestLoad_鍵ファイルが壊れていたり大きすぎれば拒否する(t *testing.T) {
+	tr := newTree(t)
+	keyFile := filepath.Join(tr.keys, "vendor-2026.pub")
+	for name, body := range map[string]string{
+		"base64ではない": "!!!not base64!!!",
+		"長さが違う":      base64.StdEncoding.EncodeToString([]byte("short")),
+		"大きすぎる":      strings.Repeat("A", 8<<10),
+		"空":          "",
+	} {
+		write(t, keyFile, []byte(body), 0o644)
+		if _, err := tr.loader().Load("clickhouse"); !errors.Is(err, runtimemodule.ErrBadSignature) {
+			t.Errorf("%s: err = %v, want ErrBadSignature", name, err)
+		}
+	}
+}
+
+func TestLoad_大きすぎるマニフェストは読まずに拒否する(t *testing.T) {
+	tr := newTree(t)
+	write(t, tr.man, []byte(strings.Repeat(" ", 2<<20)), 0o644)
+	if _, err := tr.loader().Load("clickhouse"); !errors.Is(err, runtimemodule.ErrUntrusted) {
+		t.Errorf("a 2 MiB manifest = %v, want ErrUntrusted", err)
+	}
+}
+
+func TestLoad_親のディレクトリと鍵のディレクトリも安全でなければ拒否する(t *testing.T) {
+	cases := map[string]func(tr *tree){
+		"runtimesのルートが誰でも書ける": func(tr *tree) { _ = os.Chmod(tr.root, 0o777) },
+		"鍵のディレクトリが誰でも書ける":     func(tr *tree) { _ = os.Chmod(tr.keys, 0o777) },
+		"エンジンのディレクトリがシンボリックリンク": func(tr *tree) {
+			real := filepath.Join(filepath.Dir(tr.root), "real-clickhouse")
+			_ = os.Rename(filepath.Join(tr.root, "clickhouse"), real)
+			_ = os.Symlink(real, filepath.Join(tr.root, "clickhouse"))
+		},
+	}
+	for name, setup := range cases {
+		tr := newTree(t)
+		setup(tr)
+		if _, err := tr.loader().Load("clickhouse"); !errors.Is(err, runtimemodule.ErrUntrusted) {
+			t.Errorf("%s: err = %v, want ErrUntrusted", name, err)
+		}
+	}
+}
+
+func TestLoad_所有者を問い合わせる既定の経路はroot以外の所有を拒否する(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("everything created here is owned by root")
+	}
+	tr := newTree(t)
+	l := tr.loader()
+	l.Owner = nil // the real file system: these files belong to the user running the test
+	if _, err := l.Load("clickhouse"); !errors.Is(err, runtimemodule.ErrUntrusted) {
+		t.Errorf("files owned by uid %d = %v, want ErrUntrusted", os.Geteuid(), err)
+	}
+}
+
+func TestLoadAll_シンボリックリンクのエンジンディレクトリは黙って飛ばさず拒否として報告する(t *testing.T) {
+	tr := newTree(t)
+	if err := os.Symlink(filepath.Join(tr.root, "clickhouse"), filepath.Join(tr.root, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	var evil *runtimemodule.Result
+	for _, r := range tr.loader().LoadAll() {
+		if r.Engine == "evil" {
+			r := r
+			evil = &r
+		}
+	}
+	if evil == nil || !errors.Is(evil.Err, runtimemodule.ErrUntrusted) {
+		t.Errorf("symlinked engine directory = %+v", evil)
+	}
+}

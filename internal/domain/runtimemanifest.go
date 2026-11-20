@@ -61,7 +61,18 @@ type ManifestSystemd struct {
 	TimeoutStopSec int    `json:"timeout_stop_sec"`
 }
 
-var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var (
+	sha256Hex    = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	protocolName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+)
+
+// maxTimeoutStopSec bounds how long a module may ask the core to wait for a stop (a day).
+const maxTimeoutStopSec = 86400
+
+// printableToken: 1..max printable characters, no whitespace.
+func printableToken(s string, max int) bool {
+	return s != "" && len(s) <= max && !hasControl(s) && !strings.ContainsAny(s, " \t")
+}
 
 // ParseManifest reads a manifest strictly: unknown fields, trailing data, an
 // engine of the core's own (mysql, postgres), another engine's user or
@@ -104,6 +115,20 @@ func ParseManifestIn(root string, data []byte) (RuntimeManifest, error) {
 	if m.DisplayName == "" || len(m.DisplayName) > 64 || hasControl(m.DisplayName) {
 		return bad("display_name must be 1 to 64 printable characters")
 	}
+	if !printableToken(m.ModuleVersion, 64) {
+		return bad("module_version must be 1 to 64 printable characters without spaces")
+	}
+	if len(m.Protocols) == 0 {
+		return bad("protocols must name at least the primary port")
+	}
+	for _, p := range m.Protocols {
+		if !protocolName.MatchString(p.Name) {
+			return bad("protocol name %q must match %s", p.Name, protocolName)
+		}
+	}
+	if m.Systemd.TimeoutStopSec > maxTimeoutStopSec {
+		return bad("timeout_stop_sec %d is above %d", m.Systemd.TimeoutStopSec, maxTimeoutStopSec)
+	}
 	user := RuntimeUserPrefix + m.Engine
 	if len(user) > maxUserName {
 		return bad("engine %q is too long for its service user %q (at most %d characters)", m.Engine, user, maxUserName)
@@ -114,7 +139,7 @@ func ParseManifestIn(root string, data []byte) (RuntimeManifest, error) {
 	m.RunAsUser = user
 	for name, p := range map[string]string{"binary": m.Binary, "catalog": m.Catalog} {
 		if !underEngineDir(root, m.Engine, p) {
-			return bad("%s %q must be a clean absolute path inside %s/%s/", name, p, root, m.Engine)
+			return bad("%s %q must be a clean absolute path of a file directly in %s/%s/", name, p, root, m.Engine)
 		}
 	}
 	for name, d := range map[string]string{"binary_sha256": m.BinarySHA256, "catalog_sha256": m.CatalogSHA256} {
@@ -136,10 +161,12 @@ func ParseManifestIn(root string, data []byte) (RuntimeManifest, error) {
 	return m, nil
 }
 
+// underEngineDir: p is a file directly inside the engine's directory (a
+// subdirectory would be one more place the loader had to vouch for).
 func underEngineDir(root, engine, p string) bool {
 	dir := root + "/" + engine + "/"
 	return p == path.Clean(p) && strings.HasPrefix(p, dir) && len(p) > len(dir) &&
-		!hasControl(p) && !strings.ContainsAny(p, " \t")
+		!strings.Contains(p[len(dir):], "/") && !hasControl(p) && !strings.ContainsAny(p, " \t")
 }
 
 // Spec is the declaration the manifest makes, for the registry.

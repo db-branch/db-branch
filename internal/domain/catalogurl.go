@@ -17,15 +17,21 @@ var ErrUnsafeURL = errors.New("unsafe URL")
 // Resolver looks up the addresses of a host name.
 type Resolver func(ctx context.Context, host string) ([]net.IP, error)
 
-// blockedNets are the addresses that are not on the public internet, or that
-// can embed one that is not (IPv4 inside IPv6 forms).
-var blockedNets = mustCIDRs(
+// blockedV4 are the IPv4 ranges that are not on the public internet.
+var blockedV4 = mustCIDRs(
 	"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
 	"192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24",
 	"203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
-	"::/128", "::1/128", "64:ff9b::/96", "64:ff9b:1::/48", "100::/64", "2001::/32", "2001:db8::/32", "2002::/16",
-	"fc00::/7", "fe80::/10", "ff00::/8",
 )
+
+// publicV6 is the IPv6 space assigned for global unicast (2000::/3). Everything
+// else (loopback, link-local, unique-local, IPv4-compatible and -translated
+// forms, multicast, reserved space) is not public by construction.
+var publicV6 = mustCIDRs("2000::/3")
+
+// blockedV6 are the special-purpose ranges inside 2000::/3: embedded IPv4
+// (NAT64, 6to4, Teredo), benchmarking, documentation and the ORCHID ranges.
+var blockedV6 = mustCIDRs("2001::/32", "2001:2::/48", "2001:10::/28", "2001:20::/28", "2001:db8::/32", "2002::/16", "3fff::/20")
 
 func mustCIDRs(list ...string) []*net.IPNet {
 	out := make([]*net.IPNet, len(list))
@@ -39,20 +45,25 @@ func mustCIDRs(list ...string) []*net.IPNet {
 	return out
 }
 
-// IsPublicIP reports whether ip is an address on the public internet.
-func IsPublicIP(ip net.IP) bool {
-	if ip == nil {
-		return false
-	}
-	if v4 := ip.To4(); v4 != nil { // also IPv4 written as ::ffff:a.b.c.d
-		ip = v4
-	}
-	for _, n := range blockedNets {
+func inAny(ip net.IP, nets []*net.IPNet) bool {
+	for _, n := range nets {
 		if n.Contains(ip) {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
+}
+
+// IsPublicIP reports whether ip is an address on the public internet. It is an
+// allow-list for IPv6 (global unicast only) so a form nobody thought of is refused.
+func IsPublicIP(ip net.IP) bool {
+	if v4 := ip.To4(); v4 != nil { // also IPv4 written as ::ffff:a.b.c.d
+		return !inAny(v4, blockedV4)
+	}
+	if len(ip) != net.IPv6len {
+		return false
+	}
+	return inAny(ip, publicV6) && !inAny(ip, blockedV6)
 }
 
 // ValidateCatalogURL accepts only an https URL, without credentials, whose host
@@ -93,6 +104,9 @@ func ValidateCatalogURL(ctx context.Context, raw string, resolve Resolver) error
 			return bad("%s is not a public address", ip)
 		}
 		return nil
+	}
+	if resolve == nil {
+		return bad("cannot resolve %s: no resolver", host)
 	}
 	ips, err := resolve(ctx, host)
 	if err != nil {

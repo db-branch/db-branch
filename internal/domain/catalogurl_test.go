@@ -19,6 +19,8 @@ func TestIsPublicIP_公開アドレスだけを真にする(t *testing.T) {
 	private := []string{
 		"127.0.0.1", "127.255.255.254", "::1", "10.0.0.1", "10.255.255.255", "172.16.0.1", "172.31.255.255", "192.168.1.1",
 		"169.254.169.254", "169.254.0.1", "fe80::1", "fc00::1", "fd12:3456::1", "0.0.0.0", "0.1.2.3", "::", "224.0.0.1", "ff02::1",
+		"::127.0.0.1", "::169.254.169.254", "::10.0.0.1", "::ffff:0:169.254.169.254", "fec0::1", "fe80::1%eth0", "2001:2::1", "2001:10::1",
+		"3fff::1", "4000::1", "8000::1", "e000::1", "1::1",
 		"100.64.0.1", "100.127.255.255", "192.0.0.1", "192.0.2.1", "198.18.0.1", "198.19.255.255", "198.51.100.1", "203.0.113.1",
 		"240.0.0.1", "255.255.255.255", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:169.254.169.254", "64:ff9b::7f00:1", "2001:db8::1",
 	}
@@ -106,5 +108,22 @@ func TestValidateCatalogURL_名前の解決結果が一つでも非公開なら�
 	}
 	if err := domain.ValidateCatalogURL(ctx, "https://2130706433/x", fixedResolver("127.0.0.1")); !errors.Is(err, domain.ErrUnsafeURL) {
 		t.Errorf("a decimal host that resolves to loopback = %v", err)
+	}
+}
+
+func TestIsPublicIP_長さが4でも16でもないアドレスは公開ではない(t *testing.T) {
+	for _, ip := range []net.IP{{}, {1}, {8, 8, 8}, make(net.IP, 5), make(net.IP, 17)} {
+		if domain.IsPublicIP(ip) {
+			t.Errorf("%v (%d bytes) was taken as public", ip, len(ip))
+		}
+	}
+}
+
+func TestValidateCatalogURL_リゾルバがなければ名前は解決できないとして拒否しpanicしない(t *testing.T) {
+	if err := domain.ValidateCatalogURL(context.Background(), "https://downloads.example.com/x", nil); !errors.Is(err, domain.ErrUnsafeURL) {
+		t.Errorf("err = %v, want ErrUnsafeURL", err)
+	}
+	if err := domain.ValidateCatalogURL(context.Background(), "https://93.184.216.34/x", nil); err != nil {
+		t.Errorf("an address literal needs no resolver: %v", err)
 	}
 }
