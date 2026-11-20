@@ -241,7 +241,8 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		if cl != nil {
 			leading = cl.store.IsLeader
 		}
-		loadedRuntimes, runtimeWarnings := checkRuntimeModules(cfg, log)
+		loadedRuntimes, runtimeWarnings, stopRuntimes := attachRuntimeModules(a, cfg, log)
+		defer stopRuntimes()
 		srv.RuntimeWarnings = runtimeWarnings
 		mgr := wireModulesAndSettings(ctx, cfg, svc, srv, mods, moduleSettings, loadedNames, loadedRuntimes, nodes, problems, arc, rolled, leading, log)
 		if cl != nil {
