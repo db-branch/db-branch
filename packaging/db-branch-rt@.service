@@ -11,4 +11,6 @@ Wants=network-online.target
 Type=simple
 ExecStart=/bin/false
 Slice=db-branch.slice
+# The agent's socket and configuration are not for a database server.
+InaccessiblePaths=/run/db-branch /etc/db-branch
 Restart=on-abnormal

@@ -23,12 +23,15 @@ const (
 	DefaultUnitDir = "/run/systemd/system"
 	// StateRoot holds each instance's configuration and logs.
 	StateRoot = "/var/lib/db-branch/instances"
+	// DefaultRuntimeRoot holds unpacked external database runtimes.
+	DefaultRuntimeRoot = "/var/lib/db-branch/runtimes"
 	// RunRoot holds each engine's instances' sockets and pid files: RunRoot/<engine>/<id>.
 	RunRoot = "/run/db-branch-rt"
 
 	defaultNoFile = 65535
 	minNoFile     = 1024
 	maxNoFile     = 1048576
+	maxMemoryMB   = 1 << 20
 	maxCPUQuota   = 1000000
 )
 
@@ -37,7 +40,6 @@ var ErrInvalidUnit = errors.New("invalid runtime unit")
 
 var (
 	idPattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-	enginePattern   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
 	safePathPattern = regexp.MustCompile(`^/[A-Za-z0-9._/+-]+$`)
 
 	envEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, `%`, `%%`)
@@ -50,6 +52,10 @@ type Unit struct {
 	Plan                      domain.LaunchPlan
 	DataDir, StateDir, RunDir string
 	Limits                    domain.ResourceLimits
+	// StateRoot and RuntimeRoot are where the agent keeps instances' state
+	// and unpacked runtimes (the data directory's instances and runtimes);
+	// empty: the defaults below.
+	StateRoot, RuntimeRoot string
 }
 
 // UnitName is the systemd unit of an instance.
@@ -73,6 +79,8 @@ func DropIn(u Unit) (string, error) {
 	b.WriteString("ProtectSystem=strict\n")
 	b.WriteString("ProtectHome=yes\n")
 	b.WriteString("PrivateTmp=yes\n")
+	fmt.Fprintf(&b, "RuntimeDirectory=db-branch-rt/%s/%s\n", u.Engine, u.ID)
+	b.WriteString("RuntimeDirectoryMode=0750\n")
 	b.WriteString("InaccessiblePaths=/run/db-branch /etc/db-branch\n")
 	fmt.Fprintf(&b, "ReadWritePaths=%s %s %s\n", u.DataDir, u.StateDir, u.RunDir)
 	if u.Plan.ServiceType != "" {
@@ -96,7 +104,7 @@ func DropIn(u Unit) (string, error) {
 	}
 	fmt.Fprintf(&b, "LimitNOFILE=%d\n", noFile)
 	if u.Limits.MemoryMB > 0 {
-		fmt.Fprintf(&b, "MemoryMax=%dM\n", u.Limits.MemoryMB*2+512)
+		fmt.Fprintf(&b, "MemoryMax=%dM\n", int64(u.Limits.MemoryMB)*2+512)
 	}
 	if u.Limits.CPUQuota > 0 {
 		fmt.Fprintf(&b, "CPUQuota=%d%%\n", u.Limits.CPUQuota)
@@ -127,11 +135,8 @@ func validateUnit(u Unit) error {
 	if !idPattern.MatchString(u.ID) {
 		return bad("id %q must match %s", u.ID, idPattern)
 	}
-	if !enginePattern.MatchString(u.Engine) {
-		return bad("engine %q must match %s", u.Engine, enginePattern)
-	}
-	if e := domain.Engine(u.Engine); e == domain.MySQL || e == domain.Postgres {
-		return bad("engine %q is built into the core", u.Engine)
+	if err := domain.ValidRuntimeModuleEngine(u.Engine); err != nil {
+		return fmt.Errorf("%w: engine %q: %w", ErrInvalidUnit, u.Engine, err)
 	}
 	if wantUser := domain.RuntimeUserPrefix + u.Engine; u.User != wantUser {
 		return bad("user %q: want %q", u.User, wantUser)
@@ -139,20 +144,33 @@ func validateUnit(u Unit) error {
 	if err := u.Plan.Validate(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidUnit, err)
 	}
+	stateRoot := rootOrDefault(u.StateRoot, StateRoot)
+	if !isCleanSafePath(stateRoot) || stateRoot == "/" {
+		return bad("state root %q is not allowed", stateRoot)
+	}
+	runtimeRoot := rootOrDefault(u.RuntimeRoot, DefaultRuntimeRoot)
+	if !isCleanSafePath(runtimeRoot) || runtimeRoot == "/" {
+		return bad("runtime root %q is not allowed", runtimeRoot)
+	}
 	if !isCleanSafePath(u.Plan.Command) {
 		return bad("command %q must be a clean safe absolute path", u.Plan.Command)
+	}
+	runtimePrefix := runtimeRoot + "/" + u.Engine + "/"
+	manifestPrefix := domain.ManifestRoot + "/" + u.Engine + "/"
+	if !strings.HasPrefix(u.Plan.Command, runtimePrefix) && !strings.HasPrefix(u.Plan.Command, manifestPrefix) {
+		return bad("command %q must be under %q or %q", u.Plan.Command, runtimePrefix, manifestPrefix)
 	}
 	if !isCleanSafePath(u.DataDir) || isForbiddenDataDir(u.DataDir) {
 		return bad("data dir %q is not allowed", u.DataDir)
 	}
-	if wantState := StateRoot + "/" + u.ID; u.StateDir != wantState {
+	if wantState := stateRoot + "/" + u.ID; u.StateDir != wantState {
 		return bad("state dir %q: want %q", u.StateDir, wantState)
 	}
 	if wantRun := RunRoot + "/" + u.Engine + "/" + u.ID; u.RunDir != wantRun {
 		return bad("run dir %q: want %q", u.RunDir, wantRun)
 	}
-	if u.Limits.MemoryMB < 0 {
-		return bad("negative memory limit %d", u.Limits.MemoryMB)
+	if u.Limits.MemoryMB < 0 || u.Limits.MemoryMB > maxMemoryMB {
+		return bad("memory limit %d out of range [0, %d]", u.Limits.MemoryMB, maxMemoryMB)
 	}
 	if u.Limits.CPUQuota < 0 || u.Limits.CPUQuota > maxCPUQuota {
 		return bad("cpu quota %d out of range [0, %d]", u.Limits.CPUQuota, maxCPUQuota)
@@ -161,6 +179,13 @@ func validateUnit(u Unit) error {
 		return bad("nofile %d out of range [%d, %d]", u.Limits.NoFile, minNoFile, maxNoFile)
 	}
 	return nil
+}
+
+func rootOrDefault(v, def string) string {
+	if v != "" {
+		return v
+	}
+	return def
 }
 
 func isCleanSafePath(p string) bool {

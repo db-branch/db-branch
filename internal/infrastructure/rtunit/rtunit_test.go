@@ -36,6 +36,8 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+RuntimeDirectory=db-branch-rt/clickhouse/branch-x
+RuntimeDirectoryMode=0750
 InaccessiblePaths=/run/db-branch /etc/db-branch
 ReadWritePaths=/tank/db-branch/branches/x /var/lib/db-branch/instances/branch-x /run/db-branch-rt/clickhouse/branch-x
 Type=notify
@@ -140,11 +142,21 @@ func TestDropIn_ディレクティブを注入できる入力を拒否する(t *
 		"StateDirが他の場所":          func(u *rtunit.Unit) { u.StateDir = "/var/lib/db-branch" },
 		"RunDirが別のエンジン":          func(u *rtunit.Unit) { u.RunDir = "/run/db-branch-rt/other/branch-x" },
 		"RunDirが/run/db-branch":  func(u *rtunit.Unit) { u.RunDir = "/run/db-branch" },
-		"負のメモリ":                  func(u *rtunit.Unit) { u.Limits.MemoryMB = -1 },
-		"負のCPU":                  func(u *rtunit.Unit) { u.Limits.CPUQuota = -5 },
-		"CPUが大きすぎる":              func(u *rtunit.Unit) { u.Limits.CPUQuota = 1000001 },
-		"NoFileが小さすぎる":           func(u *rtunit.Unit) { u.Limits.NoFile = 3 },
-		"NoFileが大きすぎる":           func(u *rtunit.Unit) { u.Limits.NoFile = 1 << 30 },
+		"メモリが大きすぎる(桁あふれ)":        func(u *rtunit.Unit) { u.Limits.MemoryMB = 1 << 40 },
+		"エンジン名がユーザー名の上限を超える": func(u *rtunit.Unit) {
+			u.Engine, u.User, u.RunDir = "abcdefghijklmnopqrst", "db-branch-rt-abcdefghijklmnopqrst", "/run/db-branch-rt/abcdefghijklmnopqrst/branch-x"
+		},
+		"コマンドが/bin/sh":      func(u *rtunit.Unit) { u.Plan.Command = "/bin/sh" },
+		"コマンドが別のエンジンのランタイム": func(u *rtunit.Unit) { u.Plan.Command = "/var/lib/db-branch/runtimes/other/1/bin/x" },
+		"コマンドがランタイムの外":      func(u *rtunit.Unit) { u.Plan.Command = "/usr/bin/python3" },
+		"StateRootが/":       func(u *rtunit.Unit) { u.StateRoot, u.StateDir = "/", "/branch-x" },
+		"StateRootに空白":      func(u *rtunit.Unit) { u.StateRoot, u.StateDir = "/srv/a b", "/srv/a b/branch-x" },
+		"RuntimeRootが相対":    func(u *rtunit.Unit) { u.RuntimeRoot = "runtimes" },
+		"負のメモリ":             func(u *rtunit.Unit) { u.Limits.MemoryMB = -1 },
+		"負のCPU":             func(u *rtunit.Unit) { u.Limits.CPUQuota = -5 },
+		"CPUが大きすぎる":         func(u *rtunit.Unit) { u.Limits.CPUQuota = 1000001 },
+		"NoFileが小さすぎる":      func(u *rtunit.Unit) { u.Limits.NoFile = 3 },
+		"NoFileが大きすぎる":      func(u *rtunit.Unit) { u.Limits.NoFile = 1 << 30 },
 	}
 	for name, mutate := range cases {
 		u := unit()
@@ -239,5 +251,47 @@ func TestWriter_書き込めなければ失敗を返す(t *testing.T) {
 func TestWriter_既定の置き場は_run_systemd_system(t *testing.T) {
 	if rtunit.DefaultUnitDir != "/run/systemd/system" || rtunit.StateRoot != "/var/lib/db-branch/instances" || rtunit.RunRoot != "/run/db-branch-rt" {
 		t.Errorf("defaults = %q %q %q", rtunit.DefaultUnitDir, rtunit.StateRoot, rtunit.RunRoot)
+	}
+}
+
+func TestDropIn_データディレクトリを変えた環境ではStateRootとRuntimeRootを指定できる(t *testing.T) {
+	u := unit()
+	u.StateRoot, u.RuntimeRoot = "/srv/db-branch/instances", "/srv/db-branch/runtimes"
+	u.StateDir = "/srv/db-branch/instances/branch-x"
+	u.Plan.Command = "/srv/db-branch/runtimes/clickhouse/25.3.1/bin/clickhouse"
+	got, err := rtunit.DropIn(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "ReadWritePaths=/tank/db-branch/branches/x /srv/db-branch/instances/branch-x /run/db-branch-rt/clickhouse/branch-x\n") ||
+		!strings.Contains(got, "ExecStart=/srv/db-branch/runtimes/clickhouse/25.3.1/bin/clickhouse ") {
+		t.Errorf("drop-in = %s", got)
+	}
+	// the module's own directory is a place a command may live as well
+	u.Plan.Command = "/usr/lib/db-branch/runtimes/clickhouse/db-branch-rt-clickhouse"
+	if _, err := rtunit.DropIn(u); err != nil {
+		t.Errorf("a command in the module directory = %v", err)
+	}
+}
+
+func TestDropIn_メモリの上限の境界(t *testing.T) {
+	u := unit()
+	u.Limits.MemoryMB = 1 << 20 // 1 TiB
+	if got, err := rtunit.DropIn(u); err != nil || !strings.Contains(got, "MemoryMax=2097664M\n") {
+		t.Errorf("1 TiB: %v %s", err, got)
+	}
+	u.Limits.MemoryMB = 1<<20 + 1
+	if _, err := rtunit.DropIn(u); !errors.Is(err, rtunit.ErrInvalidUnit) {
+		t.Errorf("above 1 TiB = %v", err)
+	}
+}
+
+func TestテンプレートユニットにもInaccessiblePathsがある(t *testing.T) {
+	b, err := os.ReadFile("../../../packaging/db-branch-rt@.service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "InaccessiblePaths=/run/db-branch /etc/db-branch\n") {
+		t.Errorf("the template unit does not hide the agent's socket and configuration:\n%s", b)
 	}
 }
