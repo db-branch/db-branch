@@ -101,3 +101,17 @@ func TestLoad_ポート範囲が逆転していればエラーにする(t *testi
 		t.Fatal("want error")
 	}
 }
+
+func TestLoad_署名のないランタイムモジュールの許可は既定で無効で設定で有効にできる(t *testing.T) {
+	got, err := config.Load(writeFile(t, "pool = \"tank\"\n"))
+	if err != nil || got.AllowUnsignedRuntimes {
+		t.Errorf("default: %+v, %v", got.AllowUnsignedRuntimes, err)
+	}
+	got, err = config.Load(writeFile(t, "allow_unsigned_runtimes = true\n"))
+	if err != nil || !got.AllowUnsignedRuntimes {
+		t.Errorf("enabled: %+v, %v", got.AllowUnsignedRuntimes, err)
+	}
+	if _, err := config.Load(writeFile(t, "allow_unsigned_runtimes = \"yes\"\n")); err == nil {
+		t.Error("a string where a boolean is needed was accepted")
+	}
+}

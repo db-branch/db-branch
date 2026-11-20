@@ -137,3 +137,21 @@ func TestCapsFromFeatures_宣言された機能名を機能フラグにする(t 
 		t.Errorf("round trip = %+v, %v", round, err)
 	}
 }
+
+func TestParseManifestIn_別のルートの下のパスだけを受理する(t *testing.T) {
+	in := manifestJSON(func(s string) string { return strings.ReplaceAll(s, "/usr/lib/db-branch/runtimes", "/opt/rt") })
+	if _, err := domain.ParseManifestIn("/opt/rt", in); err != nil {
+		t.Errorf("under its own root = %v", err)
+	}
+	if _, err := domain.ParseManifestIn("/opt/rt", manifestJSON(nil)); !errors.Is(err, domain.ErrInvalidManifest) {
+		t.Errorf("the default root's paths under /opt/rt = %v", err)
+	}
+	if _, err := domain.ParseManifest(in); !errors.Is(err, domain.ErrInvalidManifest) {
+		t.Errorf("/opt/rt paths under the real root = %v", err)
+	}
+	for _, root := range []string{"", "relative/rt", "/opt/rt/", "/opt/../rt"} {
+		if _, err := domain.ParseManifestIn(root, in); !errors.Is(err, domain.ErrInvalidManifest) {
+			t.Errorf("root %q = %v, want ErrInvalidManifest", root, err)
+		}
+	}
+}

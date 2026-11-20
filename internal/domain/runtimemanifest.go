@@ -68,8 +68,17 @@ var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // directory, or a setting outside the allowed ones are all refused. Nothing a
 // manifest says is trusted until it has passed here.
 func ParseManifest(data []byte) (RuntimeManifest, error) {
+	return ParseManifestIn(ManifestRoot, data)
+}
+
+// ParseManifestIn is ParseManifest for engines installed under root (a clean
+// absolute path) instead of ManifestRoot.
+func ParseManifestIn(root string, data []byte) (RuntimeManifest, error) {
 	bad := func(format string, a ...any) (RuntimeManifest, error) {
 		return RuntimeManifest{}, fmt.Errorf("%w: %s", ErrInvalidManifest, fmt.Sprintf(format, a...))
+	}
+	if !path.IsAbs(root) || root != path.Clean(root) {
+		return bad("root %q must be a clean absolute path", root)
 	}
 	var m RuntimeManifest
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -104,8 +113,8 @@ func ParseManifest(data []byte) (RuntimeManifest, error) {
 	}
 	m.RunAsUser = user
 	for name, p := range map[string]string{"binary": m.Binary, "catalog": m.Catalog} {
-		if !underEngineDir(m.Engine, p) {
-			return bad("%s %q must be a clean absolute path inside %s/%s/", name, p, ManifestRoot, m.Engine)
+		if !underEngineDir(root, m.Engine, p) {
+			return bad("%s %q must be a clean absolute path inside %s/%s/", name, p, root, m.Engine)
 		}
 	}
 	for name, d := range map[string]string{"binary_sha256": m.BinarySHA256, "catalog_sha256": m.CatalogSHA256} {
@@ -127,8 +136,8 @@ func ParseManifest(data []byte) (RuntimeManifest, error) {
 	return m, nil
 }
 
-func underEngineDir(engine, p string) bool {
-	dir := ManifestRoot + "/" + engine + "/"
+func underEngineDir(root, engine, p string) bool {
+	dir := root + "/" + engine + "/"
 	return p == path.Clean(p) && strings.HasPrefix(p, dir) && len(p) > len(dir) &&
 		!hasControl(p) && !strings.ContainsAny(p, " \t")
 }
