@@ -6,8 +6,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/runtimeprovider"
@@ -251,5 +253,48 @@ func TestDump_プロバイダが未設定でもpanicせずErrUnsupportedEngine(t
 	d := srcdump.Dumper{WorkDir: filepath.Join(t.TempDir(), "work")}
 	if _, err := d.Dump(context.Background(), job(domain.MySQL, "app")); !errors.Is(err, domain.ErrUnsupportedEngine) {
 		t.Errorf("Dump = %v, want ErrUnsupportedEngine", err)
+	}
+}
+
+func TestDump_固まったダンプは時間の上限で打ち切り書きかけのファイルを残さない(t *testing.T) {
+	spec, _ := domain.DefaultRuntimes.Spec(domain.MySQL)
+	hang := func(ctx context.Context, _ domain.SourceDumpJob, _ string) error {
+		<-ctx.Done() // a source that accepts the connection and never answers
+		return ctx.Err()
+	}
+	d := srcdump.Dumper{
+		WorkDir:   filepath.Join(t.TempDir(), "work"),
+		Providers: domain.ProviderSet{domain.MySQL: runtimeprovider.New(spec, nil, runtimeprovider.Hooks{DumpSource: hang})},
+		Timeout:   20 * time.Millisecond,
+	}
+	caller, cancel := context.WithTimeout(context.Background(), 3*time.Second) // only so a missing limit fails the test instead of hanging it
+	defer cancel()
+
+	start := time.Now()
+	path, err := d.Dump(caller, job(domain.MySQL, "app"))
+	if !errors.Is(err, context.DeadlineExceeded) || path != "" || time.Since(start) > time.Second {
+		t.Fatalf("Dump = %q, %v after %s, want the 20ms limit to end it", path, err, time.Since(start))
+	}
+	if left, _ := os.ReadDir(d.WorkDir); len(left) != 0 {
+		t.Errorf("left behind: %v", left)
+	}
+}
+
+func TestDump_MySQLの引数は期待どおりの並びと内容で完全に一致する(t *testing.T) {
+	d, r := newDumper(t)
+	path, err := d.Dump(context.Background(), job(domain.MySQL, "app", "billing"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Discard(path)
+
+	want := []string{"--protocol=tcp", "-h", "db.example.com", "-P", "5432", "-u", "dumper",
+		"--single-transaction", "--routines", "--triggers", "--events", "--no-tablespaces", "--set-gtid-purged=OFF",
+		"--add-drop-database", "--databases", "app", "billing"}
+	if !reflect.DeepEqual(r.calls[0].args, want) {
+		t.Errorf("args = %q\nwant   %q", r.calls[0].args, want)
+	}
+	if !reflect.DeepEqual(r.calls[0].env, []string{"LD_LIBRARY_PATH=/rt/lib", "MYSQL_PWD=hunter2"}) {
+		t.Errorf("env = %q", r.calls[0].env)
 	}
 }

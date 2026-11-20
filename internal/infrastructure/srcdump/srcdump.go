@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
 )
@@ -27,7 +28,13 @@ type Dumper struct {
 	// WorkDir holds dumps while they exist.
 	WorkDir   string
 	Providers domain.RuntimeProviders
+	// Timeout bounds one dump (0: 6 hours), so a source that accepts the
+	// connection and never answers cannot hold the base's refresh forever.
+	// (mysqldump has no connect timeout of its own.)
+	Timeout time.Duration
 }
+
+const defaultDumpTimeout = 6 * time.Hour
 
 var _ domain.SourceDumper = Dumper{}
 
@@ -51,6 +58,12 @@ func (d Dumper) Dump(ctx context.Context, job domain.SourceDumpJob) (string, err
 	if err := os.MkdirAll(d.WorkDir, 0o700); err != nil {
 		return "", err
 	}
+	timeout := d.Timeout
+	if timeout <= 0 {
+		timeout = defaultDumpTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	f, err := os.CreateTemp(d.WorkDir, "refresh-*.sql") // 0600
 	if err != nil {
 		return "", err
