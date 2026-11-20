@@ -130,7 +130,7 @@ func postgresDump(ctx context.Context, stream StreamFunc, out io.Writer, job dom
 func mysqlDump(ctx context.Context, stream StreamFunc, out io.Writer, job domain.SourceDumpJob) error {
 	s := job.Source
 	env := withPassword([]string{"LD_LIBRARY_PATH=" + job.Tools.LibDir}, "MYSQL_PWD", s.Password)
-	args := []string{"--protocol=tcp", "-h", s.Host, "-P", strconv.Itoa(s.Port), "-u", s.User, "--connect-timeout=30",
+	args := []string{"--protocol=tcp", "-h", s.Host, "-P", strconv.Itoa(s.Port), "-u", s.User,
 		"--single-transaction", "--routines", "--triggers", "--events", "--no-tablespaces", "--set-gtid-purged=OFF",
 		"--add-drop-database", "--databases"}
 	if err := stream(ctx, env, out, filepath.Join(job.Tools.BinDir, "mysqldump"), append(args, s.Databases...)...); err != nil {

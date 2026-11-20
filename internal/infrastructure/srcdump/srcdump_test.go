@@ -102,6 +102,10 @@ func TestDump_MySQLはmysqldumpに一度で全データベースを渡す(t *tes
 			t.Errorf("args %q lack %q", args, want)
 		}
 	}
+	// mysqldump (5.7, 8.0 and 8.4) refuses --connect-timeout: "unknown variable"
+	if strings.Contains(args, "connect-timeout") {
+		t.Errorf("args %q contain an option mysqldump does not know", args)
+	}
 	if got := strings.Join(r.calls[0].env, " "); !strings.Contains(got, "MYSQL_PWD=hunter2") {
 		t.Errorf("env = %q", got)
 	}
