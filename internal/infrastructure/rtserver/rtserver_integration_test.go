@@ -1,0 +1,180 @@
+//go:build integration
+
+package rtserver_test
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"os/user"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/infrastructure/execx"
+	"github.com/db-branch/db-branch/internal/infrastructure/rtserver"
+	"github.com/db-branch/db-branch/internal/infrastructure/rtunit"
+	"github.com/db-branch/db-branch/internal/infrastructure/runtimegrpc"
+)
+
+// Runs the reference module test/fakeruntime (built for linux, path in
+// DBB_FAKERUNTIME) through the real thing: its own OS user, the
+// db-branch-rt@ template unit with a generated drop-in, systemd and the gRPC
+// control plane. Needs root on a node with db-branch installed (the template
+// unit); it leaves nothing behind. Run with sudo on the dev VM.
+func TestServer_参照モジュールをsystemdで実際に動かす(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root")
+	}
+	src := os.Getenv("DBB_FAKERUNTIME")
+	if src == "" {
+		t.Skip("DBB_FAKERUNTIME names the linux build of test/fakeruntime")
+	}
+	const engine, name = "fakedb", "db-branch-rt-fakedb"
+	run := func(cmd string, args ...string) {
+		t.Helper()
+		if out, err := exec.Command(cmd, args...).CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %v\n%s", cmd, args, err, out)
+		}
+	}
+	run("useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", name)
+	moduleDir := "/usr/lib/db-branch/runtimes/" + engine
+	dataDir := "/srv/rtserver-it/data"
+	id := "rtit-1"
+	t.Cleanup(func() {
+		_ = exec.Command("systemctl", "stop", rtunit.UnitName(id)).Run()
+		_ = exec.Command("systemctl", "reset-failed", rtunit.UnitName(id)).Run()
+		_ = os.RemoveAll("/etc/systemd/system/" + rtunit.UnitName(id) + ".d")
+		_ = os.RemoveAll("/run/systemd/system/" + rtunit.UnitName(id) + ".d")
+		_ = exec.Command("systemctl", "daemon-reload").Run()
+		_ = os.RemoveAll(moduleDir)
+		_ = os.RemoveAll("/srv/rtserver-it")
+		_ = os.RemoveAll(rtunit.StateRoot + "/" + id)
+		_ = os.RemoveAll(rtunit.RunRoot + "/" + engine)
+		_ = exec.Command("userdel", name).Run()
+	})
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := moduleDir + "/" + name
+	run("install", "-m", "0755", "-o", "root", "-g", "root", src, bin)
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	m := domain.RuntimeManifest{
+		Engine: engine, DisplayName: "FakeDB", RunAsUser: name, Binary: bin,
+		Protocols: []domain.ManifestPort{{Name: "sql", Primary: true}}, Capabilities: map[string]bool{"query": true},
+	}
+	cmd, err := runtimegrpc.Command(m, runtimegrpc.SystemUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prov, stop, err := runtimegrpc.Start(cmd, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+
+	srv := &rtserver.Server{
+		Engine: m.Spec(), Provider: prov, Run: execx.Runner{}, Units: rtunit.Writer{Dir: "/run/systemd/system"}, User: name,
+		Mkdir: func(p string) error { return os.MkdirAll(p, 0o750) },
+		Chown: func(u, p string) error {
+			usr, err := user.Lookup(u)
+			if err != nil {
+				return err
+			}
+			uid, _ := strconv.Atoi(usr.Uid)
+			gid, _ := strconv.Atoi(usr.Gid)
+			return os.Chown(p, uid, gid)
+		},
+		StateRoot: rtunit.StateRoot, RuntimeRoot: "/var/lib/db-branch/runtimes", Bind: "127.0.0.1",
+		StartTimeout: 30 * time.Second, PollInterval: 200 * time.Millisecond,
+	}
+	ctx := context.Background()
+	s := domain.Server{ID: id, Runtime: domain.RuntimeRef{Engine: engine, Version: "1.0"}, DataDir: dataDir, Port: 38999}
+
+	if err := srv.Initialize(ctx, s); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if err := srv.CreateUser(ctx, s, "app", "pw"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := srv.Start(ctx, s); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if ok, _ := srv.Running(ctx, s); !ok {
+		t.Fatal("not running after Start")
+	}
+	// The server answers, as the engine's own user, in the unit's sandbox.
+	if got := ask(t, "127.0.0.1:38999", "hello"); got != "OK hello" {
+		t.Fatalf("answer = %q", got)
+	}
+	if out, _ := exec.Command("systemctl", "show", "--property=User", "--value", rtunit.UnitName(id)).Output(); string(out) != name+"\n" {
+		t.Fatalf("unit user = %q", out)
+	}
+	if a := srv.Admin(s); a.Port != 38999 || a.Engine != engine {
+		t.Fatalf("admin = %+v", a)
+	}
+
+	if err := srv.Stop(ctx, s, domain.StopClean); err != nil {
+		t.Fatalf("clean stop: %v", err)
+	}
+	if ok, _ := srv.Running(ctx, s); ok {
+		t.Fatal("running after Stop")
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "clean")); err != nil {
+		t.Fatal("the server left no clean marker")
+	}
+
+	// A killed server is not a clean shutdown.
+	if err := srv.Start(ctx, s); err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	if err := srv.Stop(ctx, s, domain.StopImmediate); err != nil {
+		t.Fatalf("immediate stop: %v", err)
+	}
+	if err := prov.VerifyCleanShutdown(ctx, srv.Instance(s)); !errors.Is(err, domain.ErrUncleanShutdown) {
+		t.Fatalf("a killed server must be unclean, got %v", err)
+	}
+
+	if err := srv.Remove(ctx, s); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Stat("/run/systemd/system/" + rtunit.UnitName(id) + ".d"); err == nil {
+		t.Fatal("the drop-in is still there")
+	}
+	t.Logf("fakedb ran under %s through %s", name, rtunit.UnitName(id))
+}
+
+func ask(t *testing.T, addr, line string) string {
+	t.Helper()
+	c, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.WriteString(c, line+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := bufio.NewReader(c).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprint(trim(got))
+}
+
+func trim(s string) string {
+	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
+		s = s[:len(s)-1]
+	}
+	return s
+}
