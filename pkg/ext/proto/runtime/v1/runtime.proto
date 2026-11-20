@@ -1,0 +1,310 @@
+// The control plane between the db-branch core and an external runtime
+// module (a database engine in its own process, run as db-branch-rt-<engine>).
+// It mirrors domain.RuntimeProvider. Add fields only at new numbers and never
+// reuse one, so cores and modules of different versions keep working.
+//
+// Errors use gRPC status codes:
+//   UNIMPLEMENTED       the engine does not offer the feature (the core's ErrFeatureNotSupported)
+//   FAILED_PRECONDITION VerifyCleanShutdown only: the last stop was not clean
+//   anything else       a plain failure, its message shown to the operator
+syntax = "proto3";
+
+package dbbranch.runtime.v1;
+
+option go_package = "github.com/db-branch/db-branch/pkg/ext/proto/runtime/v1;runtimev1";
+
+service Runtime {
+  rpc Describe(DescribeRequest) returns (EngineSpec);
+  rpc Catalog(CatalogRequest) returns (CatalogResponse);
+  rpc PrepareRuntime(PrepareRuntimeRequest) returns (Empty);
+
+  rpc Initialize(InstanceRequest) returns (Empty);
+  rpc PrepareClone(InstanceRequest) returns (Empty);
+  rpc PrepareStart(InstanceRequest) returns (LaunchPlan);
+  rpc Health(InstanceRequest) returns (HealthResponse);
+  rpc Quiesce(QuiesceRequest) returns (Empty);
+  rpc VerifyCleanShutdown(InstanceRequest) returns (Empty);
+  rpc RemoveInstance(InstanceRequest) returns (Empty);
+
+  rpc CreateUser(CreateUserRequest) returns (Empty);
+  rpc ExecAs(ExecAsRequest) returns (Empty);
+  rpc AdminAccess(InstanceRequest) returns (AdminAccessInfo);
+  rpc FormatDSN(FormatDSNRequest) returns (FormatDSNResponse);
+  rpc Query(QueryRequest) returns (QueryResponse);
+  rpc TailLog(TailLogRequest) returns (TailLogResponse);
+
+  rpc PreFreeze(InstanceRequest) returns (FreezeToken);
+  rpc PostFreeze(PostFreezeRequest) returns (Empty);
+  rpc UpdateStats(InstanceRequest) returns (Empty);
+  rpc CheckUpgradePath(CheckUpgradePathRequest) returns (Empty);
+  rpc CheckUpgrade(CheckUpgradeRequest) returns (UpgradePlan);
+  rpc StartUpgraded(StartUpgradedRequest) returns (StartUpgradedResponse);
+  rpc DumpSource(DumpSourceRequest) returns (Empty);
+  rpc Load(LoadRequest) returns (Empty);
+  rpc InstanceMetrics(InstanceRequest) returns (MetricsResponse);
+}
+
+message Empty {}
+
+message DescribeRequest {}
+
+message ProtocolPort {
+  string name = 1;
+  bool primary = 2;
+}
+
+message Capabilities {
+  bool query = 1;
+  bool checkpoints = 2;
+  bool live_freeze = 3;
+  bool upgrade = 4;
+  bool source_dump = 5;
+  bool branch_merge = 6;
+  bool history_record = 7;
+  bool update_stats = 8;
+  bool instance_metrics = 9;
+}
+
+message EngineSpec {
+  string engine = 1;
+  string display_name = 2;
+  string version_pattern = 3;
+  bool collation_bound = 4;
+  string run_as_user = 5;
+  map<string, string> zfs_props = 6;
+  repeated ProtocolPort protocols = 7;
+  Capabilities capabilities = 8;
+}
+
+message CatalogRequest {}
+
+message CatalogEntry {
+  string version = 1;
+  string platform = 2;
+  string url = 3;
+  string sha256 = 4;
+  int64 size = 5;
+}
+
+message CatalogResponse {
+  repeated CatalogEntry entries = 1;
+}
+
+message PrepareRuntimeRequest {
+  string version = 1;
+  string staging_dir = 2;
+}
+
+message ResourceLimits {
+  int32 memory_mb = 1;
+  int32 max_connections = 2;
+  int32 no_file = 3;
+  int32 cpu_quota = 4;
+}
+
+message InstanceSpec {
+  string id = 1;
+  string engine = 2;
+  string version = 3;
+  string runtime_dir = 4;
+  string data_dir = 5;
+  string state_dir = 6;
+  string run_dir = 7;
+  string bind = 8;
+  map<string, int32> ports = 9;
+  ResourceLimits limits = 10;
+  bool maintenance = 11;
+  bool legacy_auth = 12;
+  repeated string extra = 13;
+}
+
+message InstanceRequest {
+  InstanceSpec instance = 1;
+}
+
+message LaunchPlan {
+  string command = 1;
+  repeated string args = 2;
+  map<string, string> env = 3;
+  string service_type = 4;
+  string kill_signal = 5;
+  int32 timeout_stop_sec = 6;
+  string kill_mode = 7;
+  string notify_access = 8;
+}
+
+enum HealthState {
+  HEALTH_STATE_STOPPED = 0;
+  HEALTH_STATE_STARTING = 1;
+  HEALTH_STATE_READY = 2;
+}
+
+message HealthResponse {
+  HealthState state = 1;
+}
+
+enum StopMode {
+  STOP_MODE_CLEAN = 0;
+  STOP_MODE_IMMEDIATE = 1;
+}
+
+message QuiesceRequest {
+  InstanceSpec instance = 1;
+  StopMode mode = 2;
+}
+
+message CreateUserRequest {
+  InstanceSpec instance = 1;
+  string user = 2;
+  string password = 3;
+}
+
+message ExecAsRequest {
+  InstanceSpec instance = 1;
+  string user = 2;
+  string password = 3;
+  string sql = 4;
+}
+
+message Endpoint {
+  string host = 1;
+  int32 port = 2;
+  string socket = 3;
+}
+
+message AdminAccessInfo {
+  string engine = 1;
+  string host = 2;
+  string socket = 3;
+  int32 port = 4;
+  string user = 5;
+  string bin_dir = 6;
+  string lib_dir = 7;
+  map<string, Endpoint> endpoints = 8;
+  map<string, string> env = 9;
+}
+
+message FormatDSNRequest {
+  InstanceSpec instance = 1;
+  string host = 2;
+  string user = 3;
+  string password = 4;
+}
+
+message FormatDSNResponse {
+  string dsn = 1;
+}
+
+message QueryRequest {
+  InstanceSpec instance = 1;
+  string host = 2;
+  string user = 3;
+  string password = 4;
+  string sql = 5;
+  int32 max_rows = 6;
+}
+
+// A cell is NULL when is_null is set.
+message Cell {
+  string value = 1;
+  bool is_null = 2;
+}
+
+message Row {
+  repeated Cell cells = 1;
+}
+
+message QueryResponse {
+  repeated string columns = 1;
+  repeated Row rows = 2;
+  bool truncated = 3;
+  // has_affected tells "0 rows affected" from "no count".
+  bool has_affected = 4;
+  int64 affected = 5;
+  int64 millis = 6;
+}
+
+message TailLogRequest {
+  InstanceSpec instance = 1;
+  int32 lines = 2;
+}
+
+message TailLogResponse {
+  string text = 1;
+}
+
+message FreezeToken {
+  string data = 1;
+}
+
+message PostFreezeRequest {
+  InstanceSpec instance = 1;
+  FreezeToken token = 2;
+}
+
+message CheckUpgradePathRequest {
+  string from_version = 1;
+  string to_version = 2;
+}
+
+message Login {
+  string user = 1;
+  string password = 2;
+}
+
+message Finding {
+  string level = 1;
+  string code = 2;
+  string message = 3;
+}
+
+message CheckUpgradeRequest {
+  InstanceSpec instance = 1;
+  string to_version = 2;
+  Login login = 3;
+}
+
+message UpgradePlan {
+  repeated Finding findings = 1;
+  bool legacy_auth = 2;
+}
+
+message StartUpgradedRequest {
+  InstanceSpec instance = 1;
+  Login login = 2;
+}
+
+message StartUpgradedResponse {
+  LaunchPlan plan = 1;
+  repeated Finding findings = 2;
+  string excerpt = 3;
+}
+
+message RefreshSource {
+  string host = 1;
+  int32 port = 2;
+  string user = 3;
+  string password = 4;
+  repeated string databases = 5;
+}
+
+message DumpSourceRequest {
+  AdminAccessInfo tools = 1;
+  RefreshSource source = 2;
+  string out_path = 3;
+}
+
+message LoadRequest {
+  InstanceSpec instance = 1;
+  string dump_path = 2;
+}
+
+message MetricSample {
+  string name = 1;
+  map<string, string> labels = 2;
+  double value = 3;
+}
+
+message MetricsResponse {
+  repeated MetricSample samples = 1;
+}

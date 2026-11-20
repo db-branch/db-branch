@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -196,4 +198,36 @@ func CapsFromFeatures(f map[string]bool) (RuntimeCaps, error) {
 		SourceDump: f["source_dump"], BranchMerge: f["branch_merge"], HistoryRecord: f["history_record"],
 		UpdateStats: f["update_stats"], InstanceMetrics: f["instance_metrics"],
 	}, nil
+}
+
+// CheckDescribe refuses a module whose Describe() answer differs from its
+// signed manifest: the manifest is what the operator's signature covers, so a
+// module must not widen it at run time (another user, more capabilities, other
+// ports). VersionPattern is not in the manifest and is not compared.
+func (m RuntimeManifest) CheckDescribe(d EngineSpec) error {
+	want := m.Spec()
+	diff := func(field string) error {
+		return fmt.Errorf("%w: Describe() differs from the manifest in %s", ErrInvalidManifest, field)
+	}
+	switch {
+	case want.Engine != d.Engine:
+		return diff("engine")
+	case want.DisplayName != d.DisplayName:
+		return diff("display_name")
+	case want.CollationBound != d.CollationBound:
+		return diff("collation_bound")
+	case want.RunAsUser != d.RunAsUser:
+		return diff("run_as_user")
+	case !sameProps(want.ZFSProps, d.ZFSProps):
+		return diff("zfs_props")
+	case !slices.Equal(want.Protocols, d.Protocols):
+		return diff("protocols")
+	case want.Capabilities != d.Capabilities:
+		return diff("capabilities")
+	}
+	return nil
+}
+
+func sameProps(a, b map[string]string) bool {
+	return maps.Equal(a, b)
 }

@@ -39,7 +39,8 @@ vet:
 
 # Fails if any package under internal/ is below $(COVER_MIN)% coverage.
 # internal/app is the composition root (like cmd/): `make integration` exercises it.
-COVER_PKGS = $(shell go list ./internal/... ./pkg/... | grep -v '/internal/app$$')
+# pkg/ext/proto holds generated code (make proto); the packages that use it test its behavior.
+COVER_PKGS = $(shell go list ./internal/... ./pkg/... | grep -v -e '/internal/app$$' -e '/pkg/ext/proto/')
 cover:
 	@go test -cover $(COVER_PKGS) | tee /dev/stderr | awk -v min=$(COVER_MIN) ' \
 		/coverage:/ { for (i = 1; i <= NF; i++) if ($$i == "coverage:") { pct = $$(i+1); sub("%", "", pct); \
@@ -52,6 +53,12 @@ cover:
 DB_BRANCH_TEST_POOL ?= tank
 integration:
 	DB_BRANCH_TEST_POOL=$(DB_BRANCH_TEST_POOL) go test -count=1 -v -tags integration ./internal/infrastructure/zfs/ ./test/integration/
+
+# Regenerates pkg/ext/proto/**/*.pb.go. Needs protoc and, in $(GOPATH)/bin,
+# protoc-gen-go (google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12) and
+# protoc-gen-go-grpc (google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2).
+proto:
+	cd pkg/ext/proto/runtime/v1 && PATH="$$PATH:$$(go env GOPATH)/bin" protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative runtime.proto
 
 deb: web build
 	@mkdir -p dist
