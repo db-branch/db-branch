@@ -12,7 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/runtimemodule"
@@ -425,5 +427,34 @@ func TestLoadAll_シンボリックリンクのエンジンディレクトリは
 	}
 	if evil == nil || !errors.Is(evil.Err, runtimemodule.ErrUntrusted) {
 		t.Errorf("symlinked engine directory = %+v", evil)
+	}
+}
+
+func TestLoad_FIFOが置かれても開いたまま固まらず拒否する(t *testing.T) {
+	for name, target := range map[string]func(tr *tree) string{
+		"manifest.json":     func(tr *tree) string { return tr.man },
+		"manifest.json.sig": func(tr *tree) string { return tr.man + ".sig" },
+		"binary":            func(tr *tree) string { return tr.binary },
+		"catalog":           func(tr *tree) string { return tr.catalog },
+		"鍵ファイル":             func(tr *tree) string { return filepath.Join(tr.keys, "vendor-2026.pub") },
+	} {
+		tr := newTree(t)
+		path := target(tr)
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Mkfifo(path, 0o755); err != nil {
+			t.Skipf("no FIFOs here: %v", err)
+		}
+		done := make(chan error, 1)
+		go func() { _, err := tr.loader().Load("clickhouse"); done <- err }()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Errorf("%s as a FIFO was accepted", name)
+			}
+		case <-time.After(3 * time.Second):
+			t.Errorf("%s as a FIFO: Load blocks (a module that is not a plain file must be refused, not waited for)", name)
+		}
 	}
 }

@@ -190,8 +190,10 @@ func (l Loader) checkTrustInfo(path string, fi fs.FileInfo, wantDir, wantExec bo
 	return nil
 }
 
+// openTrusted opens without following a symbolic link and without waiting
+// (a FIFO or a device would block open(2) for ever; it is refused by its type below).
 func (l Loader) openTrusted(path string, wantDir, wantExec bool) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EMLINK) {
 			return nil, fmt.Errorf("%w: %s is a symbolic link: %w", ErrUntrusted, path, err)

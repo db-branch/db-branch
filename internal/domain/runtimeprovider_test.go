@@ -130,6 +130,8 @@ func TestLaunchPlan_systemdディレクティブを注入できる計画を拒�
 		"許可外のKillSignal":   func(p *domain.LaunchPlan) { p.KillSignal = "SIGUSR3" },
 		"許可外のKillMode":     func(p *domain.LaunchPlan) { p.KillMode = "mixed\nUser=root" },
 		"許可外のNotifyAccess": func(p *domain.LaunchPlan) { p.NotifyAccess = "everyone" },
+		"大きすぎるタイムアウト":      func(p *domain.LaunchPlan) { p.TimeoutStopSec = 86401 },
+		"桁あふれするタイムアウト":     func(p *domain.LaunchPlan) { p.TimeoutStopSec = 1 << 62 },
 		"負のタイムアウト":         func(p *domain.LaunchPlan) { p.TimeoutStopSec = -1 },
 	}
 	for name, mutate := range cases {

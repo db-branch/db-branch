@@ -54,11 +54,11 @@ func (s *Server) recordProbe(ctx context.Context) map[domain.Engine]bool {
 		return out
 	}
 	for _, e := range domain.DefaultRuntimes.Engines() {
-		spec, _ := domain.DefaultRuntimes.Spec(e)
-		if !spec.Capabilities.HistoryRecord {
+		spec, ok, err := s.engineSpec(ctx, e) // the provider's word where it has one, as the engines map says
+		if err != nil || !ok || !spec.Capabilities.HistoryRecord {
 			continue
 		}
-		_, err := s.Ext.ServerOptioner.ServerOptions(ctx, ext.ServerBranch{Name: "probe", Owner: "probe", Engine: string(e), Record: true})
+		_, err = s.Ext.ServerOptioner.ServerOptions(ctx, ext.ServerBranch{Name: "probe", Owner: "probe", Engine: string(e), Record: true})
 		out[e] = err == nil
 	}
 	return out

@@ -156,6 +156,10 @@ type LaunchPlan struct {
 	NotifyAccess string
 }
 
+// MaxTimeoutStopSec bounds how long a module may ask the core to wait for a
+// stop (a day): a module must not be able to hold up systemctl stop for ever.
+const MaxTimeoutStopSec = 86400
+
 // ErrInvalidLaunchPlan is returned for a LaunchPlan that could not be written
 // into a systemd unit safely.
 var ErrInvalidLaunchPlan = errors.New("invalid launch plan")
@@ -210,8 +214,8 @@ func (p LaunchPlan) Validate() error {
 	if !notifyAccess[p.NotifyAccess] {
 		return bad("notify access %q", p.NotifyAccess)
 	}
-	if p.TimeoutStopSec < 0 {
-		return bad("negative stop timeout")
+	if p.TimeoutStopSec < 0 || p.TimeoutStopSec > MaxTimeoutStopSec {
+		return bad("stop timeout %d is outside 0..%d seconds", p.TimeoutStopSec, MaxTimeoutStopSec)
 	}
 	return nil
 }

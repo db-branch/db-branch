@@ -284,7 +284,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: 'already_exists: names are unique across the cluster. conflict: the limit of branches without a login is reached. other_node.'
+          description: 'already_exists: names are unique across the cluster. conflict: the limit of branches without a login is reached. other_node. feature_not_supported: with `runtime`, the base''s database engine cannot be upgraded.'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -727,7 +727,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: 'already_exists: the name is taken. conflict: the limit is reached, or the branch is not ready. checkpoints_unavailable.'
+          description: 'already_exists: the name is taken. conflict: the limit is reached, or the branch is not ready. checkpoints_unavailable. feature_not_supported: the database engine has no checkpoints.'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -762,7 +762,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: 'conflict: the branch is not `ready`. checkpoints_unavailable.'
+          description: 'conflict: the branch is not `ready`. checkpoints_unavailable. feature_not_supported: the database engine has no checkpoints.'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -791,7 +791,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: conflict. checkpoints_unavailable.
+          description: conflict. checkpoints_unavailable. feature_not_supported (the database engine has no checkpoints).
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -4362,6 +4362,10 @@ components:
         record:
           type: boolean
           description: 'A branch can be created with `record: true` (a recording module is loaded and licensed).'
+        warnings:
+          type: array
+          items: {type: string}
+          description: Things the operator should know about, for example that a database engine module loaded without a signature (`allow_unsigned_runtimes`). Absent when there are none.
         engines:
           type: object
           description: |-

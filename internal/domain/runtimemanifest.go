@@ -66,9 +66,6 @@ var (
 	protocolName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 )
 
-// maxTimeoutStopSec bounds how long a module may ask the core to wait for a stop (a day).
-const maxTimeoutStopSec = 86400
-
 // printableToken: 1..max printable characters, no whitespace.
 func printableToken(s string, max int) bool {
 	return s != "" && len(s) <= max && !hasControl(s) && !strings.ContainsAny(s, " \t")
@@ -126,8 +123,8 @@ func ParseManifestIn(root string, data []byte) (RuntimeManifest, error) {
 			return bad("protocol name %q must match %s", p.Name, protocolName)
 		}
 	}
-	if m.Systemd.TimeoutStopSec > maxTimeoutStopSec {
-		return bad("timeout_stop_sec %d is above %d", m.Systemd.TimeoutStopSec, maxTimeoutStopSec)
+	if m.Systemd.TimeoutStopSec > MaxTimeoutStopSec {
+		return bad("timeout_stop_sec %d is above %d", m.Systemd.TimeoutStopSec, MaxTimeoutStopSec)
 	}
 	user := RuntimeUserPrefix + m.Engine
 	if len(user) > maxUserName {

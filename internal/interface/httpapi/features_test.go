@@ -226,3 +226,15 @@ func TestCapabilities_署名のないランタイムモジュールの警告を�
 		t.Errorf("warnings = %v", body["warnings"])
 	}
 }
+
+func TestCapabilities_記録の可否はプロバイダの宣言に従い_recordとenginesが食い違わない(t *testing.T) {
+	mysqlWith(t, func(c *domain.RuntimeCaps) { c.HistoryRecord = false }) // the registry says no ...
+	f := newFixture(t)
+	f.srv.Ext = ext.Module{ServerOptioner: &recorder{}}
+	f.srv.Providers = providersOf(&fakeQuery{histRecord: true}) // ... the provider, which knows what is wired, says yes
+	_, body := f.do(t, "GET", "/v1/capabilities", nil)
+	feat := body["engines"].(map[string]any)["mysql"].(map[string]any)["features"].(map[string]any)
+	if body["record"] != true || feat["history_record"] != true {
+		t.Errorf("record %v, history_record %v: they must agree, and follow the provider", body["record"], feat["history_record"])
+	}
+}
