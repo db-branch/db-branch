@@ -162,7 +162,8 @@ func (s *Service) wanted(ctx context.Context) ([]domain.ModuleSpec, error) {
 	}
 	out := specs[:0:0]
 	for _, m := range specs {
-		if m.Wanted {
+		// A module the operator installs by hand is none of APT's business.
+		if m.Wanted && m.Source != domain.SourceLocal {
 			out = append(out, m)
 		}
 	}

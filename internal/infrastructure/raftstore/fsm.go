@@ -143,7 +143,14 @@ var opProtocol = map[string]int{
 }
 
 // Needs returns the protocol the command requires (0 for unknown commands).
-func (c Command) Needs() int { return opProtocol[c.Op] }
+// put_module needs more when it carries a runtime module: an older node would
+// take it for a plugin that never loads.
+func (c Command) Needs() int {
+	if c.Op == "put_module" && c.Module != nil && c.Module.IsRuntime() {
+		return domain.ProtocolRuntimeModules
+	}
+	return opProtocol[c.Op]
+}
 
 // Encode serializes the command for raft.Apply. A command received from
 // another node keeps its original bytes, so fields this version does not

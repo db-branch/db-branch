@@ -13,6 +13,10 @@
 # bind = "0.0.0.0"
 # socket   = "/run/db-branch/agent.sock"
 
+# Let database engine modules (runtime modules) without a valid signature load.
+# For development and testing only: a warning is logged. A bad signature is never accepted.
+# allow_unsigned_runtimes = false
+
 [ports]
 # Ports handed to bases and branches.
 # min = 40000

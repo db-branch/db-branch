@@ -122,3 +122,22 @@ func Testモジュールが揃わないノードは確認以外を断る(t *test
 	}
 	_ = http.StatusOK
 }
+
+func TestModules_一覧にランタイムモジュールの種類と配布元を出す(t *testing.T) {
+	f, c := remoteFixture(t)
+	mods := &fakeModules{specs: []domain.ModuleSpec{
+		{Name: "auth", Version: "1.0", Wanted: true},
+		{Name: "rt-clickhouse", Version: "0.3.0", Wanted: true, Kind: domain.ModuleKindRuntime, Source: domain.SourceLocal},
+	}}
+	f.srv.ModuleAdmin = mods
+	c.status = httpapi.ClusterStatus{Mode: "single", Nodes: []httpapi.NodeStatus{{Name: "n1"}}}
+	_, body := f.do(t, "GET", "/v1/modules", nil)
+	items := body["items"].([]any)
+	plain, rt := items[0].(map[string]any), items[1].(map[string]any)
+	if _, has := plain["kind"]; has {
+		t.Errorf("a plain module shows a kind: %v", plain)
+	}
+	if rt["kind"] != "runtime" || rt["source"] != "local" || rt["name"] != "rt-clickhouse" {
+		t.Errorf("runtime module = %v", rt)
+	}
+}

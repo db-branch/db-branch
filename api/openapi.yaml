@@ -686,7 +686,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: 'checkpoints_unavailable: the node holding the branch has no ZFS pool of its own for checkpoints.'
+          description: 'checkpoints_unavailable: the node holding the branch has no ZFS pool of its own for checkpoints; or feature_not_supported: the branch''s database engine has no checkpoints.'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -849,7 +849,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: 'conflict: the branch is not `ready`.'
+          description: 'conflict: the branch is not `ready`; or feature_not_supported: the branch''s database engine cannot be upgraded.'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -4393,6 +4393,12 @@ components:
         modules: [history 0.2.0]
         pages: []
         record: true
+        engines:
+          mysql:
+            display_name: MySQL
+            collation_bound: false
+            protocols: [{name: mysql, primary: true}]
+            features: {query: true, checkpoints: true, live_freeze: false, upgrade: true, source_dump: true, branch_merge: false, history_record: true, update_stats: true, instance_metrics: false}
     Login:
       type: object
       description: The built-in login has one user, `admin`. Modules can add users and sign-in methods.
@@ -4642,6 +4648,14 @@ components:
         name: {type: string}
         version: {type: string}
         wanted: {type: boolean, description: The cluster wants the module on every node.}
+        kind:
+          type: string
+          enum: [runtime]
+          description: '`runtime` for a database engine (named `rt-<engine>`); absent for a plugin of the agent.'
+        source:
+          type: string
+          enum: [apt, local]
+          description: For a runtime module, whether the cluster installs its package (`apt`) or the operator puts it on each node (`local`).
         requires_license: {type: boolean, description: The module works only under a licence key (after the trial).}
         nodes:
           type: array
