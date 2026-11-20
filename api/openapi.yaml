@@ -1845,7 +1845,7 @@ paths:
       x-dbb-action: capability.read
       x-dbb-token-scopes: [full, branches]
       description: |-
-        Returns this node's version, the modules it runs, the console pages that modules add, and whether branches can be recorded.
+        Returns this node's version, the modules it runs, the console pages that modules add, whether branches can be recorded, and what each database engine offers (`engines`).
 
         **Action:** `capability.read`. Allowed for `full` and `branches` tokens.
       responses:
@@ -4362,7 +4362,31 @@ components:
         record:
           type: boolean
           description: 'A branch can be created with `record: true` (a recording module is loaded and licensed).'
-      required: [version, node, modules, pages, record]
+        engines:
+          type: object
+          description: |-
+            The database engines this node can run, by name. Every feature is listed, true or false: a client shows or hides an action from it, and the API refuses an operation the engine does not offer with `409 feature_not_supported`.
+          additionalProperties:
+            type: object
+            properties:
+              display_name: {type: string, examples: [PostgreSQL]}
+              collation_bound:
+                type: boolean
+                description: Copies of its data may only run on nodes of the same operating system release.
+              protocols:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name: {type: string}
+                    primary: {type: boolean}
+                  required: [name, primary]
+              features:
+                type: object
+                description: 'By key: `query`, `checkpoints`, `live_freeze`, `upgrade`, `source_dump`, `branch_merge`, `history_record` (also needs a licensed recording module), `update_stats`, `instance_metrics`.'
+                additionalProperties: {type: boolean}
+            required: [display_name, collation_bound, protocols, features]
+      required: [version, node, modules, pages, record, engines]
       example:
         version: 0.2.0
         node: node1

@@ -555,6 +555,7 @@ func items[T any](list []T) map[string]any {
 
 func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	modules := append([]string{}, s.Modules...)
+	probe := s.recordProbe(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{"version": s.Version, "node": s.Node, "modules": modules, "pages": s.modulePages(),
-		"record": s.recordAvailable(r.Context())})
+		"record": recordAvailable(probe), "engines": s.engineViews(r.Context(), probe)})
 }
