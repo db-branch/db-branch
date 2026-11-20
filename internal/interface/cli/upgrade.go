@@ -111,7 +111,7 @@ Upgrades only: to go back, restore the before-upgrade checkpoint. The target mus
 (db-branch runtime install <engine@version>).`,
 		Args: cobra.ExactArgs(1),
 		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
-			if _, err := domain.ParseRuntimeRef(runtime); err != nil {
+			if _, err := parseRuntimeArg(runtime); err != nil {
 				return fmt.Errorf("--runtime: %w", err)
 			}
 			body := map[string]any{"runtime": runtime, "check_only": checkOnly, "no_rollback": noRollback, "force": force}

@@ -20,7 +20,7 @@ func (a *App) runtimeCommand() *cobra.Command {
 
 	withRef := func(f func(cmd *cobra.Command, c Client, ref domain.RuntimeRef) error) func(*cobra.Command, []string) error {
 		return func(cmd *cobra.Command, args []string) error {
-			ref, err := domain.ParseRuntimeRef(args[0])
+			ref, err := parseRuntimeArg(args[0])
 			if err != nil {
 				return err
 			}

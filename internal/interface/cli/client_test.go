@@ -1138,3 +1138,31 @@ func TestInit_評価用ならパスワードをadminにして最初のログイ�
 		t.Errorf("re-init: used %v out %q", used, out.String())
 	}
 }
+
+func TestRuntimeコマンド_このプロセスが知らないエンジンの判断はサーバーに任せる(t *testing.T) {
+	// The CLI does not load runtime modules: an engine they add is known to the agent only.
+	api := newFakeAPI()
+	api.answers["POST /v1/runtimes"] = accepted("op_1", "runtime.install")
+	api.opStates = []map[string]any{{"id": "op_1", "state": "succeeded"}}
+	api.answers["DELETE /v1/runtimes/clickhouse/26.3.19.3"] = nil
+	if code, _, errOut := runAPI(t, api, "runtime", "install", "clickhouse@26.3.19.3"); code != 0 {
+		t.Fatalf("install: %d %q", code, errOut)
+	}
+	if len(api.requests) == 0 || api.requests[0] != "POST /v1/runtimes" {
+		t.Errorf("requests = %v", api.requests)
+	}
+	if code, _, errOut := runAPI(t, api, "runtime", "remove", "clickhouse@26.3.19.3"); code != 0 {
+		t.Fatalf("remove: %d %q", code, errOut)
+	}
+	// What cannot be an engine@version is still caught here, and so is a wrong version of a built-in engine.
+	for _, bad := range []string{"clickhouse", "@1.0", "Click House@1", "clickhouse@", "mysql@x"} {
+		if code, _, _ := runAPI(t, api, "runtime", "install", bad); code == 0 {
+			t.Errorf("%q should fail", bad)
+		}
+	}
+	api2 := newFakeAPI()
+	api2.answers["POST /v1/branches"] = accepted("op_2", "branch.create")
+	if code, _, errOut := runAPI(t, api2, "branch", "create", "x", "--base", "prod", "--runtime", "clickhouse@26.3.19.4", "--no-wait"); code != 0 {
+		t.Errorf("branch create --runtime: %d %q", code, errOut)
+	}
+}
