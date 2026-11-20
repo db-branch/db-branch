@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -89,4 +91,13 @@ func Testエラー_その他の失敗は元のメッセージを保つ(t *testin
 	if got := err.Error(); !strings.Contains(got, "disk on fire") {
 		t.Fatalf("message lost: %q", got)
 	}
+}
+
+// AdminAccess lets the integration test see who the module process runs as and
+// what it inherited.
+func (f fake) AdminAccess(context.Context, *pb.InstanceRequest) (*pb.AdminAccessInfo, error) {
+	return &pb.AdminAccessInfo{
+		User: strconv.Itoa(os.Getuid()), Host: strconv.Itoa(os.Getgid()),
+		Env: map[string]string{"DB_BRANCH_SECRET": os.Getenv("DB_BRANCH_SECRET"), "HOME": os.Getenv("HOME")},
+	}, nil
 }
