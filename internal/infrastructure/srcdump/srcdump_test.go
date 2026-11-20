@@ -298,3 +298,20 @@ func TestDump_MySQLの引数は期待どおりの並びと内容で完全に一�
 		t.Errorf("env = %q", r.calls[0].env)
 	}
 }
+
+func TestDump_上限で打ち切られたときはツールのエラーに加えて時間切れだと分かる(t *testing.T) {
+	spec, _ := domain.DefaultRuntimes.Spec(domain.MySQL)
+	killed := func(ctx context.Context, _ domain.SourceDumpJob, _ string) error {
+		<-ctx.Done()
+		return errors.New("signal: killed") // what exec.CommandContext reports, without the context's error
+	}
+	d := srcdump.Dumper{
+		WorkDir:   filepath.Join(t.TempDir(), "work"),
+		Providers: domain.ProviderSet{domain.MySQL: runtimeprovider.New(spec, nil, runtimeprovider.Hooks{DumpSource: killed})},
+		Timeout:   20 * time.Millisecond,
+	}
+	_, err := d.Dump(context.Background(), job(domain.MySQL, "app"))
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "signal: killed") {
+		t.Errorf("Dump = %v, want the tool's error and the deadline", err)
+	}
+}

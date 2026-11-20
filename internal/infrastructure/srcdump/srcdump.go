@@ -8,6 +8,7 @@ package srcdump
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -75,6 +76,10 @@ func (d Dumper) Dump(ctx context.Context, job domain.SourceDumpJob) (string, err
 	}
 	if err := p.DumpSource(ctx, job, name); err != nil {
 		_ = os.Remove(name)
+		if cerr := ctx.Err(); cerr != nil && !errors.Is(err, cerr) {
+			// A tool killed with its context only says "signal: killed".
+			err = fmt.Errorf("%w (%w)", err, cerr)
+		}
 		return "", err
 	}
 	return name, nil
