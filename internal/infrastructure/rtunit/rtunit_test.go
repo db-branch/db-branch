@@ -38,6 +38,7 @@ ProtectHome=yes
 PrivateTmp=yes
 RuntimeDirectory=db-branch-rt/clickhouse/branch-x
 RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
 InaccessiblePaths=/run/db-branch /etc/db-branch
 ReadWritePaths=/tank/db-branch/branches/x /var/lib/db-branch/instances/branch-x /run/db-branch-rt/clickhouse/branch-x
 Type=notify

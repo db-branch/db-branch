@@ -81,6 +81,8 @@ func DropIn(u Unit) (string, error) {
 	b.WriteString("PrivateTmp=yes\n")
 	fmt.Fprintf(&b, "RuntimeDirectory=db-branch-rt/%s/%s\n", u.Engine, u.ID)
 	b.WriteString("RuntimeDirectoryMode=0750\n")
+	// Kept across stops: the module reads sockets and pid files after a stop to verify it was clean.
+	b.WriteString("RuntimeDirectoryPreserve=yes\n")
 	b.WriteString("InaccessiblePaths=/run/db-branch /etc/db-branch\n")
 	fmt.Fprintf(&b, "ReadWritePaths=%s %s %s\n", u.DataDir, u.StateDir, u.RunDir)
 	if u.Plan.ServiceType != "" {
