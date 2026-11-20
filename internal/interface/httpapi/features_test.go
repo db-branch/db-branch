@@ -2,9 +2,12 @@ package httpapi_test
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/interface/httpapi"
 	"github.com/db-branch/db-branch/pkg/ext"
 )
 
@@ -142,5 +145,84 @@ func TestCapabilities_history_recordはモジュールが受け付けるとき�
 	_, body = f.do(t, "GET", "/v1/capabilities", nil)
 	if body["engines"].(map[string]any)["mysql"].(map[string]any)["features"].(map[string]any)["history_record"] != false {
 		t.Error("history_record without a module")
+	}
+}
+
+func TestMCP_エンジンが宣言していない機能のツールは明示的なエラーを返す(t *testing.T) {
+	httpapi.MCPPoll = time.Millisecond
+	mysqlWith(t, func(c *domain.RuntimeCaps) { c.Upgrade = false; c.Checkpoints = false })
+	f := checkpointFixture(t)
+	f.srv.TokenAuth = &fakeTokens{}
+	q := &fakeQuery{noSQL: true}
+	f.srv.Providers = providersOf(q)
+	s, err := mcpSession(t, f, "t-branches")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	calls := map[string]struct {
+		args    map[string]any
+		feature string
+	}{
+		"query":              {map[string]any{"branch": "x", "sql": "SELECT 1"}, "query"},
+		"check_upgrade":      {map[string]any{"branch": "x", "runtime": "mysql@8.4.13"}, "upgrade"},
+		"upgrade_branch":     {map[string]any{"branch": "x", "runtime": "mysql@8.4.13"}, "upgrade"},
+		"create_checkpoint":  {map[string]any{"branch": "x"}, "checkpoints"},
+		"list_checkpoints":   {map[string]any{"branch": "x"}, "checkpoints"},
+		"restore_checkpoint": {map[string]any{"branch": "x", "checkpoint": "c1"}, "checkpoints"},
+	}
+	for tool, c := range calls {
+		out, isErr := callText(t, s, tool, c.args)
+		if !isErr || !strings.Contains(out, "feature not supported by this engine: "+c.feature) || !strings.Contains(out, "409") {
+			t.Errorf("%s: isErr=%v %q, want an explicit error naming %q", tool, isErr, out, c.feature)
+		}
+	}
+	if q.got.SQL != "" || len(f.branches.calls) != 0 {
+		t.Errorf("something ran: sql %q, calls %v", q.got.SQL, f.branches.calls)
+	}
+}
+
+func TestDeleteCheckpoint_エンジンがcheckpointsを宣言していなければ409(t *testing.T) {
+	mysqlWith(t, func(c *domain.RuntimeCaps) { c.Checkpoints = false })
+	f := checkpointFixture(t)
+	resp, body := f.do(t, "DELETE", "/v1/branches/x/checkpoints/c1", nil)
+	if resp.StatusCode != 409 || errCode(body) != "feature_not_supported" {
+		t.Errorf("%d %v", resp.StatusCode, body)
+	}
+}
+
+func Testブランチの表示のcheckpointsはエンジンが対応しているときだけ真(t *testing.T) {
+	f := checkpointFixture(t)
+	if _, body := f.do(t, "GET", "/v1/branches/x", nil); body["checkpoints"] != true {
+		t.Fatalf("a mysql branch on a node with checkpoints: %v", body["checkpoints"])
+	}
+	mysqlWith(t, func(c *domain.RuntimeCaps) { c.Checkpoints = false })
+	if _, body := f.do(t, "GET", "/v1/branches/x", nil); body["checkpoints"] != false {
+		t.Errorf("an engine without checkpoints: %v", body["checkpoints"])
+	}
+}
+
+func TestCreateBranch_runtime指定の作成はエンジンがupgradeを宣言していなければ409(t *testing.T) {
+	mysqlWith(t, func(c *domain.RuntimeCaps) { c.Upgrade = false })
+	f := newFixture(t)
+	resp, body := f.do(t, "POST", "/v1/branches", map[string]any{"name": "y", "base": "prod", "runtime": "mysql@8.4.13"})
+	if resp.StatusCode != 409 || errCode(body) != "feature_not_supported" {
+		t.Errorf("%d %v", resp.StatusCode, body)
+	}
+	if len(f.branches.calls) != 0 {
+		t.Errorf("created anyway: %v", f.branches.calls)
+	}
+}
+
+func TestCapabilities_署名のないランタイムモジュールの警告を出す(t *testing.T) {
+	f := newFixture(t)
+	if _, body := f.do(t, "GET", "/v1/capabilities", nil); body["warnings"] != nil {
+		t.Errorf("no warnings expected: %v", body["warnings"])
+	}
+	f.srv.RuntimeWarnings = []string{"runtime module clickhouse is unsigned"}
+	_, body := f.do(t, "GET", "/v1/capabilities", nil)
+	w, _ := body["warnings"].([]any)
+	if len(w) != 1 || w[0] != "runtime module clickhouse is unsigned" {
+		t.Errorf("warnings = %v", body["warnings"])
 	}
 }

@@ -115,6 +115,8 @@ func (s *Server) branchView(ctx context.Context, svc Branches, b domain.Branch) 
 			v.Storage = &storageJSON{Used: info.Used, Referenced: info.Referenced}
 		}
 	}
+	// A node with ZFS can still run an engine that has no checkpoints.
+	v.Checkpoints = v.Checkpoints && s.requireFeature(ctx, b.Runtime.Engine, "checkpoints") == nil
 	if op, ok := s.Ops.Active("branch", b.Name.String()); ok {
 		v.Operation = &opRef{ID: op.ID, Kind: op.Kind}
 	}

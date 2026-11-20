@@ -97,5 +97,8 @@ func (s *Server) createRuntime(r *http.Request, svc Branches, in createBranchJSO
 	if err != nil {
 		return to, from, err
 	}
+	if err = s.requireFeature(r.Context(), b.Runtime.Engine, "upgrade"); err != nil {
+		return to, from, err
+	}
 	return to, b.Runtime, domain.CheckUpgradePath(b.Runtime, to)
 }

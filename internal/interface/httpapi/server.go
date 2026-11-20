@@ -154,6 +154,9 @@ type Server struct {
 	ModuleAdmin Modules
 	// ModuleProblems returns this node's module configuration errors. Optional.
 	ModuleProblems func() map[string]string
+	// RuntimeWarnings are shown by GET /v1/capabilities (for example that a
+	// runtime module loaded without a signature).
+	RuntimeWarnings []string
 	// PendingModules names wanted modules this node does not run yet; while
 	// any are pending the console and remote API refuse all but inspection.
 	PendingModules func() []string
@@ -556,6 +559,10 @@ func items[T any](list []T) map[string]any {
 func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	modules := append([]string{}, s.Modules...)
 	probe := s.recordProbe(r.Context())
-	writeJSON(w, http.StatusOK, map[string]any{"version": s.Version, "node": s.Node, "modules": modules, "pages": s.modulePages(),
-		"record": recordAvailable(probe), "engines": s.engineViews(r.Context(), probe)})
+	out := map[string]any{"version": s.Version, "node": s.Node, "modules": modules, "pages": s.modulePages(),
+		"record": recordAvailable(probe), "engines": s.engineViews(r.Context(), probe)}
+	if len(s.RuntimeWarnings) > 0 {
+		out["warnings"] = s.RuntimeWarnings
+	}
+	writeJSON(w, http.StatusOK, out)
 }
