@@ -284,7 +284,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: 'already_exists: names are unique across the cluster. conflict: the limit of branches without a login is reached. other_node. feature_not_supported: with `runtime`, the base''s database engine cannot be upgraded.'
+          description: 'already_exists: names are unique across the cluster. conflict: the limit of branches without a login is reached. other_node. feature_not_supported: with `runtime`, the base''s database engine cannot be upgraded; with `record`, the engine does not declare `history_record` (before 2026-11-20 this was a 400).'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}

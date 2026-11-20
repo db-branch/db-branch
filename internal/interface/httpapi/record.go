@@ -38,6 +38,10 @@ func (s *Server) checkRecord(ctx context.Context, svc Branches, p ext.Principal,
 	if err != nil {
 		return err
 	}
+	// An engine that does not declare history_record cannot be recorded, whatever the module says.
+	if err := s.requireFeature(ctx, b.Runtime.Engine, "history_record"); err != nil {
+		return err
+	}
 	_, err = s.Ext.ServerOptioner.ServerOptions(ctx, ext.ServerBranch{Name: in.Name, Owner: in.Owner, Engine: string(b.Runtime.Engine),
 		Version: b.Runtime.Version, Record: true})
 	if err != nil && !errors.Is(err, ext.ErrForbidden) {
