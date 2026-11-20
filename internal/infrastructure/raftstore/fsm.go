@@ -110,7 +110,14 @@ type Command struct {
 // so there is no new command; nodes at 15 would reset or recreate such a
 // branch on the base's runtime, so the feature waits for protocol 16
 // everywhere (domain.ProtocolBranchRuntime, checked by the use case).
-const Protocol = 18
+//
+// 21: runtime modules (external database engines). ModuleSpec gets Kind and
+// Source, which travel inside put_module, so there is no new command; a node
+// at 18 would take such a module for a plugin that never loads and refuse the
+// API (503 modules_pending), so the feature waits for protocol 21 everywhere
+// (domain.ProtocolRuntimeModules, checked by the use case). 19 and 20 are
+// reserved for branch fork and branch merge.
+const Protocol = 21
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a

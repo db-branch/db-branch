@@ -85,7 +85,7 @@ func coreSettings(cfg config.Config) []ext.Setting {
 // this node in line with them. It returns a function to call when the
 // recorded modules change.
 func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranch.Service, srv *httpapi.Server,
-	mods []*plugin.Loaded, moduleSettings map[string][]ext.Setting, loadedNames []string, nodes func() int,
+	mods []*plugin.Loaded, moduleSettings map[string][]ext.Setting, loadedNames, loadedRuntimes []string, nodes func() int,
 	problems *moduleProblems, arc *arcNode, rolled func(context.Context) map[string]string, leading func() bool, log *slog.Logger) func() {
 	set := &settings.Service{Core: coreSettings(cfg), Modules: func() map[string][]ext.Setting { return moduleSettings },
 		Checks: map[string]func(string) error{"zfs.arc_max": arc.ctl.Check, "branch.max_checkpoints": settings.NonNegativeInt}}
@@ -210,6 +210,9 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 		return func() {}
 	}
 	mgr := &module.Service{Store: store, Packages: apt.Packages{Run: execx.Runner{}}, Rolled: rolled}
+	if ns, ok := svc.Store.(domain.NodeStore); ok {
+		mgr.Nodes = ns.ListNodes // runtime modules wait until every node knows them
+	}
 	srv.ModuleAdmin = mgr
 	if srv.Settings != nil {
 		lic.Modules = mgr
@@ -234,7 +237,11 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 		if err != nil {
 			return nil
 		}
-		return domain.PendingModules(specs, loadedNames)
+		pending := domain.PendingModules(specs, loadedNames)
+		for _, engine := range domain.PendingRuntimeModules(specs, loadedRuntimes) {
+			pending = append(pending, domain.RuntimeModuleName(engine))
+		}
+		return pending
 	}
 	kick := make(chan struct{}, 1)
 	go func() {

@@ -36,6 +36,9 @@ type Service struct {
 	// A node that runs one is not put back to the older recorded version
 	// while the rollout is under way (or was stopped). Optional.
 	Rolled func(ctx context.Context) map[string]string
+	// Nodes lists the cluster's nodes, for features that wait until every node
+	// speaks a protocol (runtime modules). Nil: a single node.
+	Nodes func(ctx context.Context) ([]domain.Node, error)
 
 	mu sync.Mutex
 }
@@ -59,6 +62,51 @@ func (s *Service) Install(ctx context.Context, name, version string) (domain.Mod
 		version = v
 	}
 	m := domain.ModuleSpec{Name: name, Version: version, Wanted: true}
+	return m, s.Store.PutModule(ctx, m)
+}
+
+// InstallRuntime records the runtime module of engine as wanted at version
+// (default: what APT offers now). source is domain.SourceAPT (default: every
+// node installs the package) or domain.SourceLocal (the operator puts it on
+// each node; a version is then required). It waits until every node knows
+// runtime modules (domain.ProtocolRuntimeModules): an older node would refuse
+// the API for a module it can never load.
+func (s *Service) InstallRuntime(ctx context.Context, engine, version, source string) (domain.ModuleSpec, error) {
+	if err := domain.ValidRuntimeModuleEngine(engine); err != nil {
+		return domain.ModuleSpec{}, err
+	}
+	switch source {
+	case "":
+		source = domain.SourceAPT
+	case domain.SourceAPT, domain.SourceLocal:
+	default:
+		return domain.ModuleSpec{}, fmt.Errorf("%w: unknown source %q (apt or local)", domain.ErrInvalidModule, source)
+	}
+	if s.Nodes != nil {
+		nodes, err := s.Nodes(ctx)
+		if err != nil {
+			return domain.ModuleSpec{}, err
+		}
+		if domain.ClusterProtocol(nodes, domain.ProtocolRuntimeModules) < domain.ProtocolRuntimeModules {
+			return domain.ModuleSpec{}, domain.ErrClusterUpgrading
+		}
+	}
+	m := domain.ModuleSpec{Name: domain.RuntimeModuleName(engine), Wanted: true, Kind: domain.ModuleKindRuntime, Source: source}
+	switch {
+	case version != "":
+		m.Version = version
+	case source == domain.SourceLocal:
+		return domain.ModuleSpec{}, fmt.Errorf("%w: a local runtime module needs its version", domain.ErrInvalidModule)
+	default:
+		v, err := s.Packages.Candidate(ctx, m.Package())
+		if err != nil {
+			return domain.ModuleSpec{}, err
+		}
+		if v == "" {
+			return domain.ModuleSpec{}, fmt.Errorf("%w: %s", ErrUnavailable, m.Package())
+		}
+		m.Version = v
+	}
 	return m, s.Store.PutModule(ctx, m)
 }
 
@@ -145,6 +193,9 @@ func (s *Service) Sync(ctx context.Context) (bool, error) {
 	changed := false
 	var errs []error
 	for _, m := range list {
+		if m.Source == domain.SourceLocal {
+			continue // the operator installs these; APT has nothing to do with them
+		}
 		have, ok := installed[m.Package()]
 		switch {
 		case m.Wanted && have != m.Version && have == rolled[m.Package()] && have != "":

@@ -241,7 +241,7 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		if cl != nil {
 			leading = cl.store.IsLeader
 		}
-		mgr := wireModulesAndSettings(ctx, cfg, svc, srv, mods, moduleSettings, loadedNames, nodes, problems, arc, rolled, leading, log)
+		mgr := wireModulesAndSettings(ctx, cfg, svc, srv, mods, moduleSettings, loadedNames, checkRuntimeModules(cfg, log), nodes, problems, arc, rolled, leading, log)
 		if cl != nil {
 			cl.moduleChanged = mgr
 		}

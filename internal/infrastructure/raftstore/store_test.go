@@ -792,3 +792,34 @@ func TestStore_ブランチの記録の有無は作成時に決まり後から�
 		}
 	}
 }
+
+func TestProtocol_ランタイムモジュールのために予約した番号に達している(t *testing.T) {
+	if raftstore.Protocol < domain.ProtocolRuntimeModules {
+		t.Errorf("Protocol = %d, below domain.ProtocolRuntimeModules (%d)", raftstore.Protocol, domain.ProtocolRuntimeModules)
+	}
+}
+
+func TestPutModule_ランタイムモジュールの種類と配布元を保存し_従来のモジュールは変わらない(t *testing.T) {
+	l := newCluster(t, 1).leader(t)
+	want := []domain.ModuleSpec{
+		{Name: "auth", Version: "1.0", Wanted: true},
+		{Name: "rt-clickhouse", Version: "0.3.0", Wanted: true, Kind: domain.ModuleKindRuntime, Source: domain.SourceLocal},
+	}
+	for _, m := range want {
+		if err := l.PutModule(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := l.ListModules(ctx)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("modules = %+v, %v", got, err)
+	}
+	for _, m := range got {
+		if m.Name == "rt-clickhouse" && (m.Kind != domain.ModuleKindRuntime || m.Source != domain.SourceLocal) {
+			t.Errorf("runtime module = %+v", m)
+		}
+		if m.Name == "auth" && (m.Kind != "" || m.Source != "") {
+			t.Errorf("plain module = %+v", m)
+		}
+	}
+}
