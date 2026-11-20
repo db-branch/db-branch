@@ -1,6 +1,10 @@
 package dbbranch
 
-import "github.com/db-branch/db-branch/internal/domain"
+import (
+	"context"
+
+	"github.com/db-branch/db-branch/internal/domain"
+)
 
 // engineProps returns the ZFS properties the engine asks for that differ from
 // DatasetProperties (which <pool>/db-branch sets and children inherit). It
@@ -21,4 +25,15 @@ func engineProps(rt domain.RuntimeRef) map[string]string {
 		diff[k] = v
 	}
 	return diff
+}
+
+// applyEngineProps sets the engine's own ZFS properties on a dataset made by
+// cloning (a clone takes those of its new parent). Without Lineage (storage
+// without ZFS properties to set) or without differences it does nothing.
+func (s *Service) applyEngineProps(ctx context.Context, rt domain.RuntimeRef, dataset string) error {
+	props := engineProps(rt)
+	if s.Lineage == nil || len(props) == 0 {
+		return nil
+	}
+	return s.Lineage.SetProps(ctx, dataset, props)
 }

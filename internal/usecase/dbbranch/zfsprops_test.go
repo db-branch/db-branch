@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/usecase/dbbranch"
 )
 
 // engineWithProps makes the test's registry say mysql wants the given ZFS properties.
@@ -127,5 +128,64 @@ func TestReplicate_プロパティを設定できなかったコピーは捨て�
 	want := map[string]string{"recordsize": "128K"}
 	if got := rec.sets[replica]; !reflect.DeepEqual(got, want) || !p.replica.storage.datasets[replica] {
 		t.Errorf("after the retry: props %v, copy present %v", got, p.replica.storage.datasets[replica])
+	}
+}
+
+// A zfs clone takes the properties of its new parent, not of its origin, so
+// each branch dataset gets the engine's own.
+
+func TestCreateBranch_クローンにもエンジンの推奨ZFSプロパティを設定する(t *testing.T) {
+	engineWithProps(t, map[string]string{"recordsize": "128K", "compression": "lz4"})
+	z := newZEnv(t)
+	z.branch(t)
+
+	props, err := z.sim.Props(ctx, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if props["recordsize"] != "128K" {
+		t.Errorf("recordsize of the branch dataset = %q, want 128K", props["recordsize"])
+	}
+	if _, set := props["compression"]; set {
+		t.Errorf("compression is what the parent already has, yet it was set: %v", props)
+	}
+}
+
+func TestCreateBranch_組み込みエンジンのクローンには何も設定しない(t *testing.T) {
+	z := newZEnv(t)
+	z.branch(t)
+	if props, _ := z.sim.Props(ctx, live); props["recordsize"] != "" {
+		t.Errorf("props = %v", props)
+	}
+}
+
+func TestCreateBranch_プロパティを設定できなければブランチを作らない(t *testing.T) {
+	engineWithProps(t, map[string]string{"recordsize": "128K"})
+	e := newEnv(t)
+	e.withBase(t)
+	e.svc.Lineage = &setPropsRecorder{err: errors.New("zfs set failed")}
+
+	_, err := e.svc.CreateBranch(ctx, dbbranch.CreateBranchRequest{Name: name("x"), Base: name("prod")}, nil)
+	if err == nil || !strings.Contains(err.Error(), "zfs set failed") {
+		t.Errorf("CreateBranch = %v", err)
+	}
+}
+
+func TestRestoreCheckpoint_復元したラインにもエンジンの推奨ZFSプロパティを設定する(t *testing.T) {
+	engineWithProps(t, map[string]string{"recordsize": "128K"})
+	z := newZEnv(t)
+	z.branch(t)
+	z.checkpoint(t, "c1")
+	z.sim.write(live, "v1")
+
+	if _, err := z.svc.RestoreCheckpoint(ctx, name_("x"), "c1", nil); err != nil {
+		t.Fatal(err)
+	}
+	props, err := z.sim.Props(ctx, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if props["recordsize"] != "128K" {
+		t.Errorf("recordsize of the restored live dataset = %q, want 128K (props %v)", props["recordsize"], props)
 	}
 }

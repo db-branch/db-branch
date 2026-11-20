@@ -175,6 +175,10 @@ func (s *Service) buildBranch(ctx context.Context, br *domain.Branch, initSQL st
 	if err := s.Storage.Clone(ctx, domain.Snapshot{Dataset: s.sourceDataset(base), Name: br.Snapshot}, ds); err != nil {
 		return err
 	}
+	// A clone takes the properties of its new parent, not of its origin.
+	if err := s.applyEngineProps(ctx, br.Runtime, ds); err != nil {
+		return err
+	}
 	spec, err := s.branchSpec(ctx, *br, ds, false, true)
 	if err != nil {
 		return err
