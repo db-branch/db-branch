@@ -501,3 +501,34 @@ func TestFSM_ブランチのランタイムと操作の結果をそのまま保�
 		t.Errorf("state = %+v", st)
 	}
 }
+
+func TestFSM_ランタイムモジュールの種類と配布元はスナップショットで往復し_従来のモジュールの保存形式は変わらない(t *testing.T) {
+	f := raftstore.NewFSM()
+	apply(t, f, raftstore.PutModule(domain.ModuleSpec{Name: "auth", Version: "1.0", Wanted: true}))
+	apply(t, f, raftstore.PutModule(domain.ModuleSpec{Name: "rt-clickhouse", Version: "0.3.0", Wanted: true, Kind: domain.ModuleKindRuntime, Source: domain.SourceLocal}))
+
+	snap, err := f.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := snap.Persist(&sink{Buffer: &buf}); err != nil {
+		t.Fatal(err)
+	}
+	snap.Release()
+	stored := buf.String()
+	if !strings.Contains(stored, `{"name":"auth","version":"1.0","wanted":true}`) {
+		t.Errorf("a plain module is stored differently from before:\n%s", stored)
+	}
+
+	g := raftstore.NewFSM()
+	if err := g.Restore(io.NopCloser(&buf)); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(f.State(), g.State()) {
+		t.Errorf("restored %+v, want %+v", g.State(), f.State())
+	}
+	if m := g.State().Modules["rt-clickhouse"]; m.Kind != domain.ModuleKindRuntime || m.Source != domain.SourceLocal {
+		t.Errorf("runtime module after restore = %+v", m)
+	}
+}
