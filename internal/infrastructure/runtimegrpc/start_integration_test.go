@@ -46,8 +46,10 @@ func TestStart_実在の専用ユーザーで起動し環境を引き継がな�
 	if err == nil {
 		t.Fatal("the user for engine fakeengine does not exist: expected an error")
 	}
-	m.RunAsUser = name
-	cmd, err = runtimegrpc.Command(m, runtimegrpc.SystemUser)
+	// The manifest leaves run_as_user empty (the fake's Describe says so too): the
+	// itfake user stands in for db-branch-rt-fakeengine.
+	asItfake := func(string) (uint32, uint32, error) { return runtimegrpc.SystemUser(name) }
+	cmd, err = runtimegrpc.Command(m, asItfake)
 	if err != nil {
 		t.Fatal(err)
 	}
