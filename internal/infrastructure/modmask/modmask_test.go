@@ -2,6 +2,7 @@ package modmask_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -40,7 +41,7 @@ func TestMasker_モジュールのマスカーへ型を移して渡す(t *testin
 	var d domain.Masker = modmask.Masker{M: m}
 	log, err := d.Mask(ctx, domain.MaskJob{Source: src, Target: domain.AdminAccess{Engine: domain.Postgres, Socket: "/run/b"}, Rules: "r"})
 	want := ext.DBAccess{Engine: "postgres", Host: "127.0.0.1", Socket: "/run/a", Port: 1, User: "postgres", BinDir: "/rt/bin", LibDir: "/rt/lib"}
-	if err != nil || log != "ok" || m.got.Source != want || m.got.Target.Socket != "/run/b" || m.got.Rules != "r" {
+	if err != nil || log != "ok" || !reflect.DeepEqual(m.got.Source, want) || m.got.Target.Socket != "/run/b" || m.got.Rules != "r" {
 		t.Errorf("%q %v %+v", log, err, m.got)
 	}
 }
@@ -83,5 +84,24 @@ func TestFollower_ベース名とスナップショットを渡し実行を型�
 	f.err = ext.ErrForbidden
 	if _, err := d.AfterRefresh(ctx, mustName("prod"), "s1"); err == nil {
 		t.Error("an error is passed on")
+	}
+}
+
+func TestMasker_複数ポートのエンドポイントと環境変数も渡し元とは別の写しにする(t *testing.T) {
+	m := &masker{}
+	a := src
+	a.Endpoints = map[string]domain.Endpoint{"http": {Host: "127.0.0.1", Port: 8123}, "native": {Socket: "/run/n.sock"}}
+	a.Env = map[string]string{"X": "1"}
+	if _, err := (modmask.Masker{M: m}).Mask(ctx, domain.MaskJob{Source: a, Target: a, Rules: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	got := m.got.Source
+	if got.Endpoints["http"] != (ext.Endpoint{Host: "127.0.0.1", Port: 8123}) || got.Endpoints["native"].Socket != "/run/n.sock" || got.Env["X"] != "1" {
+		t.Errorf("access = %+v", got)
+	}
+	got.Env["X"] = "changed"
+	got.Endpoints["http"] = ext.Endpoint{}
+	if a.Env["X"] != "1" || a.Endpoints["http"].Port != 8123 {
+		t.Error("the module's copy shares its maps with the agent's")
 	}
 }

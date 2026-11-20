@@ -17,6 +17,18 @@ type AdminAccess struct {
 	// which need LibDir on LD_LIBRARY_PATH.
 	BinDir string `json:"bin_dir"`
 	LibDir string `json:"lib_dir"`
+	// Endpoints are the instance's addresses by protocol name, for an engine
+	// with several ports; the fields above are those of its primary
+	// protocol. Env is what a client tool of the engine needs in its environment.
+	Endpoints map[string]Endpoint `json:"endpoints,omitempty"`
+	Env       map[string]string   `json:"env,omitempty"`
+}
+
+// Endpoint is where one protocol of an instance listens.
+type Endpoint struct {
+	Host   string `json:"host,omitempty"`
+	Port   int    `json:"port,omitempty"`
+	Socket string `json:"socket,omitempty"`
 }
 
 // MaskJob asks a masker to read Source and write a masked copy into Target

@@ -1,0 +1,14 @@
+[Unit]
+Description=db-branch runtime server %i
+Documentation=https://github.com/db-branch/db-branch
+After=zfs-mount.service network-online.target
+Wants=network-online.target
+
+[Service]
+# The engine's own settings (User, Type, ExecStart, the paths it may write and
+# its limits) are not here: the agent writes them per instance, after checking
+# them, to /run/systemd/system/db-branch-rt@%i.service.d/override.conf.
+Type=simple
+ExecStart=/bin/false
+Slice=db-branch.slice
+Restart=on-abnormal

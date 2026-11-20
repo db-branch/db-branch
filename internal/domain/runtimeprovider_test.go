@@ -184,3 +184,15 @@ func TestBranch_InstanceはブランチをInstanceSpecへ写す(t *testing.T) {
 
 // fakeProvider is a RuntimeProvider whose methods are not called.
 type fakeProvider struct{ domain.RuntimeProvider }
+
+func TestAdminAccess_JSONでは空のEndpointsとenvを出さない(t *testing.T) {
+	b, _ := json.Marshal(domain.AdminAccess{Engine: domain.MySQL, Host: "h", Port: 3306})
+	if strings.Contains(string(b), "endpoints") || strings.Contains(string(b), "env") {
+		t.Errorf("json = %s", b)
+	}
+	a := domain.AdminAccess{Engine: "x", Endpoints: map[string]domain.Endpoint{"http": {Host: "h", Port: 1}}, Env: map[string]string{"A": "b"}}
+	b, _ = json.Marshal(a)
+	if !strings.Contains(string(b), `"endpoints":{"http":{"host":"h","port":1}}`) {
+		t.Errorf("json = %s", b)
+	}
+}

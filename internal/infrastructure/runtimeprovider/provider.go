@@ -188,7 +188,22 @@ func (p *Provider) AdminAccess(_ context.Context, s domain.InstanceSpec) (domain
 	if err != nil {
 		return domain.AdminAccess{}, err
 	}
-	return p.server.Admin(srv), nil
+	a := p.server.Admin(srv)
+	// The legacy fields describe the primary protocol; say so by name too.
+	for _, pp := range p.spec.Protocols {
+		if !pp.Primary {
+			continue
+		}
+		if _, set := a.Endpoints[pp.Name]; !set {
+			eps := make(map[string]domain.Endpoint, len(a.Endpoints)+1)
+			for k, e := range a.Endpoints {
+				eps[k] = e
+			}
+			eps[pp.Name] = domain.Endpoint{Host: a.Host, Port: a.Port, Socket: a.Socket}
+			a.Endpoints = eps
+		}
+	}
+	return a, nil
 }
 
 func (p *Provider) Query(ctx context.Context, s domain.InstanceSpec, q domain.QueryRequest) (domain.QueryResult, error) {

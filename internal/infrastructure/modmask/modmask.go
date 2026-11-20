@@ -9,7 +9,20 @@ import (
 )
 
 func access(a domain.AdminAccess) ext.DBAccess {
-	return ext.DBAccess{Engine: string(a.Engine), Host: a.Host, Socket: a.Socket, Port: a.Port, User: a.User, BinDir: a.BinDir, LibDir: a.LibDir}
+	out := ext.DBAccess{Engine: string(a.Engine), Host: a.Host, Socket: a.Socket, Port: a.Port, User: a.User, BinDir: a.BinDir, LibDir: a.LibDir}
+	if len(a.Endpoints) > 0 {
+		out.Endpoints = make(map[string]ext.Endpoint, len(a.Endpoints))
+		for k, e := range a.Endpoints {
+			out.Endpoints[k] = ext.Endpoint{Host: e.Host, Port: e.Port, Socket: e.Socket}
+		}
+	}
+	if len(a.Env) > 0 {
+		out.Env = make(map[string]string, len(a.Env))
+		for k, v := range a.Env {
+			out.Env[k] = v
+		}
+	}
+	return out
 }
 
 func plan(p domain.MaskPlan) ext.MaskPlan {

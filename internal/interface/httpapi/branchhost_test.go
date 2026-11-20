@@ -21,7 +21,9 @@ func (f *fakeBranches) RestoreCheckpointWith(_ context.Context, n domain.Name, c
 
 func (f *fakeBranches) BranchAdmin(_ context.Context, n domain.Name) (domain.AdminAccess, error) {
 	f.record("admin " + n.String())
-	return domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/" + n.String() + ".sock", User: "root", BinDir: "/rt/bin", LibDir: "/rt/lib"}, f.cpErr
+	sock := "/run/" + n.String() + ".sock"
+	return domain.AdminAccess{Engine: domain.MySQL, Socket: sock, User: "root", BinDir: "/rt/bin", LibDir: "/rt/lib",
+		Endpoints: map[string]domain.Endpoint{"mysql": {Socket: sock, Port: 3306}}, Env: map[string]string{"MYSQL_UNIX_PORT": sock}}, f.cpErr
 }
 
 func (f *fakeBranches) OpenLine(_ context.Context, n domain.Name, line int, cp string) (string, error) {
@@ -115,6 +117,9 @@ func TestBranchHost_サーバーへの入口と線の読み取りを渡す(t *te
 	db, err := h.DB(ctx, "x")
 	if err != nil || db.Engine != "mysql" || db.Socket != "/run/x.sock" || db.BinDir != "/rt/bin" || db.LibDir != "/rt/lib" {
 		t.Errorf("db = %+v %v", db, err)
+	}
+	if db.Endpoints["mysql"] != (ext.Endpoint{Socket: "/run/x.sock", Port: 3306}) || db.Env["MYSQL_UNIX_PORT"] != "/run/x.sock" {
+		t.Errorf("endpoints and env were not passed to the module: %+v", db)
 	}
 	dir, err := h.OpenLine(ctx, "x", 2, "c1")
 	if err != nil || dir != "/mnt/line" {
