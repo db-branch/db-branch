@@ -31,6 +31,9 @@ type Store struct {
 	// Fixups adapt an unpacked runtime to this system (e.g. library names) before it is
 	// marked installed. Keyed by engine; optional.
 	Fixups map[domain.Engine]func(dir string) error
+	// RefFixups are Fixups that also get the runtime's reference (the version):
+	// the runtime modules' PrepareRuntime. They run after Fixups; optional.
+	RefFixups map[domain.Engine]func(ctx context.Context, ref domain.RuntimeRef, dir string) error
 }
 
 var _ domain.RuntimeStore = Store{}
@@ -71,6 +74,11 @@ func (s Store) Install(ctx context.Context, ref domain.RuntimeRef, archives []st
 	}
 	if fix := s.Fixups[ref.Engine]; fix != nil {
 		if err := fix(staging); err != nil {
+			return fmt.Errorf("prepare %s: %w", ref, err)
+		}
+	}
+	if fix := s.RefFixups[ref.Engine]; fix != nil {
+		if err := fix(ctx, ref, staging); err != nil {
 			return fmt.Errorf("prepare %s: %w", ref, err)
 		}
 	}
