@@ -73,3 +73,21 @@ func TestLaunch_モジュールでないバイナリは起動を拒否する(t *
 		t.Fatal("a binary that is not a runtime module must be refused")
 	}
 }
+
+func TestLaunch_エージェントの環境変数をモジュールに渡さない(t *testing.T) {
+	t.Setenv("DB_BRANCH_SECRET", "s3cret")
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = []string{"DBB_TEST_MODULE=1"} // what Command builds: nothing but what the module needs
+	p, stop, err := runtimegrpc.Launch(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	a, err := p.AdminAccess(context.Background(), domain.InstanceSpec{ID: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Env["DB_BRANCH_SECRET"] != "" {
+		t.Fatalf("go-plugin handed the agent's environment to the module: %v", a.Env)
+	}
+}

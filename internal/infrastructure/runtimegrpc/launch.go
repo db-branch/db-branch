@@ -24,7 +24,9 @@ func Launch(cmd *exec.Cmd) (*Provider, func(), error) {
 		Plugins:          goplugin.PluginSet{runtimeplugin.Name: &runtimeplugin.Plugin{}},
 		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
-		Logger:           hclog.New(&hclog.LoggerOptions{Output: io.Discard}),
+		// go-plugin would add the agent's whole environment (secrets included) to cmd.Env.
+		SkipHostEnv: true,
+		Logger:      hclog.New(&hclog.LoggerOptions{Output: io.Discard}),
 	})
 	rpc, err := client.Client()
 	if err != nil {
