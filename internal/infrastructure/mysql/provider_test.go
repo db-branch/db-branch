@@ -242,3 +242,26 @@ func TestVerifyCleanShutdown_停止のあとの起動の途中で落ちていた
 		t.Errorf("died while starting after the last clean stop = %v, want ErrUncleanShutdown", err)
 	}
 }
+
+func TestHealth_systemctlの状態で停止_起動中_準備完了を見分けエラーは返す(t *testing.T) {
+	f, p, inst := providerFixture(t)
+	f.sys.active = true
+	f.sys.outputs = map[string]string{"--property=ActiveState": "activating\n"}
+	if h, _ := p.Health(ctx, inst); h != domain.HealthStarting {
+		t.Errorf("activating = %v, want starting", h)
+	}
+	if f.sys.called("mysqladmin") {
+		t.Errorf("mysqladmin asked while the unit is activating: %q", f.sys.calls)
+	}
+	for _, state := range []string{"inactive", "failed", "deactivating"} {
+		f.sys.outputs = map[string]string{"--property=ActiveState": state + "\n"}
+		if h, _ := p.Health(ctx, inst); h != domain.HealthStopped {
+			t.Errorf("%s = %v, want stopped", state, h)
+		}
+	}
+	f.sys.outputs = nil
+	f.sys.failOn = "--property=ActiveState"
+	if h, err := p.Health(ctx, inst); err == nil || h != domain.HealthStopped {
+		t.Errorf("systemctl failing: Health = %v, %v: want the failure reported", h, err)
+	}
+}

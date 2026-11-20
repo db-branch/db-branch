@@ -379,3 +379,22 @@ func TestRuntimeRegistry_CheckUpgradePath_桁が非常に多い数でも正し�
 		t.Errorf("upgrade across a digit-count boundary = %v", err)
 	}
 }
+
+func TestRuntimeRegistry_ZFSPropsは性能調整用の許可リストと安全な値だけを受け付ける(t *testing.T) {
+	bad := []map[string]string{
+		{"sharenfs": "on"}, {"sharesmb": "on"}, {"setuid": "on"}, {"devices": "on"}, {"exec": "on"},
+		{"zoned": "on"}, {"overlay": "on"}, {"encryption": "on"}, {"": "x"}, {"RecordSize": "128K"},
+		{"recordsize": ""}, {"recordsize": "128K\nmountpoint=/"}, {"recordsize": "a b"}, {"recordsize": "-o x"},
+	}
+	for _, props := range bad {
+		reg := domain.NewRuntimeRegistry()
+		if err := reg.Register(domain.EngineSpec{Engine: "x", ZFSProps: props}); !errors.Is(err, domain.ErrInvalidEngineSpec) {
+			t.Errorf("ZFSProps %q: Register = %v, want ErrInvalidEngineSpec", props, err)
+		}
+	}
+	good := map[string]string{"recordsize": "128K", "compression": "zstd-3", "atime": "off", "xattr": "sa", "logbias": "throughput",
+		"sync": "standard", "primarycache": "metadata", "redundant_metadata": "most"}
+	if err := domain.NewRuntimeRegistry().Register(domain.EngineSpec{Engine: "x", ZFSProps: good}); err != nil {
+		t.Errorf("performance tuning properties = %v", err)
+	}
+}

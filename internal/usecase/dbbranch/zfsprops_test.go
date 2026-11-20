@@ -106,19 +106,20 @@ func TestReplicate_プロパティを設定できなければ失敗を返す(t *
 	}
 }
 
-func TestReplicate_プロパティを設定できなかったコピーは捨てて次の回で最初からやり直す(t *testing.T) {
+func TestReplicate_プロパティを設定できなかったコピーは公開せず次の回で設定してから公開する(t *testing.T) {
 	engineWithProps(t, map[string]string{"recordsize": "128K"})
 	p := newPair(t)
 	rec := &setPropsRecorder{err: errors.New("zfs set failed")}
 	p.replica.svc.Lineage = rec
-	p.withBase(t)
-	replica := "tank/db-branch/replicas/prod"
+	base := p.withBase(t)
+	snap := base.Snapshots[0].Name
 
 	if err := p.replica.svc.Replicate(ctx); err == nil {
 		t.Fatal("Replicate succeeded")
 	}
-	if p.replica.storage.datasets[replica] {
-		t.Error("the copy without the engine's properties was kept")
+	got, _ := p.origin.store.GetBase(ctx, name("prod"))
+	if got.HasReplica(snap, "node2") {
+		t.Error("a copy without the engine's properties was published as a replica")
 	}
 
 	rec.err = nil
@@ -126,8 +127,31 @@ func TestReplicate_プロパティを設定できなかったコピーは捨て�
 		t.Fatalf("second Replicate = %v", err)
 	}
 	want := map[string]string{"recordsize": "128K"}
-	if got := rec.sets[replica]; !reflect.DeepEqual(got, want) || !p.replica.storage.datasets[replica] {
-		t.Errorf("after the retry: props %v, copy present %v", got, p.replica.storage.datasets[replica])
+	got, _ = p.origin.store.GetBase(ctx, name("prod"))
+	if !reflect.DeepEqual(rec.sets["tank/db-branch/replicas/prod"], want) || !got.HasReplica(snap, "node2") {
+		t.Errorf("after the retry: props %v, published %v", rec.sets["tank/db-branch/replicas/prod"], got.HasReplica(snap, "node2"))
+	}
+}
+
+func TestReplicate_差分の受信のあともプロパティを確かめてから公開する(t *testing.T) {
+	p := newPair(t)
+	rec := &setPropsRecorder{}
+	p.replica.svc.Lineage = rec
+	p.withBase(t)
+	if err := p.replica.svc.Replicate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s2 := p.snapshot(t)
+	p.syncOriginSnaps(t)
+	engineWithProps(t, map[string]string{"recordsize": "128K"})
+
+	if err := p.replica.svc.Replicate(ctx); err != nil { // receives s2 only: an increment
+		t.Fatal(err)
+	}
+	want := map[string]string{"recordsize": "128K"}
+	got, _ := p.origin.store.GetBase(ctx, name("prod"))
+	if !reflect.DeepEqual(rec.sets["tank/db-branch/replicas/prod"], want) || !got.HasReplica(s2, "node2") {
+		t.Errorf("props after an incremental receive: %v, published %v", rec.sets, got.HasReplica(s2, "node2"))
 	}
 }
 
@@ -191,32 +215,6 @@ func TestRestoreCheckpoint_復元したラインにもエンジンの推奨ZFS�
 	}
 	if props["recordsize"] != "128K" {
 		t.Errorf("recordsize of the restored live dataset = %q, want 128K (props %v)", props["recordsize"], props)
-	}
-}
-
-// cancelOnSetProps cancels the caller's context as it fails, like an agent being stopped.
-type cancelOnSetProps struct {
-	domain.CheckpointStorage
-	cancel func()
-}
-
-func (c *cancelOnSetProps) SetProps(context.Context, string, map[string]string) error {
-	c.cancel()
-	return errors.New("interrupted")
-}
-
-func TestReplicate_プロパティ設定が中断されても後始末は取り消されないctxで行う(t *testing.T) {
-	engineWithProps(t, map[string]string{"recordsize": "128K"})
-	p := newPair(t)
-	caller, cancel := context.WithCancel(ctx)
-	p.replica.svc.Lineage = &cancelOnSetProps{cancel: cancel}
-	p.withBase(t)
-
-	if err := p.replica.svc.Replicate(caller); err == nil {
-		t.Fatal("Replicate succeeded")
-	}
-	if p.replica.storage.destroyCtxErr != nil || p.replica.storage.datasets["tank/db-branch/replicas/prod"] {
-		t.Errorf("the half-made copy was not removed with a live context (ctx err %v)", p.replica.storage.destroyCtxErr)
 	}
 }
 

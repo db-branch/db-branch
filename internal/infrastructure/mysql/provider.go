@@ -52,13 +52,21 @@ func (m *Server) prepareStart(_ context.Context, s domain.Server) (domain.Launch
 }
 
 func (m *Server) health(ctx context.Context, s domain.Server) (domain.HealthState, error) {
-	if ok, _ := m.Running(ctx, s); !ok {
+	out, err := m.Run.Run(ctx, "systemctl", "show", "--property=ActiveState", "--value", unit(s))
+	if err != nil {
+		return domain.HealthStopped, err
+	}
+	switch strings.TrimSpace(string(out)) {
+	case "active":
+		if _, err := m.Run.Run(ctx, m.bin(s, "mysqladmin"), "--socket="+m.socket(s), "-uroot", "ping"); err != nil {
+			return domain.HealthStarting, nil
+		}
+		return domain.HealthReady, nil
+	case "activating", "reloading":
+		return domain.HealthStarting, nil
+	default:
 		return domain.HealthStopped, nil
 	}
-	if _, err := m.Run.Run(ctx, m.bin(s, "mysqladmin"), "--socket="+m.socket(s), "-uroot", "ping"); err != nil {
-		return domain.HealthStarting, nil
-	}
-	return domain.HealthReady, nil
 }
 
 // quiesce makes InnoDB finish purge and change-buffer merges before a clean

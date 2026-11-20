@@ -340,3 +340,31 @@ func TestReconcile_失われていたブランチを再開するときも凍結�
 		t.Errorf("freeze intent left behind: %q", got)
 	}
 }
+
+func TestReconcile_凍結を解除できなければ再開せず失われたままにして次の回で再試行する(t *testing.T) {
+	z := newZEnv(t)
+	z.branch(t)
+	fp := z.freezing(&freezeProvider{liveFrz: true, postErr: errors.New("provider not ready")})
+	br, _ := z.store.GetBranch(ctx, name("x"))
+	br.Status = domain.BranchLost
+	if err := z.store.PutBranch(ctx, br); err != nil {
+		t.Fatal(err)
+	}
+	if err := z.sim.SetProps(ctx, live, map[string]string{domain.PropFreeze: "on"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := z.svc.Reconcile(ctx); err == nil {
+		t.Fatal("Reconcile reported no failure")
+	}
+	if got, _ := z.store.GetBranch(ctx, name("x")); got.Status != domain.BranchLost {
+		t.Errorf("status = %s, want it to stay lost while the freeze is not released", got.Status)
+	}
+	fp.postErr = nil
+	if err := z.svc.Reconcile(ctx); err != nil {
+		t.Fatalf("second Reconcile = %v", err)
+	}
+	if got, _ := z.store.GetBranch(ctx, name("x")); got.Status != domain.BranchReady {
+		t.Errorf("status after the retry = %s", got.Status)
+	}
+}

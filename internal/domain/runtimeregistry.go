@@ -61,17 +61,23 @@ func (s EngineSpec) Clone() EngineSpec {
 
 var enginePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
 
-// coreZFSProps are dataset properties managed by the core that an engine spec may not set.
-var coreZFSProps = map[string]bool{
-	"canmount":   true,
-	"mountpoint": true,
-	"readonly":   true,
-	"origin":     true,
-	"mounted":    true,
-	"type":       true,
-	"clones":     true,
-	"snapdir":    true,
+// allowedZFSProps are dataset performance-tuning properties an engine spec may set.
+var allowedZFSProps = map[string]bool{
+	"recordsize":           true,
+	"compression":          true,
+	"atime":                true,
+	"relatime":             true,
+	"xattr":                true,
+	"logbias":              true,
+	"sync":                 true,
+	"primarycache":         true,
+	"secondarycache":       true,
+	"redundant_metadata":   true,
+	"dnodesize":            true,
+	"special_small_blocks": true,
 }
+
+var zfsPropValuePattern = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9_.-]*$`)
 
 func (s EngineSpec) validate() (*regexp.Regexp, error) {
 	bad := func(format string, a ...any) error {
@@ -83,9 +89,12 @@ func (s EngineSpec) validate() (*regexp.Regexp, error) {
 	if s.RunAsUser == "root" {
 		return nil, bad("must not run as root")
 	}
-	for k := range s.ZFSProps {
-		if strings.Contains(k, ":") || coreZFSProps[k] {
-			return nil, bad("ZFS property %q is managed by the core", k)
+	for k, v := range s.ZFSProps {
+		if !allowedZFSProps[k] {
+			return nil, bad("ZFS property %q is not allowed", k)
+		}
+		if !zfsPropValuePattern.MatchString(v) {
+			return nil, bad("ZFS property %q has invalid value %q", k, v)
 		}
 	}
 	if len(s.Protocols) > 0 {
