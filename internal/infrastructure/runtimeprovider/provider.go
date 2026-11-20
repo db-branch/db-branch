@@ -59,6 +59,8 @@ func (p *Provider) Describe(context.Context) (domain.EngineSpec, error) {
 	s.Capabilities.UpdateStats = s.Capabilities.UpdateStats && stats
 	s.Capabilities.Query = s.Capabilities.Query && p.hooks.Query != nil
 	s.Capabilities.SourceDump = s.Capabilities.SourceDump && p.hooks.DumpSource != nil
+	s.Capabilities.LiveFreeze = false
+	s.Capabilities.InstanceMetrics = false
 	return s, nil
 }
 

@@ -500,3 +500,12 @@ func TestCheckUpgrade_移行先の版が読めなければサーバーに渡さ�
 		t.Errorf("the server was asked: %q", f.calls)
 	}
 }
+
+func TestDescribe_このアダプタが実装しない任意機能はtrueと宣言されていてもfalseにする(t *testing.T) {
+	spec := testSpec()
+	spec.Capabilities.LiveFreeze, spec.Capabilities.InstanceMetrics = true, true
+	got, _ := runtimeprovider.New(spec, &fakeFull{}, runtimeprovider.Hooks{}).Describe(ctx)
+	if got.Capabilities.LiveFreeze || got.Capabilities.InstanceMetrics {
+		t.Errorf("capabilities = %+v: PreFreeze and InstanceMetrics always answer ErrFeatureNotSupported here", got.Capabilities)
+	}
+}

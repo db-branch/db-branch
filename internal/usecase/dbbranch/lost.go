@@ -168,6 +168,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 			errs = append(errs, err)
 			continue
 		}
+		errs = append(errs, s.releaseFreeze(ctx, b))
 		errs = append(errs, s.resume(ctx, b.Name))
 	}
 	errs = append(errs, s.removeMoved(ctx, byName))

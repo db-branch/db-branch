@@ -112,6 +112,8 @@ func (s *Service) replicateBase(ctx context.Context, base domain.Base) error {
 		if held, err = s.heldSnapshots(ctx, ds); err != nil {
 			return err
 		}
+	} else if err := s.applyEngineProps(ctx, base.Runtime, ds); err != nil {
+		return err
 	}
 	var errs []error
 	for _, snap := range base.Snapshots {
@@ -157,11 +159,9 @@ func (s *Service) receive(ctx context.Context, base domain.Base, ds, from, to st
 	if err := s.Streams.Receive(ctx, ds, stream); err != nil {
 		return err
 	}
-	if from == "" && s.Lineage != nil {
-		if props := engineProps(base.Runtime); props != nil {
-			if err := s.Lineage.SetProps(ctx, ds, props); err != nil {
-				return errors.Join(err, s.destroyIfExists(ctx, ds))
-			}
+	if from == "" {
+		if err := s.applyEngineProps(ctx, base.Runtime, ds); err != nil {
+			return errors.Join(err, s.destroyIfExists(context.WithoutCancel(ctx), ds))
 		}
 	}
 	return nil

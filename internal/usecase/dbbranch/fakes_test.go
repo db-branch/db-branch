@@ -70,6 +70,8 @@ type fakeStorage struct {
 	failOn   string
 	// props are the properties each dataset was created with.
 	props map[string]map[string]string
+	// destroyCtxErr is the state of the context the last Destroy got.
+	destroyCtxErr error
 }
 
 func (s *fakeStorage) fail(op string) error {
@@ -118,8 +120,9 @@ func (s *fakeStorage) Rollback(_ context.Context, snap domain.Snapshot) error {
 	return s.fail("rollback")
 }
 
-func (s *fakeStorage) Destroy(_ context.Context, ds string) error {
+func (s *fakeStorage) Destroy(ctx context.Context, ds string) error {
 	s.j.add("zfs destroy %s", ds)
+	s.destroyCtxErr = ctx.Err()
 	if err := s.fail("destroy"); err != nil {
 		return err
 	}

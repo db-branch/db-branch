@@ -348,3 +348,34 @@ func TestCheckUpgradePath_組み込みエンジンの版の接尾辞は従来ど
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestRuntimeRegistry_ZFSPropsにコアが管理するプロパティは指定できない(t *testing.T) {
+	for _, key := range []string{"canmount", "mountpoint", "db-branch:line", "com.example:x", "readonly", "origin"} {
+		reg := domain.NewRuntimeRegistry()
+		err := reg.Register(domain.EngineSpec{Engine: "x", ZFSProps: map[string]string{key: "on"}})
+		if !errors.Is(err, domain.ErrInvalidEngineSpec) {
+			t.Errorf("ZFSProps[%q]: Register = %v, want ErrInvalidEngineSpec", key, err)
+		}
+	}
+	reg := domain.NewRuntimeRegistry()
+	if err := reg.Register(domain.EngineSpec{Engine: "x", ZFSProps: map[string]string{"recordsize": "128K", "compression": "lz4", "atime": "off"}}); err != nil {
+		t.Errorf("ordinary dataset properties = %v", err)
+	}
+}
+
+func TestRuntimeRegistry_CheckUpgradePath_桁が非常に多い数でも正しく順序づける(t *testing.T) {
+	reg := domain.NewRuntimeRegistry()
+	if err := reg.Register(domain.EngineSpec{Engine: "big", VersionPattern: `^[0-9]+(\.[0-9]+)*$`}); err != nil {
+		t.Fatal(err)
+	}
+	ref := func(v string) domain.RuntimeRef { return domain.RuntimeRef{Engine: "big", Version: v} }
+	if err := reg.CheckUpgradePath(ref("99999999999999999999.0.1"), ref("99999999999999999999.0.2")); err != nil {
+		t.Errorf("upgrade between huge numbers = %v", err)
+	}
+	if err := reg.CheckUpgradePath(ref("99999999999999999999.0.2"), ref("99999999999999999999.0.1")); !errors.Is(err, domain.ErrUpgradeRefused) {
+		t.Errorf("downgrade between huge numbers = %v", err)
+	}
+	if err := reg.CheckUpgradePath(ref("99999999999999999999.0.2"), ref("100000000000000000000.0.1")); err != nil {
+		t.Errorf("upgrade across a digit-count boundary = %v", err)
+	}
+}

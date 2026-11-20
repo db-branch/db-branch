@@ -277,3 +277,11 @@ func TestHealth_Type_notifyの起動中_activating_は起動中でありpg_isrea
 		}
 	}
 }
+
+func TestHealth_systemctlに聞けなければ停止と決めつけずエラーを返す(t *testing.T) {
+	f, p, inst := providerFixture(t)
+	f.sys.failOn = "--property=ActiveState"
+	if h, err := p.Health(ctx, inst); err == nil || h != domain.HealthStopped {
+		t.Errorf("Health = %v, %v: want the failure reported", h, err)
+	}
+}

@@ -293,3 +293,50 @@ func TestRecover_PostFreezeに失敗したら意図を残す(t *testing.T) {
 		t.Errorf("freeze intent = %q, want it kept for the next recovery", got)
 	}
 }
+
+func TestRecover_サーバー起動後のユーザー是正に失敗しても凍結は解除する(t *testing.T) {
+	z := newZEnv(t)
+	z.branch(t)
+	z.freezing(&freezeProvider{liveFrz: true})
+	if err := z.sim.SetProps(ctx, live, map[string]string{domain.PropFreeze: "on"}); err != nil {
+		t.Fatal(err)
+	}
+	z.restart() // down: startIfDown starts it, then putting the login right fails
+	z.server.failOn = "exec"
+	z.j.entries = nil
+
+	if err := z.svc.Recover(ctx); err == nil {
+		t.Fatal("Recover reported no failure")
+	}
+	if z.at("postfreeze ") < 0 {
+		t.Errorf("the freeze was not released although the server was started: %q", z.j.entries)
+	}
+}
+
+func TestReconcile_失われていたブランチを再開するときも凍結の意図が残っていれば解除する(t *testing.T) {
+	z := newZEnv(t)
+	z.branch(t)
+	z.freezing(&freezeProvider{liveFrz: true})
+	br, err := z.store.GetBranch(ctx, name("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	br.Status = domain.BranchLost
+	if err := z.store.PutBranch(ctx, br); err != nil {
+		t.Fatal(err)
+	}
+	if err := z.sim.SetProps(ctx, live, map[string]string{domain.PropFreeze: "on"}); err != nil {
+		t.Fatal(err)
+	}
+	z.j.entries = nil
+
+	if err := z.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if z.at("postfreeze ") < 0 {
+		t.Errorf("the freeze was not released: %q", z.j.entries)
+	}
+	if got := z.freezeIntent(t); got != "" {
+		t.Errorf("freeze intent left behind: %q", got)
+	}
+}

@@ -137,17 +137,21 @@ func TestReplicate_プロパティを設定できなかったコピーは捨て�
 func TestCreateBranch_クローンにもエンジンの推奨ZFSプロパティを設定する(t *testing.T) {
 	engineWithProps(t, map[string]string{"recordsize": "128K", "compression": "lz4"})
 	z := newZEnv(t)
-	z.branch(t)
-
-	props, err := z.sim.Props(ctx, live)
-	if err != nil {
+	z.withBase(t)
+	if _, err := z.svc.CreateBranch(ctx, dbbranch.CreateBranchRequest{Name: name("x"), Base: name("prod")}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if props["recordsize"] != "128K" {
-		t.Errorf("recordsize of the branch dataset = %q, want 128K", props["recordsize"])
+
+	if !z.j.has("zfs set recordsize=128K " + live) {
+		t.Errorf("the branch dataset did not get its recordsize: %q", z.j.entries)
 	}
-	if _, set := props["compression"]; set {
-		t.Errorf("compression is what the parent already has, yet it was set: %v", props)
+	for _, e := range z.j.entries {
+		if strings.Contains(e, "compression") {
+			t.Errorf("compression is what the parent already has, yet: %q", e)
+		}
+	}
+	if props, _ := z.sim.Props(ctx, live); props["recordsize"] != "128K" {
+		t.Errorf("recordsize of the branch dataset = %q, want 128K", props["recordsize"])
 	}
 }
 
@@ -187,5 +191,53 @@ func TestRestoreCheckpoint_復元したラインにもエンジンの推奨ZFS�
 	}
 	if props["recordsize"] != "128K" {
 		t.Errorf("recordsize of the restored live dataset = %q, want 128K (props %v)", props["recordsize"], props)
+	}
+}
+
+// cancelOnSetProps cancels the caller's context as it fails, like an agent being stopped.
+type cancelOnSetProps struct {
+	domain.CheckpointStorage
+	cancel func()
+}
+
+func (c *cancelOnSetProps) SetProps(context.Context, string, map[string]string) error {
+	c.cancel()
+	return errors.New("interrupted")
+}
+
+func TestReplicate_プロパティ設定が中断されても後始末は取り消されないctxで行う(t *testing.T) {
+	engineWithProps(t, map[string]string{"recordsize": "128K"})
+	p := newPair(t)
+	caller, cancel := context.WithCancel(ctx)
+	p.replica.svc.Lineage = &cancelOnSetProps{cancel: cancel}
+	p.withBase(t)
+
+	if err := p.replica.svc.Replicate(caller); err == nil {
+		t.Fatal("Replicate succeeded")
+	}
+	if p.replica.storage.destroyCtxErr != nil || p.replica.storage.datasets["tank/db-branch/replicas/prod"] {
+		t.Errorf("the half-made copy was not removed with a live context (ctx err %v)", p.replica.storage.destroyCtxErr)
+	}
+}
+
+func TestReplicate_プロパティが欠けた最新のコピーは次の回で設定し直す(t *testing.T) {
+	p := newPair(t)
+	rec := &setPropsRecorder{}
+	p.replica.svc.Lineage = rec
+	p.withBase(t)
+	if err := p.replica.svc.Replicate(ctx); err != nil { // copied while the engine asked for nothing special
+		t.Fatal(err)
+	}
+	if len(rec.sets) != 0 {
+		t.Fatalf("props set early: %v", rec.sets)
+	}
+
+	engineWithProps(t, map[string]string{"recordsize": "128K"}) // e.g. the copy lost its properties in a crash
+	if err := p.replica.svc.Replicate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"recordsize": "128K"}
+	if got := rec.sets["tank/db-branch/replicas/prod"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("props set on the up-to-date copy = %v, want %v", got, want)
 	}
 }

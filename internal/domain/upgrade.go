@@ -185,7 +185,8 @@ func compareVersions(a, b string) int {
 	return naturalCompare(a, b)
 }
 
-// isPlainVersion: one to three numbers separated by dots, then maybe "-suffix".
+// isPlainVersion: one to three numbers (at most 9 digits each, avoiding
+// strconv.Atoi overflow) separated by dots, then maybe "-suffix".
 func isPlainVersion(s string) bool {
 	s, _, _ = strings.Cut(s, "-")
 	parts := strings.Split(s, ".")
@@ -193,7 +194,7 @@ func isPlainVersion(s string) bool {
 		return false
 	}
 	for _, p := range parts {
-		if p == "" || strings.TrimLeft(p, "0123456789") != "" {
+		if p == "" || len(p) > 9 || strings.TrimLeft(p, "0123456789") != "" {
 			return false
 		}
 	}

@@ -61,6 +61,18 @@ func (s EngineSpec) Clone() EngineSpec {
 
 var enginePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
 
+// coreZFSProps are dataset properties managed by the core that an engine spec may not set.
+var coreZFSProps = map[string]bool{
+	"canmount":   true,
+	"mountpoint": true,
+	"readonly":   true,
+	"origin":     true,
+	"mounted":    true,
+	"type":       true,
+	"clones":     true,
+	"snapdir":    true,
+}
+
 func (s EngineSpec) validate() (*regexp.Regexp, error) {
 	bad := func(format string, a ...any) error {
 		return fmt.Errorf("%w: engine %q: %s", ErrInvalidEngineSpec, s.Engine, fmt.Sprintf(format, a...))
@@ -70,6 +82,11 @@ func (s EngineSpec) validate() (*regexp.Regexp, error) {
 	}
 	if s.RunAsUser == "root" {
 		return nil, bad("must not run as root")
+	}
+	for k := range s.ZFSProps {
+		if strings.Contains(k, ":") || coreZFSProps[k] {
+			return nil, bad("ZFS property %q is managed by the core", k)
+		}
 	}
 	if len(s.Protocols) > 0 {
 		primaries := 0

@@ -392,11 +392,11 @@ func (s *Service) Recover(ctx context.Context) error {
 			}
 			if err != nil {
 				errs = append(errs, err)
-				continue
-			}
-			errs = append(errs, s.ownUser(ctx, br))
-			if !started {
-				errs = append(errs, s.hardenRunning(ctx, br))
+			} else {
+				errs = append(errs, s.ownUser(ctx, br))
+				if !started {
+					errs = append(errs, s.hardenRunning(ctx, br))
+				}
 			}
 			errs = append(errs, s.releaseFreeze(ctx, br))
 		case domain.BranchResetting:

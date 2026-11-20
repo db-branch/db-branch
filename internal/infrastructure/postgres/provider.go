@@ -68,7 +68,7 @@ func (p *Server) prepareStart(_ context.Context, s domain.Server) (domain.Launch
 func (p *Server) health(ctx context.Context, s domain.Server) (domain.HealthState, error) {
 	out, err := p.Run.Run(ctx, "systemctl", "show", "--property=ActiveState", "--value", unit(s))
 	if err != nil {
-		return domain.HealthStopped, nil
+		return domain.HealthStopped, err
 	}
 	switch strings.TrimSpace(string(out)) {
 	case "active":
