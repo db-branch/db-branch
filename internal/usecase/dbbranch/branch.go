@@ -386,16 +386,15 @@ func (s *Service) Recover(ctx context.Context) error {
 				// Say why it is down; the next start retries (resumeFailedRestore).
 				err = errors.Join(err, s.markFailed(ctx, br, err))
 			}
-			if err == nil {
-				err = s.ownUser(ctx, br)
+			if err != nil {
+				errs = append(errs, err)
+				continue
 			}
-			if err == nil && !started {
-				err = s.hardenRunning(ctx, br)
+			errs = append(errs, s.ownUser(ctx, br))
+			if !started {
+				errs = append(errs, s.hardenRunning(ctx, br))
 			}
-			if err == nil {
-				err = s.releaseFreeze(ctx, br)
-			}
-			errs = append(errs, err)
+			errs = append(errs, s.releaseFreeze(ctx, br))
 		case domain.BranchResetting:
 			_, err := s.doReset(ctx, br, nil)
 			errs = append(errs, err)

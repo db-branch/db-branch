@@ -258,3 +258,22 @@ func contains(list []string, want string) bool {
 	}
 	return false
 }
+
+func TestHealth_Type_notifyの起動中_activating_は起動中でありpg_isreadyは呼ばない(t *testing.T) {
+	f, p, inst := providerFixture(t)
+	f.sys.active = true
+	f.sys.outputs = map[string]string{"--property=ActiveState": "activating\n"}
+
+	if h, _ := p.Health(ctx, inst); h != domain.HealthStarting {
+		t.Errorf("activating = %v, want starting", h)
+	}
+	if f.sys.called("pg_isready") {
+		t.Errorf("pg_isready asked while the unit is still activating: %q", f.sys.calls)
+	}
+	for _, state := range []string{"inactive", "failed", "deactivating"} {
+		f.sys.outputs = map[string]string{"--property=ActiveState": state + "\n"}
+		if h, _ := p.Health(ctx, inst); h != domain.HealthStopped {
+			t.Errorf("%s = %v, want stopped", state, h)
+		}
+	}
+}

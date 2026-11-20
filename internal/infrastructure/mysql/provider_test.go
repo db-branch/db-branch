@@ -230,3 +230,15 @@ func TestNewProvider_全フックを配線するとレジストリの宣言と�
 		t.Errorf("Describe %+v differs from the registry %+v", got.Capabilities, want.Capabilities)
 	}
 }
+
+func TestVerifyCleanShutdown_停止のあとの起動の途中で落ちていたら未完了(t *testing.T) {
+	f, p, inst := providerFixture(t)
+	appendFile(f.sys.errorLog, "[Server] /mysqld (mysqld 8.4.13) starting as process 11\n[Server] /mysqld: ready for connections.\n[Server] /mysqld: Shutdown complete (mysqld 8.4.13)\n")
+	if err := p.VerifyCleanShutdown(ctx, inst); err != nil {
+		t.Fatalf("clean stop = %v", err)
+	}
+	appendFile(f.sys.errorLog, "[Server] /mysqld (mysqld 8.4.13) starting as process 12\n[ERROR] InnoDB: recovery failed\n")
+	if err := p.VerifyCleanShutdown(ctx, inst); !errors.Is(err, domain.ErrUncleanShutdown) {
+		t.Errorf("died while starting after the last clean stop = %v, want ErrUncleanShutdown", err)
+	}
+}

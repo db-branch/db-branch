@@ -104,3 +104,28 @@ func TestReplicate_プロパティを設定できなければ失敗を返す(t *
 		t.Errorf("Replicate = %v", err)
 	}
 }
+
+func TestReplicate_プロパティを設定できなかったコピーは捨てて次の回で最初からやり直す(t *testing.T) {
+	engineWithProps(t, map[string]string{"recordsize": "128K"})
+	p := newPair(t)
+	rec := &setPropsRecorder{err: errors.New("zfs set failed")}
+	p.replica.svc.Lineage = rec
+	p.withBase(t)
+	replica := "tank/db-branch/replicas/prod"
+
+	if err := p.replica.svc.Replicate(ctx); err == nil {
+		t.Fatal("Replicate succeeded")
+	}
+	if p.replica.storage.datasets[replica] {
+		t.Error("the copy without the engine's properties was kept")
+	}
+
+	rec.err = nil
+	if err := p.replica.svc.Replicate(ctx); err != nil {
+		t.Fatalf("second Replicate = %v", err)
+	}
+	want := map[string]string{"recordsize": "128K"}
+	if got := rec.sets[replica]; !reflect.DeepEqual(got, want) || !p.replica.storage.datasets[replica] {
+		t.Errorf("after the retry: props %v, copy present %v", got, p.replica.storage.datasets[replica])
+	}
+}

@@ -3,9 +3,42 @@ package dbbranch
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
 )
+
+const (
+	defaultFreezeTimeout     = 5 * time.Second
+	defaultPostFreezeTimeout = 30 * time.Second
+)
+
+func (s *Service) freezeTimeout() time.Duration {
+	if s.FreezeTimeout > 0 {
+		return s.FreezeTimeout
+	}
+	return defaultFreezeTimeout
+}
+
+func (s *Service) freezeInstance(ctx context.Context, br domain.Branch, spec domain.EngineSpec, dataset string) (domain.InstanceSpec, error) {
+	info, err := s.Storage.Info(ctx, dataset)
+	if err != nil {
+		return domain.InstanceSpec{}, err
+	}
+	inst := br.Instance(spec)
+	inst.DataDir = info.Mountpoint
+	return inst, nil
+}
+
+func (s *Service) unfreeze(ctx context.Context, p domain.RuntimeProvider, inst domain.InstanceSpec, dataset string, tok domain.FreezeToken) error {
+	postBase := context.WithoutCancel(ctx)
+	postCtx, cancel := context.WithTimeout(postBase, defaultPostFreezeTimeout)
+	defer cancel()
+	if err := p.PostFreeze(postCtx, inst, tok); err != nil {
+		return err
+	}
+	return s.Lineage.Unset(postBase, dataset, domain.PropFreeze)
+}
 
 // liveFreezer returns the branch's runtime provider and spec when the engine
 // declares Capabilities.LiveFreeze. Without a provider (or when LiveFreeze is
@@ -38,18 +71,20 @@ func (s *Service) withLiveFreeze(ctx context.Context, br domain.Branch, dataset 
 	if !ok {
 		return fn()
 	}
+	inst, err := s.freezeInstance(ctx, br, spec, dataset)
+	if err != nil {
+		return err
+	}
 	if err := s.Lineage.SetProps(ctx, dataset, map[string]string{domain.PropFreeze: "on"}); err != nil {
 		return err
 	}
-	inst := br.Instance(spec)
-	tok, err := p.PreFreeze(ctx, inst)
+	preCtx, cancel := context.WithTimeout(ctx, s.freezeTimeout())
+	tok, err := p.PreFreeze(preCtx, inst)
+	cancel()
 	if err == nil {
 		err = fn()
 	}
-	if postErr := p.PostFreeze(ctx, inst, tok); postErr != nil {
-		return errors.Join(err, postErr)
-	}
-	return errors.Join(err, s.Lineage.Unset(ctx, dataset, domain.PropFreeze))
+	return errors.Join(err, s.unfreeze(ctx, p, inst, dataset, tok))
 }
 
 // releaseFreeze finishes a live freeze left behind by a crash during
@@ -68,8 +103,9 @@ func (s *Service) releaseFreeze(ctx context.Context, br domain.Branch) error {
 	if err != nil || props[domain.PropFreeze] != "on" {
 		return err
 	}
-	if err := p.PostFreeze(ctx, br.Instance(spec), domain.FreezeToken{}); err != nil {
+	inst, err := s.freezeInstance(ctx, br, spec, ds)
+	if err != nil {
 		return err
 	}
-	return s.Lineage.Unset(ctx, ds, domain.PropFreeze)
+	return s.unfreeze(ctx, p, inst, ds, domain.FreezeToken{})
 }

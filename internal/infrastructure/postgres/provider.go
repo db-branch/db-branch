@@ -66,13 +66,21 @@ func (p *Server) prepareStart(_ context.Context, s domain.Server) (domain.Launch
 }
 
 func (p *Server) health(ctx context.Context, s domain.Server) (domain.HealthState, error) {
-	if ok, _ := p.Running(ctx, s); !ok {
+	out, err := p.Run.Run(ctx, "systemctl", "show", "--property=ActiveState", "--value", unit(s))
+	if err != nil {
 		return domain.HealthStopped, nil
 	}
-	if !p.ready(ctx, s) {
+	switch strings.TrimSpace(string(out)) {
+	case "active":
+		if !p.ready(ctx, s) {
+			return domain.HealthStarting, nil
+		}
+		return domain.HealthReady, nil
+	case "activating", "reloading":
 		return domain.HealthStarting, nil
+	default:
+		return domain.HealthStopped, nil
 	}
-	return domain.HealthReady, nil
 }
 
 // verifyShutdown reads the control file: only "shut down" means the last stop

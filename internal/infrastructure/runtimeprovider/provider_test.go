@@ -247,7 +247,9 @@ func TestUpdateStatsとアップグレード_DBServerの任意ポートに委譲
 	hooks := runtimeprovider.Hooks{PrepareStart: func(context.Context, domain.Server) (domain.LaunchPlan, error) {
 		return domain.LaunchPlan{Command: "/bin/db", ServiceType: "notify"}, nil
 	}}
-	p := runtimeprovider.New(testSpec(), f, hooks)
+	reg := domain.NewRuntimeRegistry()
+	_ = reg.Register(domain.EngineSpec{Engine: "testdb"})
+	p := runtimeprovider.New(testSpec(), f, hooks).WithRegistry(reg)
 	i := testInstance()
 
 	if err := p.UpdateStats(ctx, i); err != nil {
@@ -480,5 +482,21 @@ func TestCheckUpgradePath_アップグレードを持たないサーバーなら
 	p := runtimeprovider.New(testSpec(), &fakeServer{}, runtimeprovider.Hooks{})
 	if err := p.CheckUpgradePath(ctx, "1.0", "1.1"); !errors.Is(err, domain.ErrFeatureNotSupported) {
 		t.Errorf("CheckUpgradePath = %v", err)
+	}
+}
+
+func TestCheckUpgrade_移行先の版が読めなければサーバーに渡さず断る(t *testing.T) {
+	reg := domain.NewRuntimeRegistry()
+	_ = reg.Register(domain.EngineSpec{Engine: "testdb"})
+	f := &fakeFull{}
+	p := runtimeprovider.New(testSpec(), f, runtimeprovider.Hooks{}).WithRegistry(reg)
+
+	for _, v := range []string{"latest", "1.3/../x", ""} {
+		if _, err := p.CheckUpgrade(ctx, testInstance(), v, domain.Login{}); !errors.Is(err, domain.ErrInvalidRuntime) {
+			t.Errorf("CheckUpgrade to %q = %v, want ErrInvalidRuntime", v, err)
+		}
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("the server was asked: %q", f.calls)
 	}
 }

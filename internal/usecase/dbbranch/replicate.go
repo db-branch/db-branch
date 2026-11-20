@@ -159,7 +159,9 @@ func (s *Service) receive(ctx context.Context, base domain.Base, ds, from, to st
 	}
 	if from == "" && s.Lineage != nil {
 		if props := engineProps(base.Runtime); props != nil {
-			return s.Lineage.SetProps(ctx, ds, props)
+			if err := s.Lineage.SetProps(ctx, ds, props); err != nil {
+				return errors.Join(err, s.destroyIfExists(ctx, ds))
+			}
 		}
 	}
 	return nil

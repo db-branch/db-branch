@@ -260,7 +260,11 @@ func (p *Provider) CheckUpgrade(ctx context.Context, s domain.InstanceSpec, toVe
 	if err != nil {
 		return domain.UpgradePlan{}, err
 	}
-	return u.CheckUpgrade(ctx, srv, domain.RuntimeRef{Engine: p.spec.Engine, Version: toVersion}, own)
+	to, err := p.registry.Parse(string(p.spec.Engine) + "@" + toVersion)
+	if err != nil {
+		return domain.UpgradePlan{}, err
+	}
+	return u.CheckUpgrade(ctx, srv, to, own)
 }
 
 // StartUpgraded starts the instance on its new runtime and reads its log. The

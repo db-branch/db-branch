@@ -74,11 +74,12 @@ func (m *Server) quiesce(ctx context.Context, s domain.Server, mode domain.StopM
 }
 
 // verifyShutdown checks the error log says the last stop completed: a
-// "Shutdown complete" after the last time the server came up.
+// "Shutdown complete" after the last time the server started or came up.
 func (m *Server) verifyShutdown(_ context.Context, s domain.Server) error {
 	b, _ := os.ReadFile(m.errLog(s))
 	log := string(b)
-	up, down := strings.LastIndex(log, "ready for connections"), strings.LastIndex(log, "Shutdown complete")
+	up := max(strings.LastIndex(log, "ready for connections"), strings.LastIndex(log, "starting as process"))
+	down := strings.LastIndex(log, "Shutdown complete")
 	if down < 0 || down < up {
 		return fmt.Errorf("%w: %s: the error log does not end with a completed shutdown", domain.ErrUncleanShutdown, s.ID)
 	}
