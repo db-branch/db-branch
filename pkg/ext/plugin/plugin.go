@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/rpc"
 	"os"
@@ -23,9 +24,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/hashicorp/go-hclog"
 	goplugin "github.com/hashicorp/go-plugin"
+	"golang.org/x/sys/unix"
 
 	"github.com/db-branch/db-branch/pkg/ext"
 )
@@ -653,14 +656,164 @@ type Loaded struct {
 // Close stops the module process.
 func (l *Loaded) Close() { l.client.Kill() }
 
-// Load starts every module binary in dir (sorted by name). Files writable by
-// group or others are skipped: a module runs as the agent (root). A missing
-// dir means no modules.
+// ErrUntrusted is returned for a module file or directory that the agent must
+// not execute: relative or traversal path, not owned by root, writable by
+// group or others, a symbolic link, special mode bits, missing owner execute
+// permission, or not the expected file type.
+var ErrUntrusted = errors.New("module file is not trusted")
+
+func fileOwner(fi fs.FileInfo) (uint32, bool) {
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st != nil {
+		return st.Uid, true
+	}
+	return 0, false
+}
+
+type loader struct {
+	trustRoot string
+	ownerOf   func(fs.FileInfo) (uint32, bool)
+}
+
+func (l loader) owner(fi fs.FileInfo) (uint32, bool) {
+	if l.ownerOf != nil {
+		return l.ownerOf(fi)
+	}
+	return fileOwner(fi)
+}
+
+func classifyOpenErr(path string, err error) error {
+	switch {
+	case errors.Is(err, syscall.ELOOP), errors.Is(err, syscall.EMLINK):
+		return fmt.Errorf("%w: %s is a symbolic link: %w", ErrUntrusted, path, err)
+	case errors.Is(err, syscall.ENOTDIR):
+		return fmt.Errorf("%w: %s is not a directory: %w", ErrUntrusted, path, err)
+	case errors.Is(err, syscall.ENXIO), errors.Is(err, syscall.EOPNOTSUPP):
+		return fmt.Errorf("%w: %s is not a regular file: %w", ErrUntrusted, path, err)
+	default:
+		return err
+	}
+}
+
+func (l loader) checkTrustInfo(path string, fi fs.FileInfo, wantDir bool) error {
+	mode := fi.Mode()
+	if wantDir {
+		if !mode.IsDir() {
+			return fmt.Errorf("%w: %s is not a directory", ErrUntrusted, path)
+		}
+	} else if !mode.IsRegular() {
+		return fmt.Errorf("%w: %s is not a regular file", ErrUntrusted, path)
+	}
+	special := fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky
+	if wantDir {
+		special = fs.ModeSetuid | fs.ModeSticky
+	}
+	if mode&special != 0 {
+		return fmt.Errorf("%w: %s has unsafe mode bits (%s)", ErrUntrusted, path, mode)
+	}
+	if uid, ok := l.owner(fi); !ok || uid != 0 {
+		return fmt.Errorf("%w: %s is not owned by root", ErrUntrusted, path)
+	}
+	perm := mode.Perm()
+	if perm&0o022 != 0 {
+		return fmt.Errorf("%w: %s is writable by group or others (%04o)", ErrUntrusted, path, perm)
+	}
+	if !wantDir && perm&0o100 == 0 {
+		return fmt.Errorf("%w: %s is not executable by owner (%04o)", ErrUntrusted, path, perm)
+	}
+	return nil
+}
+
+// openTrustedDir walks from trustRoot (default "/") to dir one path component
+// at a time using openat(O_DIRECTORY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC), verifying
+// every ancestor directory and dir itself so no unprivileged user can swap a
+// directory or binary along the path.
+func (l loader) openTrustedDir(dir string) (*os.File, string, error) {
+	if !filepath.IsAbs(dir) {
+		return nil, "", fmt.Errorf("%w: %s must be an absolute path", ErrUntrusted, dir)
+	}
+	for _, seg := range strings.Split(dir, string(os.PathSeparator)) {
+		if seg == ".." {
+			return nil, "", fmt.Errorf("%w: %s must not contain '..'", ErrUntrusted, dir)
+		}
+	}
+	cleanDir := filepath.Clean(dir)
+	root := l.trustRoot
+	if root == "" {
+		root = string(os.PathSeparator)
+	}
+	root = filepath.Clean(root)
+	rel, err := filepath.Rel(root, cleanDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return nil, "", fmt.Errorf("%w: %s is outside trust root %s", ErrUntrusted, cleanDir, root)
+	}
+	df, err := os.OpenFile(root, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, "", classifyOpenErr(root, err)
+	}
+	fi, err := df.Stat()
+	if err == nil {
+		err = l.checkTrustInfo(root, fi, true)
+	}
+	if err != nil {
+		_ = df.Close()
+		return nil, "", err
+	}
+	if rel == "." {
+		return df, cleanDir, nil
+	}
+	cur := root
+	for _, part := range strings.Split(rel, string(os.PathSeparator)) {
+		cur = filepath.Join(cur, part)
+		childFD, err := unix.Openat(int(df.Fd()), part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+		_ = df.Close()
+		if err != nil {
+			return nil, "", classifyOpenErr(cur, &os.PathError{Op: "open", Path: cur, Err: err})
+		}
+		df = os.NewFile(uintptr(childFD), cur)
+		fi, err := df.Stat()
+		if err == nil {
+			err = l.checkTrustInfo(cur, fi, true)
+		}
+		if err != nil {
+			_ = df.Close()
+			return nil, "", err
+		}
+	}
+	return df, cleanDir, nil
+}
+
+// Load starts every trusted module binary in dir (sorted by name). Because a
+// module runs as the agent (root), dir must be an absolute path without ".."
+// segments, every directory from "/" through dir must be a real directory
+// owned by root without group/other write or setuid/sticky bits, and each
+// executable must be a root-owned regular file with owner-execute permission,
+// no group/other write, no setuid/setgid/sticky bits, and not a symbolic link.
+// Each module process runs with working directory "/" and a minimal explicit
+// environment (PATH=/usr/sbin:/usr/bin:/sbin:/bin); the agent's host
+// environment is not inherited. A missing dir means no modules.
 func Load(dir string, log *slog.Logger) ([]*Loaded, error) {
-	entries, err := os.ReadDir(dir)
+	return (loader{}).load(dir, log)
+}
+
+func (l loader) load(dir string, log *slog.Logger) ([]*Loaded, error) {
+	if log == nil {
+		log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if dir == "" {
+		return nil, nil
+	}
+	df, cleanDir, err := l.openTrustedDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
+	if err != nil {
+		if errors.Is(err, ErrUntrusted) {
+			log.Warn("refusing untrusted module directory", "dir", dir, "err", err)
+		}
+		return nil, err
+	}
+	defer df.Close()
+	entries, err := df.ReadDir(-1)
 	if err != nil {
 		return nil, err
 	}
@@ -668,33 +821,66 @@ func Load(dir string, log *slog.Logger) ([]*Loaded, error) {
 	var out []*Loaded
 	var errs []error
 	for _, e := range entries {
-		path := filepath.Join(dir, e.Name())
-		info, err := os.Stat(path)
-		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		name := e.Name()
+		path := filepath.Join(cleanDir, name)
+		if e.Type()&(fs.ModeSocket|fs.ModeDevice|fs.ModeCharDevice) != 0 {
+			err := fmt.Errorf("%w: %s is not a regular file", ErrUntrusted, path)
+			log.Warn("skipping untrusted module", "path", path, "err", err)
+			errs = append(errs, err)
 			continue
 		}
-		if info.Mode().Perm()&0o022 != 0 {
-			log.Warn("skipping module writable by group or others", "path", path)
+		fd, err := unix.Openat(int(df.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+		if err != nil {
+			err = classifyOpenErr(path, err)
+			if errors.Is(err, ErrUntrusted) {
+				log.Warn("skipping untrusted module", "path", path, "err", err)
+				errs = append(errs, err)
+			} else {
+				log.Warn("skipping unreadable module", "path", path, "err", err)
+				errs = append(errs, fmt.Errorf("module %s: %w", path, err))
+			}
 			continue
 		}
-		l, err := start(path)
+		f := os.NewFile(uintptr(fd), path)
+		info, statErr := f.Stat()
+		_ = f.Close()
+		if statErr != nil {
+			errs = append(errs, fmt.Errorf("module %s: %w", path, statErr))
+			continue
+		}
+		if info.Mode().IsDir() || (info.Mode().IsRegular() && info.Mode().Perm()&0o111 == 0) {
+			continue
+		}
+		if err := l.checkTrustInfo(path, info, false); err != nil {
+			log.Warn("skipping untrusted module", "path", path, "err", err)
+			errs = append(errs, err)
+			continue
+		}
+		mod, err := start(path)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("module %s: %w", path, err))
 			continue
 		}
-		log.Info("module loaded", "name", l.Info.Name, "version", l.Info.Version, "path", path)
-		out = append(out, l)
+		log.Info("module loaded", "name", mod.Info.Name, "version", mod.Info.Version, "path", path)
+		out = append(out, mod)
 	}
 	return out, errors.Join(errs...)
 }
 
+const defaultModulePATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+
 func start(path string) (*Loaded, error) {
+	cmd := exec.Command(path)
+	cmd.Dir = "/"
+	cmd.Env = []string{"PATH=" + defaultModulePATH}
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig:  Handshake,
 		Plugins:          map[string]goplugin.Plugin{pluginName: &modulePlugin{}},
-		Cmd:              exec.Command(path),
+		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolNetRPC},
-		Logger:           hclog.New(&hclog.LoggerOptions{Output: io.Discard}),
+		// go-plugin would add the agent's whole environment (secrets included) to cmd.Env.
+		SkipHostEnv: true,
+		Logger:      hclog.New(&hclog.LoggerOptions{Output: io.Discard}),
 	})
 	rpcClient, err := client.Client()
 	if err != nil {
