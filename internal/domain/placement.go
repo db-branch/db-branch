@@ -34,7 +34,10 @@ type Placement struct {
 // operating system's collation libraries (glibc locale data, ICU). PostgreSQL
 // uses them for text ordering, so indexes built on one distribution release
 // can be wrong on another. MySQL ships its own collations in the runtime.
-func CollationBound(e Engine) bool { return e == Postgres }
+func CollationBound(e Engine) bool {
+	spec, ok := DefaultRuntimes.Spec(e)
+	return ok && spec.CollationBound
+}
 
 // SameDistro reports whether a node on have may run data made on want. A side
 // that is not known (nodes of older versions do not report it) does not
