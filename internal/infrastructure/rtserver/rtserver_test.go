@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ type provider struct {
 	startErr error
 	users    [][2]string
 	access   domain.AdminAccess
+	loadFn   func(ctx context.Context, i domain.InstanceSpec, path string) error
 }
 
 func (p *provider) note(name string, i domain.InstanceSpec) {
@@ -99,9 +101,12 @@ func (p *provider) Query(context.Context, domain.InstanceSpec, domain.QueryReque
 	return domain.QueryResult{}, nil
 }
 func (p *provider) TailLog(context.Context, domain.InstanceSpec, int) (string, error) { return "", nil }
-func (p *provider) Load(_ context.Context, i domain.InstanceSpec, path string) error {
+func (p *provider) Load(ctx context.Context, i domain.InstanceSpec, path string) error {
 	p.note("Load", i)
 	p.users = append(p.users, [2]string{"load", path})
+	if p.loadFn != nil {
+		return p.loadFn(ctx, i, path)
+	}
 	return nil
 }
 
@@ -396,6 +401,11 @@ func TestPrepareClone_領域を渡してモジュールに委ねる(t *testing.T
 
 func TestユーザーとSQL_モジュールに委ねる(t *testing.T) {
 	e := newEnv(t)
+	e.srv.StateRoot = t.TempDir()
+	dump := filepath.Join(t.TempDir(), "dump.sql")
+	if err := os.WriteFile(dump, []byte("SELECT 1;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 	if err := e.srv.CreateUser(ctx, server, "u", "pw"); err != nil {
 		t.Fatal(err)
@@ -403,10 +413,11 @@ func TestユーザーとSQL_モジュールに委ねる(t *testing.T) {
 	if err := e.srv.ExecAs(ctx, server, "u", "pw", "select 1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.srv.Load(ctx, server, "/dump.sql"); err != nil {
+	if err := e.srv.Load(ctx, server, dump); err != nil {
 		t.Fatal(err)
 	}
-	if len(e.prov.users) != 3 || e.prov.users[0] != [2]string{"u", "pw"} || e.prov.users[1] != [2]string{"u", "select 1"} || e.prov.users[2] != [2]string{"load", "/dump.sql"} {
+	if len(e.prov.users) != 3 || e.prov.users[0] != [2]string{"u", "pw"} || e.prov.users[1] != [2]string{"u", "select 1"} ||
+		e.prov.users[2][0] != "load" || filepath.Dir(e.prov.users[2][1]) != filepath.Join(e.srv.StateRoot, server.ID) {
 		t.Fatalf("%v", e.prov.users)
 	}
 }
@@ -761,6 +772,309 @@ func TestStartUpgraded_起動失敗やタイムアウト時にStartと同じ後�
 		log, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{})
 		if err == nil || !strings.Contains(err.Error(), "did not become ready") || log.Excerpt != "module excerpt" {
 			t.Fatalf("log = %+v, err = %v", log, err)
+		}
+	})
+}
+
+func TestLoad_ダンプを専用ユーザー所有の0600でコピーしてモジュールに渡し終了後に消す(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		fileName  string
+		wantExt   string
+		preCreate bool
+	}{
+		{"既存StateDirのsql", "prod.sql", ".sql", true},
+		{"未作成StateDirのsql.gz", "prod.sql.gz", ".sql.gz", false},
+		{"拡張子なし", "rawdump", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.srv.StateRoot = t.TempDir()
+			stateDir := filepath.Join(e.srv.StateRoot, server.ID)
+			if tc.preCreate {
+				if err := os.MkdirAll(stateDir, 0o750); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				e.srv.Mkdir = func(p string) error { return os.MkdirAll(p, 0o750) }
+			}
+			srcDir := filepath.Join(t.TempDir(), "src")
+			if err := os.MkdirAll(srcDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			origPath := filepath.Join(srcDir, tc.fileName)
+			origBody := "-- dump body\nCREATE TABLE t(id int);\n"
+			if err := os.WriteFile(origPath, []byte(origBody), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			var receivedPath string
+			var receivedPerm os.FileMode
+			var receivedBody string
+			var chownedBeforeLoad bool
+			e.prov.loadFn = func(_ context.Context, _ domain.InstanceSpec, path string) error {
+				receivedPath = path
+				fi, err := os.Stat(path)
+				if err != nil {
+					return err
+				}
+				receivedPerm = fi.Mode().Perm()
+				b, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				receivedBody = string(b)
+				wantChown := "db-branch-rt-fakeengine:" + path
+				for _, c := range e.chowned {
+					if c == wantChown {
+						chownedBeforeLoad = true
+					}
+				}
+				return nil
+			}
+
+			if err := e.srv.Load(context.Background(), server, origPath); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if receivedPath == "" || receivedPath == origPath {
+				t.Fatalf("receivedPath = %q, must be a staged copy distinct from %q", receivedPath, origPath)
+			}
+			if filepath.Dir(receivedPath) != stateDir {
+				t.Errorf("staged path %q not under %q", receivedPath, stateDir)
+			}
+			if tc.wantExt != "" && !strings.HasSuffix(receivedPath, tc.wantExt) {
+				t.Errorf("staged path %q lacks extension %q", receivedPath, tc.wantExt)
+			}
+			if receivedPerm != 0o600 {
+				t.Errorf("staged perm = %o, want 0600", receivedPerm)
+			}
+			if !chownedBeforeLoad {
+				t.Errorf("staged file must be chowned to module user before Provider.Load: %v", e.chowned)
+			}
+			if receivedBody != origBody {
+				t.Errorf("staged body = %q, want %q", receivedBody, origBody)
+			}
+			if _, err := os.Stat(receivedPath); !os.IsNotExist(err) {
+				t.Errorf("staged file still exists after Load: %v", err)
+			}
+			if entries, _ := os.ReadDir(stateDir); len(entries) != 0 {
+				t.Errorf("leftover files in stateDir: %v", entries)
+			}
+			afterOrig, err := os.ReadFile(origPath)
+			if err != nil || string(afterOrig) != origBody {
+				t.Errorf("original dump changed: %q, %v", afterOrig, err)
+			}
+		})
+	}
+}
+
+func TestLoad_Providerが失敗してもコピーを消し元のファイルは変えない(t *testing.T) {
+	e := newEnv(t)
+	e.srv.StateRoot = t.TempDir()
+	stateDir := filepath.Join(e.srv.StateRoot, server.ID)
+	origPath := filepath.Join(t.TempDir(), "dump.sql")
+	if err := os.WriteFile(origPath, []byte("-- sql\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var staged string
+	e.prov.loadFn = func(_ context.Context, _ domain.InstanceSpec, path string) error {
+		staged = path
+		return errors.New("syntax error near line 1")
+	}
+
+	err := e.srv.Load(context.Background(), server, origPath)
+	if err == nil || !strings.Contains(err.Error(), "syntax error") {
+		t.Fatalf("err = %v", err)
+	}
+	if staged == "" {
+		t.Fatal("Provider.Load was not called")
+	}
+	if _, err := os.Stat(staged); !os.IsNotExist(err) {
+		t.Errorf("staged copy left behind: %v", err)
+	}
+	if entries, _ := os.ReadDir(stateDir); len(entries) != 0 {
+		t.Errorf("leftover files: %v", entries)
+	}
+	if b, err := os.ReadFile(origPath); err != nil || string(b) != "-- sql\n" {
+		t.Errorf("original file altered: %q, %v", b, err)
+	}
+}
+
+func TestLoad_ctxキャンセルで中断しコピーを残さず元のファイルは変えない(t *testing.T) {
+	t.Run("開始前にキャンセル済み", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		origPath := filepath.Join(t.TempDir(), "dump.sql")
+		if err := os.WriteFile(origPath, []byte("-- sql\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := e.srv.Load(ctx, server, origPath)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if len(e.prov.calls) != 0 {
+			t.Fatalf("Provider.Load must not be called: %v", e.prov.calls)
+		}
+	})
+
+	t.Run("コピー中にキャンセル", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		stateDir := filepath.Join(e.srv.StateRoot, server.ID)
+		fifo := filepath.Join(t.TempDir(), "dump.sql")
+		if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+			t.Skipf("mkfifo: %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			w, err := os.OpenFile(fifo, os.O_WRONLY, 0)
+			if err != nil {
+				return
+			}
+			defer w.Close()
+			chunk := make([]byte, 128*1024)
+			_, _ = w.Write(chunk)
+			cancel()
+			_, _ = w.Write([]byte("more"))
+		}()
+
+		err := e.srv.Load(ctx, server, fifo)
+		<-done
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if len(e.prov.calls) != 0 {
+			t.Fatalf("Provider.Load must not be called on canceled copy: %v", e.prov.calls)
+		}
+		if entries, _ := os.ReadDir(stateDir); len(entries) != 0 {
+			t.Errorf("partial staged copy left behind: %v", entries)
+		}
+	})
+
+	t.Run("Provider実行中にキャンセル", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		stateDir := filepath.Join(e.srv.StateRoot, server.ID)
+		origPath := filepath.Join(t.TempDir(), "dump.sql")
+		if err := os.WriteFile(origPath, []byte("-- sql\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		e.prov.loadFn = func(ctx context.Context, _ domain.InstanceSpec, _ string) error {
+			cancel()
+			return ctx.Err()
+		}
+
+		err := e.srv.Load(ctx, server, origPath)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if entries, _ := os.ReadDir(stateDir); len(entries) != 0 {
+			t.Errorf("staged copy left behind: %v", entries)
+		}
+	})
+}
+
+func TestLoad_読み込み元やコピー先やchownの失敗は分かりやすく返しコピーを残さない(t *testing.T) {
+	t.Run("元のダンプが存在しない", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		err := e.srv.Load(context.Background(), server, filepath.Join(t.TempDir(), "missing.sql"))
+		if err == nil || !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("err = %v, want ErrNotExist", err)
+		}
+		if len(e.prov.calls) != 0 {
+			t.Fatalf("Provider.Load must not be called")
+		}
+	})
+
+	t.Run("コピー先ディレクトリを作れない", func(t *testing.T) {
+		e := newEnv(t)
+		blocker := filepath.Join(t.TempDir(), "file")
+		_ = os.WriteFile(blocker, nil, 0o600)
+		e.srv.StateRoot = blocker
+		origPath := filepath.Join(t.TempDir(), "dump.sql")
+		_ = os.WriteFile(origPath, []byte("x"), 0o600)
+
+		err := e.srv.Load(context.Background(), server, origPath)
+		if err == nil || !strings.Contains(err.Error(), "staging directory") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("Mkdirフックが失敗する", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		e.srv.Mkdir = func(string) error { return errors.New("read-only file system") }
+		origPath := filepath.Join(t.TempDir(), "dump.sql")
+		_ = os.WriteFile(origPath, []byte("x"), 0o600)
+
+		err := e.srv.Load(context.Background(), server, origPath)
+		if err == nil || !strings.Contains(err.Error(), "read-only") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("ディレクトリ作成後のchownに失敗する", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		e.srv.Chown = func(string, string) error { return errors.New("no such user") }
+		origPath := filepath.Join(t.TempDir(), "dump.sql")
+		_ = os.WriteFile(origPath, []byte("x"), 0o600)
+
+		err := e.srv.Load(context.Background(), server, origPath)
+		if err == nil || !strings.Contains(err.Error(), "no such user") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("コピーファイルの作成に失敗する", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root can write anywhere")
+		}
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		stateDir := filepath.Join(e.srv.StateRoot, server.ID)
+		if err := os.MkdirAll(stateDir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(stateDir, 0o700) })
+		origPath := filepath.Join(t.TempDir(), "dump.sql")
+		_ = os.WriteFile(origPath, []byte("x"), 0o600)
+
+		err := e.srv.Load(context.Background(), server, origPath)
+		if err == nil || !strings.Contains(err.Error(), "disk space") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("コピーファイルのchownに失敗したらファイルを消す", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		stateDir := filepath.Join(e.srv.StateRoot, server.ID)
+		if err := os.MkdirAll(stateDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		e.srv.Chown = func(string, string) error { return errors.New("operation not permitted") }
+		origPath := filepath.Join(t.TempDir(), "dump.sql")
+		_ = os.WriteFile(origPath, []byte("x"), 0o600)
+
+		err := e.srv.Load(context.Background(), server, origPath)
+		if err == nil || !strings.Contains(err.Error(), "operation not permitted") {
+			t.Fatalf("err = %v", err)
+		}
+		if entries, _ := os.ReadDir(stateDir); len(entries) != 0 {
+			t.Errorf("staged copy left behind after chown error: %v", entries)
+		}
+		if len(e.prov.calls) != 0 {
+			t.Fatalf("Provider.Load must not be called after chown error")
 		}
 	})
 }

@@ -9,8 +9,13 @@ package rtserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -243,8 +248,111 @@ func (v *Server) CreateUser(ctx context.Context, s domain.Server, user, password
 	return v.Provider.CreateUser(ctx, v.instance(s), user, password)
 }
 
+// Load stages dumpPath into the instance's state directory as a 0600 copy owned
+// by the module's OS user, hands the copy to the module, and removes it on return.
 func (v *Server) Load(ctx context.Context, s domain.Server, dumpPath string) error {
-	return v.Provider.Load(ctx, v.instance(s), dumpPath)
+	staged, err := v.stageDump(ctx, s, dumpPath)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(staged)
+	return v.Provider.Load(ctx, v.instance(s), staged)
+}
+
+func (v *Server) stageDump(ctx context.Context, s domain.Server, dumpPath string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	src, err := os.Open(dumpPath)
+	if err != nil {
+		return "", fmt.Errorf("open dump %s: %w", dumpPath, err)
+	}
+	defer src.Close()
+
+	dir := v.stateDir(s)
+	if err := v.prepareStageDir(dir); err != nil {
+		return "", err
+	}
+	dst, err := os.CreateTemp(dir, loadTempPattern(dumpPath)) // 0600
+	if err != nil {
+		return "", fmt.Errorf("create staged dump in %s (check directory permissions and disk space): %w", dir, err)
+	}
+	staged := dst.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.Remove(staged)
+		}
+	}()
+
+	_, err = io.Copy(dst, ctxReader{ctx: ctx, r: src})
+	if cerr := dst.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		return "", stageWriteError(dir, err)
+	}
+	if v.Chown != nil {
+		if err := v.Chown(v.User, staged); err != nil {
+			return "", fmt.Errorf("give staged dump %s to %s: %w", staged, v.User, err)
+		}
+	}
+	ok = true
+	return staged, nil
+}
+
+func (v *Server) prepareStageDir(dir string) error {
+	if _, err := os.Stat(dir); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("prepare staging directory %s: %w", dir, err)
+	}
+	if v.Mkdir != nil {
+		if err := v.Mkdir(dir); err != nil {
+			return fmt.Errorf("prepare staging directory %s: %w", dir, err)
+		}
+	} else if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("prepare staging directory %s: %w", dir, err)
+	}
+	if v.Chown != nil {
+		if err := v.Chown(v.User, dir); err != nil {
+			return fmt.Errorf("give staging directory %s to %s: %w", dir, v.User, err)
+		}
+	}
+	return nil
+}
+
+func stageWriteError(dir string, err error) error {
+	if errors.Is(err, syscall.ENOSPC) {
+		return fmt.Errorf("stage dump into %s: not enough disk space (loading an external engine needs room for a temporary copy of the dump): %w", dir, err)
+	}
+	return fmt.Errorf("stage dump into %s: %w", dir, err)
+}
+
+func loadTempPattern(dumpPath string) string {
+	base := filepath.Base(dumpPath)
+	if strings.HasSuffix(strings.ToLower(base), ".sql.gz") {
+		return "load-*.sql.gz"
+	}
+	if ext := filepath.Ext(base); len(ext) > 1 && !strings.ContainsAny(ext, `*\/`) {
+		return "load-*" + ext
+	}
+	return "load-*"
+}
+
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }
 
 // Remove stops and forgets the unit, then has the module delete its configuration.

@@ -40,7 +40,7 @@ func (module) Describe(context.Context, *pb.DescribeRequest) (*pb.EngineSpec, er
 	return &pb.EngineSpec{
 		Engine: "fakedb", DisplayName: "FakeDB", RunAsUser: "db-branch-rt-fakedb", VersionPattern: `^[0-9]+\.[0-9]+$`,
 		Protocols:    []*pb.ProtocolPort{{Name: "sql", Primary: true}},
-		Capabilities: &pb.Capabilities{Query: true, Upgrade: true},
+		Capabilities: &pb.Capabilities{Query: true, Upgrade: true, SourceDump: true},
 	}, nil
 }
 
@@ -108,6 +108,7 @@ func (module) VerifyCleanShutdown(_ context.Context, r *pb.InstanceRequest) (*pb
 func (module) RemoveInstance(_ context.Context, r *pb.InstanceRequest) (*pb.Empty, error) {
 	_ = os.Remove(filepath.Join(r.Instance.StateDir, "fakedb.conf"))
 	_ = os.Remove(filepath.Join(r.Instance.StateDir, "users"))
+	_ = os.Remove(filepath.Join(r.Instance.StateDir, "loaded"))
 	return empty()
 }
 
@@ -148,12 +149,36 @@ func (module) TailLog(context.Context, *pb.TailLogRequest) (*pb.TailLogResponse,
 	return &pb.TailLogResponse{Text: "fakedb: nothing to say\n"}, nil
 }
 
-func (module) Load(_ context.Context, r *pb.LoadRequest) (*pb.Empty, error) {
-	b, err := os.ReadFile(r.DumpPath)
+func (module) DumpSource(_ context.Context, r *pb.DumpSourceRequest) (*pb.Empty, error) {
+	outPath := r.GetOutPath()
+	if outPath == "" {
+		return nil, status.Error(codes.InvalidArgument, "out_path is required")
+	}
+	fi, err := os.Stat(filepath.Dir(outPath))
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	if err := os.WriteFile(filepath.Join(r.Instance.DataDir, "loaded"), b, 0o640); err != nil {
+	var parentUID uint32
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		parentUID = st.Uid
+	}
+	body := fmt.Sprintf("-- fakedb dump\nuid=%d\nparent_uid=%d\n", os.Geteuid(), parentUID)
+	if err := os.WriteFile(outPath, []byte(body), 0o600); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return empty()
+}
+
+func (module) Load(_ context.Context, r *pb.LoadRequest) (*pb.Empty, error) {
+	b, err := os.ReadFile(r.GetDumpPath())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	stateDir := r.GetInstance().GetStateDir()
+	if stateDir == "" {
+		return nil, status.Error(codes.InvalidArgument, "state_dir is required")
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "loaded"), b, 0o640); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return empty()

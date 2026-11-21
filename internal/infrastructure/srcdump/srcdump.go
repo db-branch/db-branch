@@ -12,8 +12,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -33,6 +35,12 @@ type Dumper struct {
 	// connection and never answers cannot hold the base's refresh forever.
 	// (mysqldump has no connect timeout of its own.)
 	Timeout time.Duration
+	// LookupUser finds the numeric uid and gid of an OS user for an external
+	// runtime module's dump directory. Nil uses os/user.Lookup.
+	LookupUser func(name string) (uid, gid int, err error)
+	// Chown hands an external runtime module's dump directory to its OS user.
+	// Nil uses os.Chown.
+	Chown func(path string, uid, gid int) error
 }
 
 const defaultDumpTimeout = 6 * time.Hour
@@ -56,15 +64,18 @@ func (d Dumper) Dump(ctx context.Context, job domain.SourceDumpJob) (string, err
 	if err := spec.Capabilities.Require("source_dump"); err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(d.WorkDir, 0o700); err != nil {
-		return "", err
-	}
 	timeout := d.Timeout
 	if timeout <= 0 {
 		timeout = defaultDumpTimeout
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if spec.RunAsUser != "" {
+		return d.dumpExternal(ctx, p, job, spec.RunAsUser)
+	}
+	if err := os.MkdirAll(d.WorkDir, 0o700); err != nil {
+		return "", err
+	}
 	f, err := os.CreateTemp(d.WorkDir, "refresh-*.sql") // 0600
 	if err != nil {
 		return "", err
@@ -76,20 +87,83 @@ func (d Dumper) Dump(ctx context.Context, job domain.SourceDumpJob) (string, err
 	}
 	if err := p.DumpSource(ctx, job, name); err != nil {
 		_ = os.Remove(name)
-		if cerr := ctx.Err(); cerr != nil && !errors.Is(err, cerr) {
-			// A tool killed with its context only says "signal: killed".
-			err = fmt.Errorf("%w (%w)", err, cerr)
-		}
-		return "", err
+		return "", wrapContextErr(ctx, err)
 	}
 	return name, nil
 }
 
-// Discard deletes a dump.
-func (Dumper) Discard(path string) {
-	if path != "" {
-		_ = os.Remove(path)
+// dumpExternal gives an external runtime module its own 0700 directory under a
+// 0711 WorkDir (traverse-only for others, not listable) so the module's OS user
+// can create and write the dump file while root can still read and remove it.
+func (d Dumper) dumpExternal(ctx context.Context, p domain.RuntimeProvider, job domain.SourceDumpJob, runAsUser string) (string, error) {
+	uid, gid, err := d.lookupUser(runAsUser)
+	if err != nil {
+		return "", fmt.Errorf("lookup user %s: %w", runAsUser, err)
 	}
+	if err := os.MkdirAll(d.WorkDir, 0o711); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(d.WorkDir, 0o711); err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp(d.WorkDir, "refresh-*") // 0700
+	if err != nil {
+		return "", err
+	}
+	if err := d.chown(dir, uid, gid); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", fmt.Errorf("give %s to %s: %w", dir, runAsUser, err)
+	}
+	name := filepath.Join(dir, "dump.sql")
+	if err := p.DumpSource(ctx, job, name); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", wrapContextErr(ctx, err)
+	}
+	return name, nil
+}
+
+func (d Dumper) lookupUser(name string) (int, int, error) {
+	if d.LookupUser != nil {
+		return d.LookupUser(name)
+	}
+	u, err := user.Lookup(name)
+	if err != nil {
+		return 0, 0, err
+	}
+	uid, _ := strconv.Atoi(u.Uid)
+	gid, _ := strconv.Atoi(u.Gid)
+	return uid, gid, nil
+}
+
+func (d Dumper) chown(path string, uid, gid int) error {
+	if d.Chown != nil {
+		return d.Chown(path, uid, gid)
+	}
+	return os.Chown(path, uid, gid)
+}
+
+func wrapContextErr(ctx context.Context, err error) error {
+	if cerr := ctx.Err(); cerr != nil && !errors.Is(err, cerr) {
+		// A tool killed with its context only says "signal: killed".
+		return fmt.Errorf("%w (%w)", err, cerr)
+	}
+	return err
+}
+
+// Discard deletes a dump (and its per-dump directory for an external module).
+func (d Dumper) Discard(path string) {
+	if path == "" {
+		return
+	}
+	if d.WorkDir != "" {
+		workDir := filepath.Clean(d.WorkDir)
+		dir := filepath.Dir(filepath.Clean(path))
+		if dir != workDir && filepath.Dir(dir) == workDir && strings.HasPrefix(filepath.Base(dir), "refresh-") {
+			_ = os.RemoveAll(dir)
+			return
+		}
+	}
+	_ = os.Remove(path)
 }
 
 // PostgresDump is the DumpSource of the PostgreSQL provider: it writes the

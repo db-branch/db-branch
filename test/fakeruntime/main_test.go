@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -106,5 +108,83 @@ func TestStartUpgraded_PrepareStartと同じLaunchPlanと空のログを返す(t
 	}
 	if !strings.Contains(string(conf), "runtime_dir=/var/lib/db-branch/runtimes/fakedb/2.0") {
 		t.Fatalf("fakedb.conf = %q, want runtime_dir", string(conf))
+	}
+}
+
+func TestDescribe_source_dumpを宣言する(t *testing.T) {
+	spec, err := (module{}).Describe(context.Background(), &pb.DescribeRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spec.GetCapabilities().GetSourceDump() {
+		t.Fatalf("capabilities = %+v, want source_dump=true", spec.GetCapabilities())
+	}
+}
+
+func TestDumpSource_指定パスに親ディレクトリ所有者と自身のuidを含む内容を書き出す(t *testing.T) {
+	m := module{}
+	ctx := context.Background()
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "dump.sql")
+
+	if _, err := m.DumpSource(ctx, &pb.DumpSourceRequest{OutPath: outPath}); err != nil {
+		t.Fatalf("DumpSource: %v", err)
+	}
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read outPath: %v", err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentUID := fi.Sys().(*syscall.Stat_t).Uid
+	body := string(b)
+	for _, want := range []string{
+		"-- fakedb dump",
+		fmt.Sprintf("uid=%d", os.Geteuid()),
+		fmt.Sprintf("parent_uid=%d", parentUID),
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dump body %q lacks %q", body, want)
+		}
+	}
+
+	if _, err := m.DumpSource(ctx, &pb.DumpSourceRequest{OutPath: ""}); err == nil || status.Code(err) == codes.Unimplemented {
+		t.Errorf("empty out_path: err = %v, want non-Unimplemented error", err)
+	}
+	if _, err := m.DumpSource(ctx, &pb.DumpSourceRequest{OutPath: filepath.Join(dir, "missing", "dump.sql")}); err == nil {
+		t.Error("unwritable out_path must fail")
+	}
+}
+
+func TestLoad_ダンプを読み状態ディレクトリに書き写し読めなければエラーを返す(t *testing.T) {
+	m := module{}
+	ctx := context.Background()
+	stateDir := t.TempDir()
+	dumpPath := filepath.Join(t.TempDir(), "dump.sql")
+	if err := os.WriteFile(dumpPath, []byte("-- loaded content\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.Load(ctx, &pb.LoadRequest{
+		Instance: &pb.InstanceSpec{Id: "rtit-1", StateDir: stateDir},
+		DumpPath: dumpPath,
+	}); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(stateDir, "loaded"))
+	if err != nil {
+		t.Fatalf("read stateDir/loaded: %v", err)
+	}
+	if string(got) != "-- loaded content\n" {
+		t.Fatalf("loaded = %q", got)
+	}
+
+	if _, err := m.Load(ctx, &pb.LoadRequest{
+		Instance: &pb.InstanceSpec{Id: "rtit-1", StateDir: stateDir},
+		DumpPath: filepath.Join(t.TempDir(), "no-such-file.sql"),
+	}); err == nil {
+		t.Fatal("unreadable dump_path must fail")
 	}
 }
