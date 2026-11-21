@@ -24,11 +24,7 @@ db-branch base mask dev --from prod --masker greenmask --rules rules.yaml
 
 ### 1. 準備
 
-1. マスカーのモジュールを入れます。
-
-   ```sh
-   db-branch module install greenmask
-   ```
+1. マスカーのモジュールを入れます。マスカーのモジュールは本体とは別に提供します（本体のリポジトリには含まれません）。導入手順は別リポジトリの README に従ってください。
 
 2. Greenmask 本体を、ベースがあるノードを含む**すべてのノード**に入れます（モジュールは本体を同梱しません）。[リリースページ](https://github.com/GreenmaskIO/greenmask/releases)から `greenmask-linux-amd64.tar.gz` を取り、`greenmask` を `/usr/local/bin/` に置きます。別の場所に置いたときは、設定 `greenmask_path` で教えます。
 
@@ -135,13 +131,15 @@ db-branch branch dsn try1        # 接続 URL（パスワードを含むので�
 
 そのほかに、変換する前の `prod` からブランチを作れないようにしたり、ルールの承認や検査 SQL を入れたりしたい場合は、有償のマスク管理モジュールを使います（この文書の最後の節）。
 
-## マスカー（無料のモジュール）
+## マスカー（別提供のモジュール）
+
+マスカーのモジュールは本体とは別に提供します（本体のリポジトリには含まれません）。導入手順は別リポジトリの README に従ってください。
 
 | モジュール | 対象 | 中身 |
 |---|---|---|
-| `greenmask`（`db-branch-greenmask`） | PostgreSQL | [Greenmask](https://github.com/GreenmaskIO/greenmask) v0.2 でダンプしながら変換し、マスク先へ戻す。ディスクにはマスク済みのデータしか書かれない |
-| `greenmask-mysql`（`db-branch-greenmask-mysql`） | MySQL | Greenmask v1（`greenmask-mysql`、**ベータ版**）で同じことをする |
-| `anon`（`db-branch-anon`） | PostgreSQL | [PostgreSQL Anonymizer](https://labs.dalibo.com/postgresql_anonymizer) の静的マスキング。マスク先へコピーしてから、その場で匿名化する |
+| `greenmask` | PostgreSQL | [Greenmask](https://github.com/GreenmaskIO/greenmask) v0.2 でダンプしながら変換し、マスク先へ戻す。ディスクにはマスク済みのデータしか書かれない |
+| `greenmask-mysql` | MySQL | Greenmask v1（`greenmask-mysql`、**ベータ版**）で同じことをする |
+| `anon` | PostgreSQL | [PostgreSQL Anonymizer](https://labs.dalibo.com/postgresql_anonymizer) の静的マスキング。マスク先へコピーしてから、その場で匿名化する |
 
 ### greenmask
 

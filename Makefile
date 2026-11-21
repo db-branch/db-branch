@@ -8,7 +8,7 @@ endif
 LDFLAGS := -s -w -X main.version=$(VERSION)
 COVER_MIN := 95
 
-.PHONY: all build test cover vet integration deb deb-oss deb-proxysql deb-greenmask deb-greenmask-mysql deb-anon apt-repo clean web web-test demo
+.PHONY: all build test cover vet integration deb deb-oss deb-proxysql apt-repo clean web web-test demo
 
 all: vet cover build
 
@@ -65,24 +65,6 @@ deb: web build
 	GOARCH=$(GOARCH) VERSION=$(VERSION) nfpm package --packager deb --config packaging/nfpm.yaml --target dist/
 
 # The ProxySQL module (and its dependency on the pinned ProxySQL).
-deb-greenmask:
-	@mkdir -p dist
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -trimpath -ldflags '-s -w -X main.version=$(VERSION)' \
-		-o bin/db-branch-greenmask ./cmd/db-branch-greenmask
-	GOARCH=$(GOARCH) VERSION=$(VERSION) nfpm package --packager deb --config packaging/greenmask/nfpm.yaml --target dist/
-
-deb-greenmask-mysql:
-	@mkdir -p dist
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -trimpath -ldflags '-s -w -X main.version=$(VERSION)' \
-		-o bin/db-branch-greenmask-mysql ./cmd/db-branch-greenmask-mysql
-	GOARCH=$(GOARCH) VERSION=$(VERSION) nfpm package --packager deb --config packaging/greenmask-mysql/nfpm.yaml --target dist/
-
-deb-anon:
-	@mkdir -p dist
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -trimpath -ldflags '-s -w -X main.version=$(VERSION)' \
-		-o bin/db-branch-anon ./cmd/db-branch-anon
-	GOARCH=$(GOARCH) VERSION=$(VERSION) nfpm package --packager deb --config packaging/anon/nfpm.yaml --target dist/
-
 deb-proxysql:
 	@mkdir -p dist
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -trimpath -ldflags '-s -w -X main.version=$(VERSION)' \
@@ -90,11 +72,11 @@ deb-proxysql:
 	. packaging/proxysql/upstream.env && GOARCH=$(GOARCH) VERSION=$(VERSION) PROXYSQL_VERSION=$$PROXYSQL_VERSION \
 		nfpm package --packager deb --config packaging/proxysql/nfpm.yaml --target dist/
 
+# Every package of the free (Apache-2.0) edition built from this repository, for one architecture.
+deb-oss: deb deb-proxysql
+
 # A signed APT repository in dist/apt from dist/*.deb plus the mirrored
 # ProxySQL release. APT_KEY is the signing key's id in gpg's keyring.
-# Every package of the free (Apache-2.0) edition, for one architecture.
-deb-oss: deb deb-proxysql deb-greenmask deb-greenmask-mysql deb-anon
-
 apt-repo:
 	test -n "$(APT_KEY)" || { echo "set APT_KEY to the signing key id"; exit 1; }
 	scripts/fetch-proxysql.sh dist/upstream
