@@ -63,3 +63,28 @@ func TestNewSystem_親ディレクトリは誰でも通れ末端だけを絞る(
 		t.Fatal(err)
 	}
 }
+
+func TestNewSystem_ダンプとその親ディレクトリがモジュール所有かを確かめられる(t *testing.T) {
+	cur, err := user.Current()
+	if err != nil {
+		t.Skip(err)
+	}
+	srv := rtserver.NewSystem(domain.EngineSpec{}, nil, cur.Username, "/x", "")
+	dir := t.TempDir()
+	f := filepath.Join(dir, "d")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !srv.OwnedBy(cur.Username, f) {
+		t.Fatal("a file and its directory owned by the user must count as theirs")
+	}
+	if srv.OwnedBy("db-branch-rt-no-such-user-xyz", f) {
+		t.Fatal("an unknown user owns nothing")
+	}
+	if srv.OwnedBy(cur.Username, filepath.Join(dir, "missing")) {
+		t.Fatal("a missing file is not owned")
+	}
+	if cur.Uid != "0" && srv.OwnedBy("root", f) {
+		t.Fatal("a file of another user must not count as root's")
+	}
+}

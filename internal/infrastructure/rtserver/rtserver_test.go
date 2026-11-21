@@ -422,6 +422,53 @@ func TestユーザーとSQL_モジュールに委ねる(t *testing.T) {
 	}
 }
 
+func TestLoad_ダンプがすでにモジュール所有ならコピーせずそのまま渡す(t *testing.T) {
+	e := newEnv(t)
+	e.srv.StateRoot = t.TempDir()
+	dump := filepath.Join(t.TempDir(), "dump.bin")
+	if err := os.WriteFile(dump, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var asked [2]string
+	e.srv.OwnedBy = func(user, path string) bool { asked = [2]string{user, path}; return true }
+	if err := e.srv.Load(context.Background(), server, dump); err != nil {
+		t.Fatal(err)
+	}
+	last := e.prov.users[len(e.prov.users)-1]
+	if last[0] != "load" || last[1] != dump {
+		t.Fatalf("the module must get the dump itself, got %v", last)
+	}
+	if asked != [2]string{e.srv.User, dump} {
+		t.Fatalf("ownership asked for %v", asked)
+	}
+	if left, _ := os.ReadDir(filepath.Join(e.srv.StateRoot, server.ID)); len(left) != 0 {
+		t.Fatalf("no copy may be made: %v", left)
+	}
+	if _, err := os.Stat(dump); err != nil {
+		t.Fatalf("the dump must stay (the core discards it): %v", err)
+	}
+}
+
+func TestLoad_ダンプがモジュール所有でなければコピーを渡して消す(t *testing.T) {
+	e := newEnv(t)
+	e.srv.StateRoot = t.TempDir()
+	dump := filepath.Join(t.TempDir(), "dump.bin")
+	if err := os.WriteFile(dump, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.OwnedBy = func(string, string) bool { return false }
+	if err := e.srv.Load(context.Background(), server, dump); err != nil {
+		t.Fatal(err)
+	}
+	last := e.prov.users[len(e.prov.users)-1]
+	if last[0] != "load" || last[1] == dump || filepath.Dir(last[1]) != filepath.Join(e.srv.StateRoot, server.ID) {
+		t.Fatalf("the module must get a copy in its state directory, got %v", last)
+	}
+	if _, err := os.Stat(last[1]); err == nil {
+		t.Fatal("the copy must be removed after Load")
+	}
+}
+
 func TestExec_管理者としてのSQLは外部エンジンでは使えない(t *testing.T) {
 	e := newEnv(t)
 	if err := e.srv.Exec(context.Background(), server, "drop table x"); !errors.Is(err, domain.ErrFeatureNotSupported) {

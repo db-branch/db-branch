@@ -7,6 +7,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -23,6 +24,7 @@ func NewSystem(engine domain.EngineSpec, p domain.RuntimeProvider, osUser, dataD
 		Engine: engine, Provider: p, Run: execx.Runner{}, Units: rtunit.Writer{}, User: osUser,
 		Mkdir:     makeDir,
 		Chown:     chownTo,
+		OwnedBy:   ownedBy,
 		StateRoot: filepath.Join(dataDir, "instances"), RuntimeRoot: filepath.Join(dataDir, "runtimes"),
 		Bind: bind, StartTimeout: 2 * time.Minute, PollInterval: 200 * time.Millisecond,
 	}
@@ -37,6 +39,28 @@ func chownTo(name, path string) error {
 	uid, _ := strconv.Atoi(u.Uid)
 	gid, _ := strconv.Atoi(u.Gid)
 	return os.Chown(path, uid, gid)
+}
+
+// ownedBy reports whether path and its directory are both owned by the user.
+func ownedBy(name, path string) bool {
+	u, err := user.Lookup(name)
+	if err != nil {
+		return false
+	}
+	uid, err := strconv.ParseUint(u.Uid, 10, 32)
+	if err != nil {
+		return false
+	}
+	for _, p := range []string{path, filepath.Dir(path)} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			return false
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); !ok || uint64(st.Uid) != uid {
+			return false
+		}
+	}
+	return true
 }
 
 // makeDir makes path with parents anyone can enter (the module runs as its own

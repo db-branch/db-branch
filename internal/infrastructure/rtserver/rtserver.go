@@ -37,6 +37,10 @@ type Server struct {
 	User string
 	// Chown hands a path to user.
 	Chown func(user, path string) error
+	// OwnedBy reports whether path and the directory it is in belong to user, so
+	// the module can read it as it is. Load hands such a dump over without a
+	// copy; nil means "no" (always copy).
+	OwnedBy func(user, path string) bool
 	// Mkdir makes a directory (and its parents). The module runs as its own
 	// user and cannot make its state and run directories in root's.
 	Mkdir func(path string) error
@@ -248,9 +252,14 @@ func (v *Server) CreateUser(ctx context.Context, s domain.Server, user, password
 	return v.Provider.CreateUser(ctx, v.instance(s), user, password)
 }
 
-// Load stages dumpPath into the instance's state directory as a 0600 copy owned
-// by the module's OS user, hands the copy to the module, and removes it on return.
+// Load hands the dump to the module. A dump the module's OS user already owns
+// (one it wrote itself, in a directory made for it) goes as it is; any other is
+// first copied into the instance's state directory as a 0600 file owned by the
+// module's OS user, and the copy is removed on return.
 func (v *Server) Load(ctx context.Context, s domain.Server, dumpPath string) error {
+	if v.OwnedBy != nil && v.OwnedBy(v.User, dumpPath) {
+		return v.Provider.Load(ctx, v.instance(s), dumpPath)
+	}
 	staged, err := v.stageDump(ctx, s, dumpPath)
 	if err != nil {
 		return err
