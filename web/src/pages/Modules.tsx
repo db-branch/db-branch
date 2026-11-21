@@ -31,6 +31,7 @@ export function Modules({ name, onOpen }: { name?: string; onOpen?: (name: strin
         description={available[n]}
         state={state}
         licensed={covered(n)}
+        licenseAll={!!lic?.report?.all}
         trial={!!lic?.report?.trial}
         scope={detail && state?.wanted ? scopes?.find((s) => s.scope === n) : undefined}
         onConfigure={!detail && state?.wanted ? () => onOpen?.(n) : undefined}
@@ -99,6 +100,7 @@ export function ModuleRow({
   name,
   description,
   licensed,
+  licenseAll,
   trial,
   state,
   scope,
@@ -110,6 +112,8 @@ export function ModuleRow({
   name: string;
   description?: string;
   licensed: boolean;
+  // licenseAll: the licence covers every module (a wildcard), so "covered" says nothing about this one being paid.
+  licenseAll?: boolean;
   trial: boolean;
   state?: ModuleState;
   scope?: SettingScope;
@@ -126,7 +130,7 @@ export function ModuleRow({
     <article className={`module ${on ? "" : "module-off"}`}>
       <header className="module-head">
         <span className="mono strong">{name}</span>
-        {(state?.requires_license || (licensed && !trial)) && (
+        {(state?.requires_license || (licensed && !trial && !licenseAll)) && (
           <a
             href="/admin/modules#license"
             className={`paid-badge ${licensed ? "ok" : "need"}`}
