@@ -533,3 +533,84 @@ func TestDeleteModule_記録を消せ存在しない名前でも冪等に成功�
 		t.Errorf("after idempotent delete = %+v", list)
 	}
 }
+
+func TestSnapshot_全項目を欠落なく取得できる(t *testing.T) {
+	s, _ := newStore(t)
+	_ = s.PutBase(ctx, domain.Base{Name: name("prod"), Node: "n1", Runtime: domain.RuntimeRef{Engine: domain.MySQL, Version: "8.4"}, Status: domain.BaseReady})
+	_ = s.PutBase(ctx, domain.Base{Name: name("alpha"), Node: "n1", Runtime: domain.RuntimeRef{Engine: domain.MySQL, Version: "8.4"}, Status: domain.BaseReady})
+	two := 2
+	_ = s.SetBaseAnonymous(ctx, name("prod"), domain.AnonymousLimits{MaxBranches: &two, MaxTTL: time.Hour})
+	_ = s.SetBaseReplicaNodes(ctx, name("prod"), &[]string{"n2"})
+	_ = s.AddReplica(ctx, name("prod"), "s1", "n2")
+	_ = s.PutBranch(ctx, domain.Branch{Name: name("feat"), Base: name("prod"), Status: domain.BranchReady, Record: true})
+	_ = s.PutBranch(ctx, domain.Branch{Name: name("dev"), Base: name("prod"), Status: domain.BranchReady})
+	_ = s.PutRouteUser(ctx, domain.RouteUser{Name: "web", DefaultBranch: name("feat")})
+	_ = s.PutRouteUser(ctx, domain.RouteUser{Name: "app", DefaultBranch: name("feat")})
+	_ = s.PutModule(ctx, domain.ModuleSpec{Name: "proxysql", Version: "1.0.0", Wanted: true})
+	_ = s.PutModule(ctx, domain.ModuleSpec{Name: "audit", Version: "1.0.0", Wanted: true})
+	_ = s.PutSettings(ctx, "core", map[string]string{"branch.memory_mb": "512"})
+	_ = s.PutSettings(ctx, "audit", map[string]string{"retain_days": "30"})
+	_ = s.PutSettings(ctx, "pref:admin", map[string]string{"language": "ja"})
+	_, _ = s.StartTrial(ctx, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
+	_ = s.PutToken(ctx, domain.APIToken{ID: "t2", Name: "ci2", Hash: "def", Scope: domain.ScopeBranches, CreatedAt: time.Unix(200, 0).UTC()})
+	_ = s.PutToken(ctx, domain.APIToken{ID: "t1", Name: "ci1", Hash: "abc", Scope: domain.ScopeBranches, CreatedAt: time.Unix(100, 0).UTC()})
+	_ = s.PutModuleData(ctx, "auth", "user/u1", []byte(`{"name":"alice"}`))
+	_ = s.SetBaseRefresh(ctx, domain.BaseRefresh{Base: name("prod"), Every: 24 * time.Hour})
+	_ = s.SetBaseRefresh(ctx, domain.BaseRefresh{Base: name("alpha"), Every: 12 * time.Hour})
+	_ = s.RecordBaseRefreshRun(ctx, name("prod"), domain.RefreshRun{StartedAt: time.Unix(200, 0).UTC(), FinishedAt: time.Unix(210, 0).UTC(), OK: true})
+	_ = s.PutUpdateCheck(ctx, domain.UpdateCheck{At: time.Unix(300, 0).UTC(), By: "n1"})
+	ro := domain.NewRollout("r1", "1.0.0", []string{"n1"}, map[string]string{"n1": "0.2.7"}, time.Unix(400, 0).UTC())
+	_ = s.StartRollout(ctx, ro)
+	_, _ = s.InitClusterID(ctx, "0123456789abcdef0123456789abcdef")
+
+	snap, err := s.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Bases) != 2 || snap.Bases[0].Name != name("alpha") || snap.Bases[1].Name != name("prod") {
+		t.Fatalf("bases = %+v", snap.Bases)
+	}
+	prod := snap.Bases[1]
+	if prod.Anonymous.MaxBranches == nil || *prod.Anonymous.MaxBranches != 2 || prod.Anonymous.MaxTTL != time.Hour {
+		t.Errorf("prod.Anonymous = %+v", prod.Anonymous)
+	}
+	if prod.ReplicaNodes == nil || len(*prod.ReplicaNodes) != 1 || (*prod.ReplicaNodes)[0] != "n2" || !prod.HasReplica("s1", "n2") {
+		t.Errorf("base replicas = %+v, replica_nodes = %+v", prod.Replicas, prod.ReplicaNodes)
+	}
+	if len(snap.Branches) != 2 || snap.Branches[0].Name != name("dev") || snap.Branches[1].Name != name("feat") || !snap.Branches[1].Record {
+		t.Errorf("branches = %+v", snap.Branches)
+	}
+	if len(snap.RouteUsers) != 2 || snap.RouteUsers[0].Name != "app" || snap.RouteUsers[1].Name != "web" {
+		t.Errorf("route users = %+v", snap.RouteUsers)
+	}
+	if len(snap.Modules) != 2 || snap.Modules[0].Name != "audit" || snap.Modules[1].Name != "proxysql" {
+		t.Errorf("modules = %+v", snap.Modules)
+	}
+	if snap.Settings["core"]["branch.memory_mb"] != "512" || snap.Settings["audit"]["retain_days"] != "30" || snap.Settings["pref:admin"]["language"] != "ja" || snap.Settings[domain.TrialScope][domain.TrialKey] == "" {
+		t.Errorf("settings = %+v", snap.Settings)
+	}
+	if len(snap.Tokens) != 2 || snap.Tokens[0].ID != "t1" || snap.Tokens[1].ID != "t2" {
+		t.Errorf("tokens = %+v", snap.Tokens)
+	}
+	if string(snap.ModuleData["auth"]["user/u1"]) != `{"name":"alice"}` {
+		t.Errorf("module data = %+v", snap.ModuleData)
+	}
+	if len(snap.BaseRefreshes) != 2 || snap.BaseRefreshes[0].Base != name("alpha") || snap.BaseRefreshes[1].LastRun == nil || !snap.BaseRefreshes[1].LastRun.OK {
+		t.Errorf("refreshes = %+v", snap.BaseRefreshes)
+	}
+	if snap.Update == nil || snap.Update.At.Unix() != 300 {
+		t.Errorf("update = %+v", snap.Update)
+	}
+	if snap.Rollout == nil || snap.Rollout.ID != "r1" {
+		t.Errorf("rollout = %+v", snap.Rollout)
+	}
+	if snap.ClusterID != "0123456789abcdef0123456789abcdef" {
+		t.Errorf("cluster id = %q", snap.ClusterID)
+	}
+
+	broken := filepath.Join(t.TempDir(), "broken.json")
+	_ = os.WriteFile(broken, []byte("{"), 0o600)
+	if _, err := (&filestore.Store{Path: broken}).Snapshot(); err == nil {
+		t.Error("corrupt state file: want error")
+	}
+}

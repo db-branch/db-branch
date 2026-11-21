@@ -25,7 +25,9 @@ import (
 // runtimeLoop installs the runtimes the cluster asks for that this node
 // lacks, each as an operation so every console shows the progress.
 func (c *clusterRuntime) runtimeLoop(ctx context.Context, rt runtime.Service, ops *operation.Manager, log *slog.Logger) {
-	c.waitLeader(ctx)
+	if err := c.waitLeader(ctx); err != nil {
+		return
+	}
 	// Engines installed before installs became cluster-wide (or by hand) are
 	// made cluster-wide too, so every node gets them.
 	wanted := map[string]bool{}

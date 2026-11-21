@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/clusterpki"
 	"github.com/db-branch/db-branch/internal/infrastructure/raftstore"
+	"github.com/db-branch/db-branch/internal/usecase/membership"
 )
 
 // ErrRejected is returned when the peer refuses: no member certificate or a wrong join secret.
@@ -32,6 +34,7 @@ type Store interface {
 	IsLeader() bool
 	Leader() (id, raftAddr string)
 	AddNonvoter(id, addr string) error
+	Servers(ctx context.Context) ([]membership.Server, error)
 	JoinSecretHash() string
 	State() raftstore.State
 }
@@ -154,6 +157,9 @@ type joinResponse struct {
 	// ServiceIDs are the db-branch uid/gid the cluster uses (absent from
 	// members of older versions).
 	ServiceIDs *domain.ServiceIDs `json:"service_ids,omitempty"`
+	// Nodes lists the current cluster members' names so a joiner can fail
+	// fast if its hostname collides with an existing member.
+	Nodes []string `json:"nodes,omitempty"`
 }
 
 func (s *Server) join(w http.ResponseWriter, r *http.Request) {
@@ -175,6 +181,21 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 			out.ServiceIDs = &ids
 		}
 	}
+	seen := map[string]bool{}
+	for name := range s.Store.State().Nodes {
+		seen[name] = true
+	}
+	if srvs, err := s.Store.Servers(r.Context()); err == nil {
+		for _, srv := range srvs {
+			if srv.ID != "" {
+				seen[srv.ID] = true
+			}
+		}
+	}
+	for name := range seen {
+		out.Nodes = append(out.Nodes, name)
+	}
+	sort.Strings(out.Nodes)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
 }
@@ -366,6 +387,8 @@ type JoinInfo struct {
 	// ServiceIDs are the cluster's db-branch uid/gid (zero from a member of
 	// an older version, which does not know them).
 	ServiceIDs domain.ServiceIDs
+	// Nodes are the names of the current cluster members (empty from older versions).
+	Nodes []string
 }
 
 // Join presents the token's secret to a member, trusting it only if its CA
@@ -373,7 +396,7 @@ type JoinInfo struct {
 func Join(ctx context.Context, apiAddr string, tok clusterpki.Token) (JoinInfo, error) {
 	var out joinResponse
 	err := NewClient(clusterpki.PinnedTLS(tok.Fingerprint)).post(ctx, apiAddr, "/internal/v1/join", joinRequest{Secret: tok.Secret}, &out)
-	info := JoinInfo{CACert: out.CACert, CAKey: out.CAKey}
+	info := JoinInfo{CACert: out.CACert, CAKey: out.CAKey, Nodes: out.Nodes}
 	if out.ServiceIDs != nil {
 		info.ServiceIDs = *out.ServiceIDs
 	}

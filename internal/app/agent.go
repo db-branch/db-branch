@@ -79,6 +79,8 @@ func OutboundIP() string {
 // RunAgent serves the API on the UNIX socket and the console over HTTPS until
 // ctx ends, recovering branches at start and expiring them periodically.
 func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
 	log := opts.Log
 	if log == nil {
 		log = slog.Default()
@@ -120,9 +122,25 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		}
 		return svc.RuntimeInUse(ctx, ref)
 	}
-	cl, err := startCluster(ctx, cfg, pool, api, send, artifacts, log)
+	cl, err := startCluster(runCtx, cfg, pool, api, send, artifacts, log)
 	if err != nil {
 		return fmt.Errorf("cluster: %w", err)
+	}
+	if cl != nil {
+		defer func() {
+			cancelRun()
+			cl.close()
+		}()
+		// Carry single-node state into Raft before starting module sync,
+		// settings loops, HTTP APIs, or branch recovery.
+		if cl.self.Bootstrap && hasSingleNodeState(cfg) {
+			if err := cl.waitLeader(runCtx); err != nil {
+				return fmt.Errorf("waiting for cluster leader before state import: %w", err)
+			}
+			if err := cl.importSingleNodeState(runCtx, log); err != nil {
+				return fmt.Errorf("importing single-node state: %w", err)
+			}
+		}
 	}
 	bus := operation.NewBus(1000)
 	node := hostname()
@@ -141,14 +159,12 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	system := nodesys.Default(execx.Runner{}.Run)
 	srv.System = system.Get
 	if cl != nil {
-		defer cl.close()
 		cl.system = system.Get
 		node = cl.self.Node
 		srv.Node, ops.Node = node, node
 		// Every change, wherever it was made, reaches this node's subscribers
 		// through the replicated store.
 		ops.Store, ops.Bus = cl.store, nil
-		go cl.publish(ctx, srv, bus)
 		// One console password for the whole cluster.
 		srv.Auth = &auth.Service{Store: raftstore.AdminStore{Store: cl.store}, Hasher: authfile.Argon2{}, Clock: time.Now}
 		srv.OnRuntimesChanged = cl.beatNow
@@ -175,7 +191,7 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		offerRuntimes() // the cache is final: the modules' builds join the catalog
 		srv.Runtimes = a.Runtimes
 		srv.Cluster = cl
-		go cl.runtimeLoop(ctx, a.Runtimes, ops, log)
+		go cl.runtimeLoop(runCtx, a.Runtimes, ops, log)
 	}
 	if cl == nil {
 		offerRuntimes()
@@ -198,6 +214,7 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 			srv.PaidModules = append(srv.PaidModules, m.Info.Name)
 		}
 	}
+	defer cancelRun()
 	srv.Ext, srv.Log = ext.Combine(loaded), log
 	srv.ExtHandlers = map[string]ext.Handler{}
 	for _, m := range mods {
@@ -217,16 +234,16 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 			srv.ExtPages = append(srv.ExtPages, httpapi.ModulePage{Module: m.Info.Name, Path: p.Path, Title: p.Title})
 		}
 	}
-	attachStorage(ctx, a, mods, log)
+	attachStorage(runCtx, a, mods, log)
 	attachMaskers(a, mods, srv.Ext, maskLauncher{ops: ops, log: log, node: node, remote: srv.StartMaskOn, published: func(n domain.Name) {
 		if cl == nil {
-			srv.PublishBase(ctx, n)
+			srv.PublishBase(runCtx, n)
 		}
 	}})
 	if svc, err := a.Branches(); err == nil {
 		wireModuleHooks(svc, srv.Ext)
 	}
-	startModules(ctx, a, cfg, node, mods, srv.BranchHost(), srv.ModuleAPI, log)
+	startModules(runCtx, a, cfg, node, mods, srv.BranchHost(), srv.ModuleAPI, log)
 	if cl != nil {
 		cl.modules = srv.Modules
 		cl.checkpoints = svcCheckpoints(a)
@@ -243,7 +260,7 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	}
 	if svc, err := a.Branches(); err == nil {
 		var rolled func(context.Context) map[string]string
-		if upd := wireUpdates(ctx, svc.Store, cl, node, bus, log); upd != nil {
+		if upd := wireUpdates(runCtx, svc.Store, cl, node, bus, log); upd != nil {
 			srv.Updates, rolled = upd, upd.Rolled
 		}
 		leading := func() bool { return true }
@@ -251,7 +268,7 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 			leading = cl.store.IsLeader
 		}
 		srv.RuntimeWarnings = runtimeWarnings
-		mgr := wireModulesAndSettings(ctx, cfg, svc, srv, mods, moduleSettings, loadedNames, loadedRuntimes, nodes, problems, arc, rolled, leading, log)
+		mgr := wireModulesAndSettings(runCtx, cfg, svc, srv, mods, moduleSettings, loadedNames, loadedRuntimes, nodes, problems, arc, rolled, leading, log)
 		if cl != nil {
 			cl.moduleChanged = mgr
 		}
@@ -264,13 +281,13 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		for engine, port := range srv.Ext.Ports {
 			srv.ProxyPorts[domain.Engine(engine)] = port
 		}
-		go routingLoop(ctx, rt, branchKicks(ctx, bus), 5*time.Second, log)
+		go routingLoop(runCtx, rt, branchKicks(runCtx, bus), 5*time.Second, log)
 	}
 	// Performance: a sample every 10s, the last hour kept here; the latest
 	// travels in the heartbeat.
 	sampler, history := &sysmetrics.Sampler{Root: "/"}, sysmetrics.NewHistory(360)
 	history.Add(sampler.Sample())
-	go every(ctx, 10*time.Second, func() { history.Add(sampler.Sample()) })
+	go every(runCtx, 10*time.Second, func() { history.Add(sampler.Sample()) })
 	srv.Metrics = history.List
 	if pool != "" { // a node with its own ZFS pool (shared storage reports none)
 		srv.Storage = func(ctx context.Context) (domain.StorageReport, error) {
@@ -314,7 +331,7 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		srv.Backups = backups
 	}
 	srv.PoolFree = func() uint64 {
-		if _, free := poolStats(ctx, pool); free > 0 {
+		if _, free := poolStats(runCtx, pool); free > 0 {
 			return free
 		}
 		return math.MaxUint64 // unknown: let the load report it
@@ -333,6 +350,11 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	}
 	pair, _ := tls.LoadX509KeyPair(certFile, keyFile)
 	srv.TLSCertPEM, _ = os.ReadFile(certFile)
+	// Start cluster background publishers/heartbeats only after srv and cl are fully wired.
+	if cl != nil {
+		go cl.publish(runCtx, srv, bus)
+		go cl.heartbeat(runCtx, log)
+	}
 	console, err := tls.Listen("tcp", cfg.Console.Listen, &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12})
 	if err != nil {
 		sock.Close()
@@ -346,34 +368,48 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	go func() { errs <- remote.Serve(console) }()
 	log.Info("agent started", "version", opts.Version, "socket", cfg.Socket, "console", console.Addr().String())
 
+	shutdownServers := func() {
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = local.Shutdown(shutdown)
+		_ = remote.Shutdown(shutdown)
+	}
 	if cl != nil {
-		cl.waitLeader(ctx)
+		if err := cl.waitLeader(runCtx); err != nil {
+			cancelRun()
+			shutdownServers()
+			if ctx.Err() != nil {
+				log.Info("agent stopped")
+				return nil
+			}
+			return fmt.Errorf("cluster join: %w", err)
+		}
 		if err := cl.adoptPassword(authService(cfg).Store); err != nil {
 			log.Error("sharing the console password with the cluster", "err", err)
 		}
 	}
-	if err := ops.Recover(ctx); err != nil {
+	if err := ops.Recover(runCtx); err != nil {
 		log.Error("recovering operations", "err", err)
 	}
 	if svc, err := a.Branches(); err == nil {
-		if err := svc.Adopt(ctx); err != nil {
+		if err := svc.Adopt(runCtx); err != nil {
 			log.Error("adopting unowned bases and branches", "err", err)
 		}
-		if err := svc.Recover(ctx); err != nil {
+		if err := svc.Recover(runCtx); err != nil {
 			log.Error("recovery finished with errors", "err", err)
 		}
-		go expireLoop(ctx, log, opts.ExpireEvery, func() {
-			expireOnce(ctx, log, a)
-			refreshDue(ctx, log, svc, ops, func(n domain.Name) {
+		go expireLoop(runCtx, log, opts.ExpireEvery, func() {
+			expireOnce(runCtx, log, a)
+			refreshDue(runCtx, log, svc, ops, func(n domain.Name) {
 				if cl == nil {
-					srv.PublishBase(ctx, n)
+					srv.PublishBase(runCtx, n)
 				}
 			})
 			if n := uploadStore(cfg).Sweep(UploadMaxAge); n > 0 {
 				log.Info("unused uploads deleted", "count", n)
 			}
 			if backups != nil && backups.Due() {
-				if f, err := backups.Take(ctx); err != nil {
+				if f, err := backups.Take(runCtx); err != nil {
 					log.Error("backing up the cluster state", "err", err)
 				} else {
 					log.Info("cluster state backed up", "file", f.Name)
@@ -381,10 +417,10 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 			}
 		})
 		if cl != nil {
-			go cl.replicationLoop(ctx, svc.Replicate, log)
-			go cl.healthLoop(ctx, svc, log)
-			go cl.notifyLoop(ctx, newNotifier(cl.store), log)
-			go cl.membershipLoop(ctx, log)
+			go cl.replicationLoop(runCtx, svc.Replicate, log)
+			go cl.healthLoop(runCtx, svc, log)
+			go cl.notifyLoop(runCtx, newNotifier(cl.store), log)
+			go cl.membershipLoop(runCtx, log)
 		}
 	}
 
@@ -394,10 +430,7 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	case err := <-errs:
 		result = err
 	}
-	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_ = local.Shutdown(shutdown)
-	_ = remote.Shutdown(shutdown)
+	shutdownServers()
 	log.Info("agent stopped")
 	if errors.Is(result, http.ErrServerClosed) {
 		return nil

@@ -14,6 +14,7 @@ import (
 
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/apt"
+	"github.com/db-branch/db-branch/internal/infrastructure/backupdir"
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/infrastructure/execx"
 	"github.com/db-branch/db-branch/internal/infrastructure/licenseclient"
@@ -88,7 +89,11 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 	mods []*plugin.Loaded, moduleSettings map[string][]ext.Setting, loadedNames, loadedRuntimes []string, nodes func() int,
 	problems *moduleProblems, arc *arcNode, rolled func(context.Context) map[string]string, leading func() bool, log *slog.Logger) func() {
 	set := &settings.Service{Core: coreSettings(cfg), Modules: func() map[string][]ext.Setting { return moduleSettings },
-		Checks: map[string]func(string) error{"zfs.arc_max": arc.ctl.Check, "branch.max_checkpoints": settings.NonNegativeInt}}
+		Checks: map[string]func(string) error{
+			"zfs.arc_max":            arc.ctl.Check,
+			"branch.max_checkpoints": settings.NonNegativeInt,
+			"backup.dir":             backupdir.ValidatePath,
+		}}
 	if st, ok := svc.Store.(domain.SettingsStore); ok {
 		set.Store = st
 		srv.Settings = set
@@ -109,8 +114,11 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 	// paid module begins the cluster's trial.
 	lic := &licensing.Service{Root: licenseRoot(), Clock: time.Now, Nodes: nodes, Settings: set}
 	lic.Trial, _ = svc.Store.(domain.TrialStore)
+	var applyMu sync.Mutex
 	applied := map[string]string{}
 	apply := func() {
+		applyMu.Lock()
+		defer applyMu.Unlock()
 		if set.Store == nil {
 			return
 		}
@@ -158,7 +166,19 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 			if n, err := strconv.Atoi(v["backup.keep"]); err == nil && n > 0 {
 				backupKeep.Store(int64(n))
 			}
-			backupPath.Store(v["backup.dir"])
+			if dir := v["backup.dir"]; dir == "" {
+				backupPath.Store("")
+				delete(applied, "core:backup.dir.err")
+			} else if err := backupdir.ValidatePath(dir); err != nil {
+				backupPath.Store("")
+				if applied["core:backup.dir.err"] != dir {
+					applied["core:backup.dir.err"] = dir
+					log.Warn("ignoring invalid backup.dir setting", "dir", dir, "err", err)
+				}
+			} else {
+				backupPath.Store(dir)
+				delete(applied, "core:backup.dir.err")
+			}
 			notifySlack.Store(v["notify.slack_url"])
 			notifyWebhook.Store(v["notify.webhook_url"])
 			notifySecret.Store(v["notify.webhook_secret"])
