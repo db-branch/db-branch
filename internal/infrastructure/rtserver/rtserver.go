@@ -43,7 +43,10 @@ type Server struct {
 	PollInterval time.Duration
 }
 
-var _ domain.DBServer = (*Server)(nil)
+var (
+	_ domain.DBServer = (*Server)(nil)
+	_ domain.Upgrader = (*Server)(nil)
+)
 
 func unit(s domain.Server) string { return rtunit.UnitName(s.ID) }
 
@@ -122,29 +125,63 @@ func (v *Server) Start(ctx context.Context, s domain.Server) error {
 	if err != nil {
 		return fmt.Errorf("prepare %s: %w", s.ID, err)
 	}
+	_, err = v.launch(ctx, s, inst, plan)
+	return err
+}
+
+// CheckUpgrade delegates the pre-check to the runtime module.
+func (v *Server) CheckUpgrade(ctx context.Context, s domain.Server, to domain.RuntimeRef, own domain.Login) (domain.UpgradePlan, error) {
+	return v.Provider.CheckUpgrade(ctx, v.instance(s), to.Version, own)
+}
+
+// StartUpgraded asks the runtime module for the upgrade launch plan on s's new
+// runtime, launches the systemd unit the same way Start does, and returns the
+// module's upgrade log (falling back to the unit's journal on launch failure).
+func (v *Server) StartUpgraded(ctx context.Context, s domain.Server, login domain.Login) (domain.UpgradeLog, error) {
+	if err := v.own(s); err != nil {
+		return domain.UpgradeLog{}, err
+	}
+	inst := v.instance(s)
+	plan, log, err := v.Provider.StartUpgraded(ctx, inst, login)
+	if err != nil {
+		return log, err
+	}
+	if excerpt, err := v.launch(ctx, s, inst, plan); err != nil {
+		if log.Excerpt == "" {
+			log.Excerpt = excerpt
+		}
+		return log, err
+	}
+	return log, nil
+}
+
+func (v *Server) launch(ctx context.Context, s domain.Server, inst domain.InstanceSpec, plan domain.LaunchPlan) (string, error) {
 	if _, err := v.Units.Write(rtunit.Unit{
 		ID: s.ID, Engine: v.engine(), User: v.User, Plan: plan, DataDir: s.DataDir,
 		StateDir: inst.StateDir, RunDir: inst.RunDir, Limits: inst.Limits,
 		StateRoot: v.StateRoot, RuntimeRoot: v.RuntimeRoot,
 	}); err != nil {
-		return fmt.Errorf("unit of %s: %w", s.ID, err)
+		return "", fmt.Errorf("unit of %s: %w", s.ID, err)
 	}
 	if _, err := v.Run.Run(ctx, "systemctl", "daemon-reload"); err != nil {
-		return fmt.Errorf("daemon-reload: %w", err)
+		return "", fmt.Errorf("daemon-reload: %w", err)
 	}
 	if _, err := v.Run.Run(ctx, "systemctl", "start", unit(s)); err != nil {
-		return fmt.Errorf("start %s: %w: %s", s.ID, err, v.journal(ctx, s))
+		j := v.journal(ctx, s)
+		return j, fmt.Errorf("start %s: %w: %s", s.ID, err, j)
 	}
 	deadline := time.Now().Add(v.StartTimeout)
 	for {
 		if h, err := v.Provider.Health(ctx, inst); err == nil && h == domain.HealthReady {
-			return nil
+			return "", nil
 		}
 		if v.exited(ctx, s) {
-			return domain.StartFailure(s.ID, v.journal(ctx, s))
+			j := v.journal(ctx, s)
+			return j, domain.StartFailure(s.ID, j)
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not become ready within %s: %s", s.ID, v.StartTimeout, v.journal(ctx, s))
+			j := v.journal(ctx, s)
+			return j, fmt.Errorf("%s did not become ready within %s: %s", s.ID, v.StartTimeout, j)
 		}
 		time.Sleep(v.PollInterval)
 	}

@@ -40,7 +40,7 @@ func (module) Describe(context.Context, *pb.DescribeRequest) (*pb.EngineSpec, er
 	return &pb.EngineSpec{
 		Engine: "fakedb", DisplayName: "FakeDB", RunAsUser: "db-branch-rt-fakedb", VersionPattern: `^[0-9]+\.[0-9]+$`,
 		Protocols:    []*pb.ProtocolPort{{Name: "sql", Primary: true}},
-		Capabilities: &pb.Capabilities{Query: true},
+		Capabilities: &pb.Capabilities{Query: true, Upgrade: true},
 	}, nil
 }
 
@@ -76,7 +76,7 @@ func (module) PrepareStart(_ context.Context, r *pb.InstanceRequest) (*pb.Launch
 	if i.Maintenance {
 		bind = "127.0.0.1" // no network in maintenance: the fake only listens locally
 	}
-	conf := fmt.Sprintf("port=%d\nbind=%s\n", port, bind)
+	conf := fmt.Sprintf("port=%d\nbind=%s\nversion=%s\nruntime_dir=%s\n", port, bind, i.Version, i.RuntimeDir)
 	if err := os.WriteFile(filepath.Join(i.StateDir, "fakedb.conf"), []byte(conf), 0o640); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -157,6 +157,69 @@ func (module) Load(_ context.Context, r *pb.LoadRequest) (*pb.Empty, error) {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return empty()
+}
+
+func (module) CheckUpgradePath(_ context.Context, r *pb.CheckUpgradePathRequest) (*pb.Empty, error) {
+	from, err := parseVersion(r.GetFromVersion())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	to, err := parseVersion(r.GetToVersion())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if compareVersions(from, to) >= 0 {
+		return nil, status.Errorf(codes.FailedPrecondition, "cannot upgrade from %s to %s: target must be newer", r.GetFromVersion(), r.GetToVersion())
+	}
+	return empty()
+}
+
+func (module) CheckUpgrade(context.Context, *pb.CheckUpgradeRequest) (*pb.UpgradePlan, error) {
+	return &pb.UpgradePlan{}, nil
+}
+
+func (m module) StartUpgraded(ctx context.Context, r *pb.StartUpgradedRequest) (*pb.StartUpgradedResponse, error) {
+	plan, err := m.PrepareStart(ctx, &pb.InstanceRequest{Instance: r.GetInstance()})
+	if err != nil {
+		return nil, err
+	}
+	return &pb.StartUpgradedResponse{Plan: plan}, nil
+}
+
+func parseVersion(s string) ([]int, error) {
+	parts := strings.Split(s, ".")
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("invalid version %q", s)
+	}
+	out := make([]int, len(parts))
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("invalid version %q", s)
+		}
+		out[i] = n
+	}
+	return out, nil
+}
+
+func compareVersions(a, b []int) int {
+	n := max(len(a), len(b))
+	for i := 0; i < n; i++ {
+		var va, vb int
+		if i < len(a) {
+			va = a[i]
+		}
+		if i < len(b) {
+			vb = b[i]
+		}
+		if va < vb {
+			return -1
+		}
+		if va > vb {
+			return 1
+		}
+	}
+	return 0
 }
 
 // serve is the database server: it answers every line with "OK <line>" and,

@@ -554,3 +554,213 @@ func TestInstance_モジュールに伝えるインスタンスを公開する(t
 		t.Fatalf("%+v", i)
 	}
 }
+
+type upgradeProvider struct {
+	*provider
+	checkPlan  domain.UpgradePlan
+	checkErr   error
+	checkTo    string
+	checkLogin domain.Login
+	upPlan     domain.LaunchPlan
+	upLog      domain.UpgradeLog
+	upErr      error
+	upLogin    domain.Login
+}
+
+func (u *upgradeProvider) CheckUpgrade(_ context.Context, i domain.InstanceSpec, toVersion string, own domain.Login) (domain.UpgradePlan, error) {
+	u.note("CheckUpgrade", i)
+	u.checkTo = toVersion
+	u.checkLogin = own
+	return u.checkPlan, u.checkErr
+}
+
+func (u *upgradeProvider) StartUpgraded(_ context.Context, i domain.InstanceSpec, own domain.Login) (domain.LaunchPlan, domain.UpgradeLog, error) {
+	u.note("StartUpgraded", i)
+	u.upLogin = own
+	return u.upPlan, u.upLog, u.upErr
+}
+
+var upgradedServer = domain.Server{
+	ID: "branch-x", Runtime: domain.RuntimeRef{Engine: "fakeengine", Version: "2.0"},
+	DataDir: "/tank/branches/x", Port: 15432, MemoryMB: 256, Extra: []string{"a=1"},
+}
+
+func TestCheckUpgrade_プロバイダに委譲し結果を返す(t *testing.T) {
+	var _ domain.Upgrader = (*rtserver.Server)(nil)
+	e := newEnv(t)
+	up := &upgradeProvider{
+		provider: e.prov,
+		checkPlan: domain.UpgradePlan{
+			Findings:   []domain.Finding{{Level: domain.LevelWarning, Code: "w1", Message: "watch out"}},
+			LegacyAuth: true,
+		},
+	}
+	e.srv.Provider = up
+	to := domain.RuntimeRef{Engine: "fakeengine", Version: "2.0"}
+	own := domain.Login{User: "app", Password: "secret"}
+
+	got, err := e.srv.CheckUpgrade(context.Background(), server, to, own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.LegacyAuth || len(got.Findings) != 1 || got.Findings[0].Code != "w1" {
+		t.Fatalf("plan = %+v", got)
+	}
+	if up.checkTo != "2.0" || up.checkLogin != own || e.prov.calls[0] != "CheckUpgrade" || e.prov.insts[0].Runtime.Version != "1.2" {
+		t.Fatalf("delegation: to=%q login=%+v calls=%v inst=%+v", up.checkTo, up.checkLogin, e.prov.calls, e.prov.insts[0])
+	}
+}
+
+func TestCheckUpgrade_機能非対応エラーをそのまま返す(t *testing.T) {
+	e := newEnv(t)
+	// e.prov embeds domain.UnsupportedFeatures, so CheckUpgrade returns ErrFeatureNotSupported.
+	_, err := e.srv.CheckUpgrade(context.Background(), server, domain.RuntimeRef{Engine: "fakeengine", Version: "2.0"}, domain.Login{User: "app"})
+	if !errors.Is(err, domain.ErrFeatureNotSupported) {
+		t.Fatalf("err = %v, want ErrFeatureNotSupported", err)
+	}
+}
+
+func TestStartUpgraded_新しいランタイムでLaunchPlanを起動しログを返す(t *testing.T) {
+	e := newEnv(t)
+	e.prov.health = []domain.HealthState{domain.HealthStopped, domain.HealthStarting, domain.HealthReady}
+	up := &upgradeProvider{
+		provider: e.prov,
+		upPlan: domain.LaunchPlan{
+			Command:     runtimeRoot + "/fakeengine/2.0/bin/fakedbd",
+			Args:        []string{"--upgrade"},
+			ServiceType: "simple",
+		},
+		upLog: domain.UpgradeLog{
+			Findings: []domain.Finding{{Level: domain.LevelInfo, Code: domain.CodeLogProgress, Message: "upgraded"}},
+			Excerpt:  "upgrade ok",
+		},
+	}
+	e.srv.Provider = up
+	login := domain.Login{User: "app", Password: "pw"}
+
+	got, err := e.srv.StartUpgraded(context.Background(), upgradedServer, login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Findings) != 1 || got.Findings[0].Message != "upgraded" || got.Excerpt != "upgrade ok" {
+		t.Fatalf("log = %+v", got)
+	}
+	if up.upLogin != login || e.prov.calls[0] != "StartUpgraded" ||
+		e.prov.insts[0].Runtime.Version != "2.0" || e.prov.insts[0].RuntimeDir != runtimeRoot+"/fakeengine/2.0" {
+		t.Fatalf("instance = %+v, login = %+v, calls = %v", e.prov.insts[0], up.upLogin, e.prov.calls)
+	}
+	if len(e.chowned) != 3 {
+		t.Fatalf("chowned = %v", e.chowned)
+	}
+	dropin, err := os.ReadFile(filepath.Join(e.unitDir, "db-branch-rt@branch-x.service.d", "override.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"User=db-branch-rt-fakeengine", runtimeRoot + "/fakeengine/2.0/bin/fakedbd", "\"--upgrade\""} {
+		if !strings.Contains(string(dropin), want) {
+			t.Errorf("drop-in lacks %q:\n%s", want, dropin)
+		}
+	}
+	reload, start := e.run.index("systemctl daemon-reload"), e.run.index("systemctl start db-branch-rt@branch-x.service")
+	if reload < 0 || start < 0 || reload > start {
+		t.Fatalf("daemon-reload must precede start: %v", e.run.cmds)
+	}
+}
+
+func TestStartUpgraded_機能非対応エラーをそのまま返し何も起動しない(t *testing.T) {
+	e := newEnv(t)
+	_, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{User: "app"})
+	if !errors.Is(err, domain.ErrFeatureNotSupported) {
+		t.Fatalf("err = %v, want ErrFeatureNotSupported", err)
+	}
+	if e.run.has("systemctl start") {
+		t.Fatal("systemctl start must not run")
+	}
+	if _, err := os.Stat(filepath.Join(e.unitDir, "db-branch-rt@branch-x.service.d")); err == nil {
+		t.Fatal("no drop-in may be written")
+	}
+}
+
+func TestStartUpgraded_領域の準備に失敗したらモジュールを呼ばない(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Chown = func(string, string) error { return errors.New("operation not permitted") }
+	e.srv.Provider = &upgradeProvider{provider: e.prov, upPlan: e.prov.plan}
+	if _, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{}); err == nil || !strings.Contains(err.Error(), "operation not permitted") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(e.prov.calls) != 0 {
+		t.Fatalf("the module must not be called: %v", e.prov.calls)
+	}
+}
+
+func TestStartUpgraded_プロバイダが失敗したらログとエラーを返し起動しない(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Provider = &upgradeProvider{
+		provider: e.prov,
+		upLog:    domain.UpgradeLog{Excerpt: "pre-launch error"},
+		upErr:    errors.New("incompatible data"),
+	}
+	log, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{})
+	if err == nil || !strings.Contains(err.Error(), "incompatible data") || log.Excerpt != "pre-launch error" {
+		t.Fatalf("log = %+v, err = %v", log, err)
+	}
+	if e.run.has("systemctl start") {
+		t.Fatal("systemctl start must not run")
+	}
+}
+
+func TestStartUpgraded_起動計画が危険なら何も起動しない(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Provider = &upgradeProvider{
+		provider: e.prov,
+		upPlan:   domain.LaunchPlan{Command: "/usr/lib/db-branch/runtimes/fakeengine/x", Args: []string{"a\nExecStartPre=/bin/evil"}},
+	}
+	_, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{})
+	if err == nil {
+		t.Fatal("an unsafe plan must be refused")
+	}
+	if e.run.has("systemctl start") {
+		t.Fatal("systemctl start must not run")
+	}
+	if _, err := os.Stat(filepath.Join(e.unitDir, "db-branch-rt@branch-x.service.d")); err == nil {
+		t.Fatal("no drop-in may be written")
+	}
+}
+
+func TestStartUpgraded_起動失敗やタイムアウト時にStartと同じ後始末でジャーナルを返す(t *testing.T) {
+	t.Run("systemctl_start_fails", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.Provider = &upgradeProvider{provider: e.prov, upPlan: e.prov.plan}
+		e.run.fail = map[string]error{"systemctl start": errors.New("exit status 5")}
+		e.run.log = "unit not found"
+		log, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{})
+		if err == nil || !strings.Contains(err.Error(), "unit not found") || log.Excerpt != "unit not found" {
+			t.Fatalf("log = %+v, err = %v", log, err)
+		}
+	})
+	t.Run("exited_while_starting", func(t *testing.T) {
+		e := newEnv(t)
+		e.prov.health = []domain.HealthState{domain.HealthStopped}
+		e.srv.Provider = &upgradeProvider{provider: e.prov, upPlan: e.prov.plan}
+		e.run.state, e.run.log = "failed", "boom: upgrade failed"
+		log, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{})
+		if err == nil || !strings.Contains(err.Error(), "stopped while starting") || !strings.Contains(err.Error(), "upgrade failed") || log.Excerpt != "boom: upgrade failed" {
+			t.Fatalf("log = %+v, err = %v", log, err)
+		}
+	})
+	t.Run("timeout", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StartTimeout = 20 * time.Millisecond
+		e.prov.health = []domain.HealthState{domain.HealthStarting}
+		e.srv.Provider = &upgradeProvider{
+			provider: e.prov,
+			upPlan:   e.prov.plan,
+			upLog:    domain.UpgradeLog{Excerpt: "module excerpt"},
+		}
+		e.run.log = "journal line"
+		log, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{})
+		if err == nil || !strings.Contains(err.Error(), "did not become ready") || log.Excerpt != "module excerpt" {
+			t.Fatalf("log = %+v, err = %v", log, err)
+		}
+	})
+}

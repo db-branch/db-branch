@@ -78,6 +78,13 @@ func attachEngine(a *App, cfg config.Config, m domain.RuntimeManifest, p *runtim
 	if described, err := p.Describe(ctx); err == nil {
 		spec.VersionPattern = described.VersionPattern // the pattern is not in the manifest
 	}
+	if spec.Capabilities.Upgrade {
+		spec.CheckUpgradePath = func(from, to domain.RuntimeRef) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			return p.CheckUpgradePath(ctx, from.Version, to.Version)
+		}
+	}
 	if err := domain.DefaultRuntimes.Register(spec); err != nil {
 		return err
 	}
