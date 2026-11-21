@@ -133,4 +133,4 @@ db-branch は、ZFS クローンで MySQL / PostgreSQL のデータベースブ�
 
 Mac / Windows では、Multipass のコマンド1つで試せます: <https://db-branch.com/ja/docs/getting-started/#multipass-ですぐ試す>。日本語のサイトは <https://db-branch.com/ja/>、設計ドキュメントは [docs/](docs/) にあります（日本語）。
 
-開発を支援していただける場合は、[GitHub Sponsors](https://github.com/sponsors/MaSuCcHI) からお願いします（任意です。サポートや有償モジュールの提供を伴うものではありません）。
+開発を支援する場合は、[GitHub Sponsors](https://github.com/sponsors/MaSuCcHI) から行えます（任意です。サポートや有償モジュールの提供は伴いません）。
