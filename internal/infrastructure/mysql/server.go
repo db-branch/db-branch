@@ -15,10 +15,11 @@ import (
 	"github.com/db-branch/db-branch/internal/domain"
 )
 
-// Runner runs external commands, optionally feeding stdin.
+// Runner runs external commands, optionally feeding stdin and extra environment.
 type Runner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 	RunInput(ctx context.Context, in io.Reader, name string, args ...string) ([]byte, error)
+	RunInputEnv(ctx context.Context, env []string, in io.Reader, name string, args ...string) ([]byte, error)
 }
 
 // Server runs mysqld instances as instances of the db-branch-mysqld@.service
@@ -259,10 +260,40 @@ func (m *Server) Admin(s domain.Server) domain.AdminAccess {
 		BinDir: filepath.Join(rt, "bin"), LibDir: filepath.Join(rt, "lib")}
 }
 
-// Exec runs sql as root over the local socket.
+// Exec runs sql as root over the local socket, passing the SQL on stdin so
+// passwords or large statements never appear on the command line or in errors.
 func (m *Server) Exec(ctx context.Context, s domain.Server, sql string) error {
-	_, err := m.Run.Run(ctx, m.bin(s, "mysql"), "--socket="+m.socket(s), "-uroot", "--batch", "-e", sql)
+	_, err := m.Run.RunInput(ctx, strings.NewReader(sql), m.bin(s, "mysql"), "--socket="+m.socket(s), "-uroot", "--batch")
 	return err
+}
+
+// allowBackslashEscapes resets NO_BACKSLASH_ESCAPES on the session before
+// running SQL built with quoteMySQL, so server sql_mode overrides in my.cnf
+// cannot corrupt escaped literals.
+const allowBackslashEscapes = "SET SESSION sql_mode = REPLACE(@@SESSION.sql_mode, 'NO_BACKSLASH_ESCAPES', ''); "
+
+var mysqlLiteralReplacer = strings.NewReplacer(
+	`\`, `\\`,
+	`'`, `''`,
+	"\x00", `\0`,
+	"\n", `\n`,
+	"\r", `\r`,
+	"\x1a", `\Z`,
+)
+
+// quoteMySQL quotes s as a MySQL single-quoted string literal.
+func quoteMySQL(s string) string {
+	return "'" + mysqlLiteralReplacer.Replace(s) + "'"
+}
+
+func validateLogin(user, password string) error {
+	if user == "" {
+		return errors.New("mysql login user cannot be empty")
+	}
+	if strings.ContainsRune(user, 0) || strings.ContainsRune(password, 0) {
+		return errors.New("mysql login and password cannot contain NUL bytes")
+	}
+	return nil
 }
 
 // clientPrivileges is what a branch login may do: read and change the data
@@ -273,10 +304,12 @@ const clientPrivileges = "SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENC
 	"CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, EVENT, TRIGGER"
 
 // CreateUser makes a client account that may connect from anywhere with
-// clientPrivileges, or takes the privileges of an account that has more
-// (branches made before this had every privilege). Names are branch names and
-// passwords letters and digits, so neither needs escaping inside the quotes.
+// clientPrivileges, syncs its password, and takes back any extra privileges
+// an older branch account may have had.
 func (m *Server) CreateUser(ctx context.Context, s domain.Server, user, password string) error {
+	if err := validateLogin(user, password); err != nil {
+		return err
+	}
 	if err := m.createUser(ctx, s, user, password); err != nil {
 		return err
 	}
@@ -288,7 +321,7 @@ func (m *Server) CreateUser(ctx context.Context, s domain.Server, user, password
 	if err := m.Exec(ctx, s, "SET GLOBAL partial_revokes = ON"); err != nil {
 		return err
 	}
-	return m.Exec(ctx, s, fmt.Sprintf("REVOKE %s ON mysql.* FROM '%s'@'%%'", clientPrivileges, user))
+	return m.Exec(ctx, s, fmt.Sprintf(allowBackslashEscapes+"REVOKE %s ON mysql.* FROM %s@'%%'", clientPrivileges, quoteMySQL(user)))
 }
 
 // partialRevokes says whether the runtime can take a privilege away on one
@@ -301,7 +334,8 @@ func partialRevokes(version string) bool {
 	if series != "8.0" {
 		return true
 	}
-	parts := strings.Split(version, ".")
+	base, _, _ := strings.Cut(version, "-")
+	parts := strings.Split(base, ".")
 	if len(parts) < 3 {
 		return false
 	}
@@ -310,26 +344,45 @@ func partialRevokes(version string) bool {
 }
 
 func (m *Server) createUser(ctx context.Context, s domain.Server, user, password string) error {
-	if !seriesAtLeast(domain.MySQLSeries(s.Runtime.Version), "5.7") {
+	u, pw := quoteMySQL(user), quoteMySQL(password)
+	series := domain.MySQLSeries(s.Runtime.Version)
+	if !seriesAtLeast(series, "5.7") {
 		// 5.6: no CREATE USER IF NOT EXISTS (GRANT ... IDENTIFIED BY makes the account), and the
 		// install script left anonymous accounts and root for other hosts without a password.
-		return m.Exec(ctx, s, fmt.Sprintf("DELETE FROM mysql.user WHERE User = '' OR (User = 'root' AND Host <> 'localhost'); FLUSH PRIVILEGES; "+
-			"GRANT USAGE ON *.* TO '%[1]s'@'%%' IDENTIFIED BY '%[2]s'; "+
-			"REVOKE ALL PRIVILEGES, GRANT OPTION FROM '%[1]s'@'%%'; "+
-			"GRANT %[3]s ON *.* TO '%[1]s'@'%%'", user, password, clientPrivileges))
+		return m.Exec(ctx, s, fmt.Sprintf(allowBackslashEscapes+
+			"DELETE FROM mysql.user WHERE User = '' OR (User = 'root' AND Host <> 'localhost'); FLUSH PRIVILEGES; "+
+			"GRANT USAGE ON *.* TO %[1]s@'%%' IDENTIFIED BY %[2]s; "+
+			"REVOKE ALL PRIVILEGES, GRANT OPTION FROM %[1]s@'%%'; "+
+			"GRANT %[3]s ON *.* TO %[1]s@'%%'", u, pw, clientPrivileges))
 	}
-	return m.Exec(ctx, s, fmt.Sprintf("CREATE USER IF NOT EXISTS '%[1]s'@'%%' IDENTIFIED BY '%[2]s'; "+
-		"REVOKE ALL PRIVILEGES, GRANT OPTION FROM '%[1]s'@'%%'; "+
-		"GRANT %[3]s ON *.* TO '%[1]s'@'%%'", user, password, clientPrivileges))
+	// On 8.4 without mysql_native_password and on 9.x, ALTER USER without a
+	// plugin fails (Error 1524) if an existing account still uses the unloaded
+	// plugin; switching to caching_sha2_password avoids that.
+	alterAuth := "IDENTIFIED BY " + pw
+	if seriesAtLeast(series, "9.0") || (series == "8.4" && !s.LegacyAuth) {
+		alterAuth = "IDENTIFIED WITH caching_sha2_password BY " + pw
+	}
+	return m.Exec(ctx, s, fmt.Sprintf(allowBackslashEscapes+
+		"CREATE USER IF NOT EXISTS %[1]s@'%%' IDENTIFIED BY %[2]s; "+
+		"ALTER USER %[1]s@'%%' %[3]s; "+
+		"REVOKE ALL PRIVILEGES, GRANT OPTION FROM %[1]s@'%%'; "+
+		"GRANT %[4]s ON *.* TO %[1]s@'%%'", u, pw, alterAuth, clientPrivileges))
 }
 
 // ExecAs runs sql as the branch login over the local socket. The client runs
 // with --binary-mode, which switches off its own commands (system, \!,
 // source): they would run on the node as the agent. DELIMITER still works.
-// The password goes in the environment, not on the command line.
+// The password goes in the process environment and the SQL on stdin, so
+// neither appears on the command line or in error messages.
 func (m *Server) ExecAs(ctx context.Context, s domain.Server, user, password, sql string) error {
-	_, err := m.Run.Run(ctx, "env", "MYSQL_PWD="+password, m.bin(s, "mysql"),
-		"--socket="+m.socket(s), "--binary-mode", "--batch", "-u", user, "-e", sql)
+	if err := validateLogin(user, password); err != nil {
+		return err
+	}
+	// --binary-mode disables \r\n -> \n normalization in the mysql client,
+	// which would leave a trailing \r inside DELIMITER directives.
+	normalized := strings.ReplaceAll(sql, "\r\n", "\n")
+	_, err := m.Run.RunInputEnv(ctx, []string{"MYSQL_PWD=" + password}, strings.NewReader(normalized),
+		m.bin(s, "mysql"), "--socket="+m.socket(s), "--binary-mode", "--batch", "--user="+user)
 	return err
 }
 

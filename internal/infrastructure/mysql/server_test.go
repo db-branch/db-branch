@@ -23,6 +23,7 @@ var ctx = context.Background()
 type fakeSystem struct {
 	calls      []string
 	stdin      []string
+	envs       [][]string
 	active     bool
 	pingFails  int
 	stopResult string // systemctl show Result after stop
@@ -37,21 +38,28 @@ type fakeSystem struct {
 }
 
 func (f *fakeSystem) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return f.RunInput(ctx, nil, name, args...)
+	return f.RunInputEnv(ctx, nil, nil, name, args...)
 }
 
-func (f *fakeSystem) RunInput(_ context.Context, in io.Reader, name string, args ...string) ([]byte, error) {
+func (f *fakeSystem) RunInput(ctx context.Context, in io.Reader, name string, args ...string) ([]byte, error) {
+	return f.RunInputEnv(ctx, nil, in, name, args...)
+}
+
+func (f *fakeSystem) RunInputEnv(_ context.Context, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
 	call := strings.Join(append([]string{filepath.Base(name)}, args...), " ")
 	f.calls = append(f.calls, call)
+	f.envs = append(f.envs, append([]string(nil), env...))
+	var input string
 	if in != nil {
 		b, _ := io.ReadAll(in)
-		f.stdin = append(f.stdin, string(b))
+		input = string(b)
+		f.stdin = append(f.stdin, input)
 	}
-	if f.failOn != "" && strings.Contains(call, f.failOn) {
+	if f.failOn != "" && (strings.Contains(call, f.failOn) || strings.Contains(input, f.failOn)) {
 		return nil, &execx.Error{Command: call, Stderr: "injected failure", Err: errors.New("exit 1")}
 	}
 	for k, v := range f.outputs {
-		if strings.Contains(call, k) {
+		if strings.Contains(call, k) || strings.Contains(input, k) {
 			return []byte(v), nil
 		}
 	}
@@ -264,8 +272,9 @@ func TestStop_正常停止ではパージを済ませてから止めて結果を
 	if err := f.srv.Stop(ctx, f.spec, domain.StopClean); err != nil {
 		t.Fatal(err)
 	}
-	if !f.sys.called("mysql --socket=" + filepath.Join(f.runDir, f.spec.ID, "mysqld.sock") + " -uroot --batch -e SET GLOBAL innodb_fast_shutdown = 0") {
-		t.Errorf("calls = %q", f.sys.calls)
+	if !f.sys.called("mysql --socket="+filepath.Join(f.runDir, f.spec.ID, "mysqld.sock")+" -uroot --batch") ||
+		!strings.Contains(strings.Join(f.sys.stdin, "\n"), "SET GLOBAL innodb_fast_shutdown = 0") {
+		t.Errorf("calls = %q stdin = %q", f.sys.calls, f.sys.stdin)
 	}
 	if !f.sys.called("systemctl stop db-branch-mysqld@branch-feature-x.service") {
 		t.Errorf("calls = %q", f.sys.calls)
@@ -323,8 +332,9 @@ func TestExec_ローカル管理者としてSQLを流す(t *testing.T) {
 	if err := f.srv.Exec(ctx, f.spec, "CREATE DATABASE x"); err != nil {
 		t.Fatal(err)
 	}
-	if !f.sys.called("mysql --socket=" + filepath.Join(f.runDir, f.spec.ID, "mysqld.sock") + " -uroot --batch -e CREATE DATABASE x") {
-		t.Errorf("calls = %q", f.sys.calls)
+	if !f.sys.called("mysql --socket="+filepath.Join(f.runDir, f.spec.ID, "mysqld.sock")+" -uroot --batch") ||
+		strings.Join(f.sys.stdin, "\n") != "CREATE DATABASE x" {
+		t.Errorf("calls = %q stdin = %q", f.sys.calls, f.sys.stdin)
 	}
 }
 
@@ -517,7 +527,7 @@ func TestCreateUser_どこからでも入れるがサーバーのファイルや
 	if err := f.srv.CreateUser(ctx, f.spec, "feature-x", "pw1"); err != nil {
 		t.Fatal(err)
 	}
-	sql := strings.Join(f.sys.calls, "\n")
+	sql := strings.Join(f.sys.stdin, "\n")
 	if !strings.Contains(sql, "CREATE USER IF NOT EXISTS 'feature-x'@'%' IDENTIFIED BY 'pw1'") || !strings.Contains(sql, "TO 'feature-x'@'%'") {
 		t.Errorf("sql = %s", sql)
 	}
@@ -537,17 +547,51 @@ func TestCreateUser_どこからでも入れるがサーバーのファイルや
 	}
 }
 
-func TestExecAs_binary_modeでクライアントのコマンドを止め_パスワードは環境変数で渡す(t *testing.T) {
+func TestMySQL_ExecAsはパスワードをコマンドライン引数に渡さず環境変数とstdinでSQLを実行する(t *testing.T) {
 	f := newFixture(t)
-	if err := f.srv.ExecAs(ctx, f.spec, "feature-x", "pw1", "UPDATE t SET a = 1"); err != nil {
+	pw := "s3cr3t=pw 'with' space"
+	sql := "DELIMITER //\r\nUPDATE t SET a = 1//\r\nDELIMITER ;\r\nSELECT 1"
+	if err := f.srv.ExecAs(ctx, f.spec, "feature-x", pw, sql); err != nil {
 		t.Fatal(err)
 	}
 	call := f.sys.calls[len(f.sys.calls)-1]
-	if !strings.Contains(call, "--binary-mode") || !strings.Contains(call, "-u feature-x") || strings.Contains(call, "-uroot") {
-		t.Errorf("call = %s", call)
+	if !strings.HasPrefix(call, "mysql ") || !strings.Contains(call, "--binary-mode") || !strings.Contains(call, "--user=feature-x") || strings.Contains(call, "-uroot") {
+		t.Errorf("call = %q", call)
 	}
-	if !strings.HasPrefix(call, "env MYSQL_PWD=pw1 ") || strings.Contains(strings.TrimPrefix(call, "env MYSQL_PWD=pw1 "), "pw1") {
-		t.Errorf("the password is on the command line: %s", call)
+	if strings.Contains(call, "env ") || strings.Contains(call, "MYSQL_PWD") || strings.Contains(call, pw) {
+		t.Errorf("password must not appear in argv: %q", call)
+	}
+	if strings.Contains(call, "-e") || strings.Contains(call, "UPDATE t") {
+		t.Errorf("SQL must be passed on stdin, not -e argv: %q", call)
+	}
+	env := f.sys.envs[len(f.sys.envs)-1]
+	if len(env) != 1 || env[0] != "MYSQL_PWD="+pw {
+		t.Errorf("env = %q, want [MYSQL_PWD=%s]", env, pw)
+	}
+	wantStdin := "DELIMITER //\nUPDATE t SET a = 1//\nDELIMITER ;\nSELECT 1"
+	if len(f.sys.stdin) == 0 || f.sys.stdin[len(f.sys.stdin)-1] != wantStdin {
+		t.Errorf("stdin = %q, want %q", f.sys.stdin, wantStdin)
+	}
+
+	// On error, the password must not leak into the returned error.
+	f.sys.failOn = "mysql "
+	err := f.srv.ExecAs(ctx, f.spec, "feature-x", pw, sql)
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if strings.Contains(err.Error(), pw) {
+		t.Errorf("error leaked password: %q", err.Error())
+	}
+
+	// Empty user or NUL byte in user/password must be rejected before running mysql.
+	for _, tc := range []struct{ u, p string }{{"", "pw"}, {"bad\x00u", "pw"}, {"u", "bad\x00pw"}} {
+		f2 := newFixture(t)
+		if err := f2.srv.ExecAs(ctx, f2.spec, tc.u, tc.p, "SELECT 1"); err == nil {
+			t.Errorf("ExecAs(%q, %q): want error", tc.u, tc.p)
+		}
+		if len(f2.sys.calls) != 0 {
+			t.Errorf("ExecAs(%q, %q) ran command: %q", tc.u, tc.p, f2.sys.calls)
+		}
 	}
 }
 
@@ -689,14 +733,14 @@ func TestCreateUser_5_7は従来の文で_5_6はGRANTでユーザーを作り匿
 	if err := f.srv.CreateUser(ctx, f.spec, "feature-x", "pw1"); err != nil {
 		t.Fatal(err)
 	}
-	if sql := f.sys.calls[len(f.sys.calls)-1]; !strings.Contains(sql, "CREATE USER IF NOT EXISTS 'feature-x'@'%' IDENTIFIED BY 'pw1'") {
+	if sql := f.sys.stdin[len(f.sys.stdin)-1]; !strings.Contains(sql, "CREATE USER IF NOT EXISTS 'feature-x'@'%' IDENTIFIED BY 'pw1'") {
 		t.Errorf("5.7: %s", sql)
 	}
 	g := newFixture(t).with("5.6.51")
 	if err := g.srv.CreateUser(ctx, g.spec, "feature-x", "pw1"); err != nil {
 		t.Fatal(err)
 	}
-	sql := g.sys.calls[len(g.sys.calls)-1]
+	sql := g.sys.stdin[len(g.sys.stdin)-1]
 	if strings.Contains(sql, "CREATE USER IF NOT EXISTS") {
 		t.Errorf("5.6 cannot CREATE USER IF NOT EXISTS: %s", sql)
 	}
@@ -716,7 +760,7 @@ func TestCreateUser_mysqlスキーマの権限を外すのは8_0_16以降だけ(
 		if err := f.srv.CreateUser(ctx, f.spec, "feature-x", "pw1"); err != nil {
 			t.Fatal(err)
 		}
-		sql := strings.Join(f.sys.calls, "\n")
+		sql := strings.Join(f.sys.stdin, "\n")
 		if got := strings.Contains(sql, " ON mysql.* FROM 'feature-x'@'%'") && strings.Contains(sql, "SET GLOBAL partial_revokes = ON"); got != tc.revoke {
 			t.Errorf("%s: revoke on the mysql schema = %v, want %v", tc.version, got, tc.revoke)
 		}
@@ -726,6 +770,175 @@ func TestCreateUser_mysqlスキーマの権限を外すのは8_0_16以降だけ(
 		}
 		if got := strings.Contains(read(t, filepath.Join(f.state, f.spec.ID, "my.cnf")), "partial_revokes=ON\n"); got != tc.revoke {
 			t.Errorf("%s: partial_revokes in my.cnf = %v, want %v", tc.version, got, tc.revoke)
+		}
+	}
+}
+
+func TestMySQL_partialRevokesは8_0_36_custom等のサフィックス付きバージョンでもtrueを返す(t *testing.T) {
+	for _, tc := range []struct {
+		version string
+		revoke  bool
+	}{
+		{"8.0.15-custom", false},
+		{"8.0.16-rc1", true},
+		{"8.0.36-custom", true},
+		{"8.0.36-0ubuntu0.24.04.1", true},
+		{"8.0-custom", false},
+		{"8.0.x-custom", false},
+		{"8.4.0-custom", true},
+		{"9.6.0-rc1", true},
+	} {
+		f := newFixture(t).with(tc.version)
+		if err := f.srv.CreateUser(ctx, f.spec, "feature-x", "pw1"); err != nil {
+			t.Fatal(err)
+		}
+		sql := strings.Join(f.sys.stdin, "\n")
+		if got := strings.Contains(sql, " ON mysql.* FROM 'feature-x'@'%'") && strings.Contains(sql, "SET GLOBAL partial_revokes = ON"); got != tc.revoke {
+			t.Errorf("%s: revoke on the mysql schema = %v, want %v", tc.version, got, tc.revoke)
+		}
+		if err := f.srv.Initialize(ctx, f.spec); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(read(t, filepath.Join(f.state, f.spec.ID, "my.cnf")), "partial_revokes=ON\n"); got != tc.revoke {
+			t.Errorf("%s: partial_revokes in my.cnf = %v, want %v", tc.version, got, tc.revoke)
+		}
+	}
+}
+
+func TestCreateUser_引用符やバックスラッシュを含むパスワードが安全にエスケープされMySQL5_7以降もパスワード同期される(t *testing.T) {
+	pw := `p'w\1` + "\n\r\x1a" + `end\`
+	wantPW := `'p''w\\1\n\r\Zend\\'`
+	user := `u's\r`
+	wantUser := `'u''s\\r'`
+	wantModeReset := "SET SESSION sql_mode = REPLACE(@@SESSION.sql_mode, 'NO_BACKSLASH_ESCAPES', '');"
+
+	// MySQL 8.4 (LegacyAuth=false): clears NO_BACKSLASH_ESCAPES on every session
+	// that embeds quoted literals, escapes user & password, uses IDENTIFIED WITH
+	// caching_sha2_password BY to avoid Error 1524 on legacy accounts, revokes
+	// mysql.*, and keeps password off argv.
+	f := newFixture(t).with("8.4.13")
+	if err := f.srv.CreateUser(ctx, f.spec, user, pw); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.sys.stdin) != 3 {
+		t.Fatalf("8.4 stdin calls = %d, want 3: %q", len(f.sys.stdin), f.sys.stdin)
+	}
+	if !strings.HasPrefix(f.sys.stdin[0], wantModeReset) {
+		t.Errorf("8.4 createUser stdin[0] does not start with sql_mode reset:\n%s", f.sys.stdin[0])
+	}
+	if !strings.HasPrefix(f.sys.stdin[2], wantModeReset) || !strings.Contains(f.sys.stdin[2], " ON mysql.* FROM "+wantUser+"@'%'") {
+		t.Errorf("8.4 revoke stdin[2] lacks leading sql_mode reset or escaped user:\n%s", f.sys.stdin[2])
+	}
+	for _, want := range []string{
+		"CREATE USER IF NOT EXISTS " + wantUser + "@'%' IDENTIFIED BY " + wantPW,
+		"ALTER USER " + wantUser + "@'%' IDENTIFIED WITH caching_sha2_password BY " + wantPW,
+		"REVOKE ALL PRIVILEGES, GRANT OPTION FROM " + wantUser + "@'%'",
+	} {
+		if !strings.Contains(f.sys.stdin[0], want) {
+			t.Errorf("8.4 stdin[0] lacks %q:\n%s", want, f.sys.stdin[0])
+		}
+	}
+	if calls := strings.Join(f.sys.calls, "\n"); strings.Contains(calls, pw) || strings.Contains(calls, wantPW) {
+		t.Errorf("password leaked to argv: %s", calls)
+	}
+
+	// MySQL 8.4 (LegacyAuth=true) and 8.0: keep IDENTIFIED BY without forcing plugin switch.
+	for _, tc := range []struct {
+		version string
+		legacy  bool
+	}{{"8.4.13", true}, {"8.0.46", false}} {
+		fx := newFixture(t).with(tc.version)
+		fx.spec.LegacyAuth = tc.legacy
+		if err := fx.srv.CreateUser(ctx, fx.spec, user, pw); err != nil {
+			t.Fatal(err)
+		}
+		if s := fx.sys.stdin[0]; !strings.Contains(s, "ALTER USER "+wantUser+"@'%' IDENTIFIED BY "+wantPW) {
+			t.Errorf("%s (legacy=%v) stdin[0] lacks ALTER USER IDENTIFIED BY:\n%s", tc.version, tc.legacy, s)
+		}
+	}
+
+	// MySQL 9.x: always uses IDENTIFIED WITH caching_sha2_password BY even if LegacyAuth=true.
+	f9Legacy := newFixture(t).with("9.6.0")
+	f9Legacy.spec.LegacyAuth = true
+	if err := f9Legacy.srv.CreateUser(ctx, f9Legacy.spec, user, pw); err != nil {
+		t.Fatal(err)
+	}
+	if s := f9Legacy.sys.stdin[0]; !strings.Contains(s, "ALTER USER "+wantUser+"@'%' IDENTIFIED WITH caching_sha2_password BY "+wantPW) {
+		t.Errorf("9.6 (legacy=true) stdin[0] lacks caching_sha2_password:\n%s", s)
+	}
+
+	// MySQL 5.7: also runs ALTER USER to sync password on existing accounts.
+	f57 := newFixture(t).with("5.7.44")
+	if err := f57.srv.CreateUser(ctx, f57.spec, user, pw); err != nil {
+		t.Fatal(err)
+	}
+	if s := f57.sys.stdin[0]; !strings.HasPrefix(s, wantModeReset) || !strings.Contains(s, "ALTER USER "+wantUser+"@'%' IDENTIFIED BY "+wantPW) {
+		t.Errorf("5.7 stdin[0] lacks leading sql_mode reset or ALTER USER:\n%s", s)
+	}
+
+	// MySQL 5.6: escapes user & password in GRANT ... IDENTIFIED BY and never emits ALTER USER.
+	f56 := newFixture(t).with("5.6.51")
+	if err := f56.srv.CreateUser(ctx, f56.spec, user, pw); err != nil {
+		t.Fatal(err)
+	}
+	s56 := f56.sys.stdin[0]
+	if !strings.HasPrefix(s56, wantModeReset) || !strings.Contains(s56, "GRANT USAGE ON *.* TO "+wantUser+"@'%' IDENTIFIED BY "+wantPW) {
+		t.Errorf("5.6 stdin[0] lacks leading sql_mode reset or escaped GRANT:\n%s", s56)
+	}
+	if strings.Contains(s56, "ALTER USER") {
+		t.Errorf("5.6 must not emit ALTER USER:\n%s", s56)
+	}
+
+	// MySQL 9.6 upgrade convertOwn: unescapes mysql --batch TSV output (\\ -> \) before quoting,
+	// sends query via stdin (not -e), clears NO_BACKSLASH_ESCAPES on both SELECT and ALTER USER,
+	// and keeps password off argv.
+	f96 := newFixture(t).with("9.6.0")
+	// Real mysql --batch escapes "\" as "\\" and "\t" as "\t" in stdout.
+	f96.sys.outputs = map[string]string{"AND plugin = 'mysql_native_password'": "h'o\\\\st\\t1\\n2\\0x\n"}
+	if _, err := f96.srv.StartUpgraded(ctx, f96.spec, domain.Login{User: user, Password: pw}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f96.sys.stdin) != 2 {
+		t.Fatalf("9.6 convertOwn stdin calls = %d, want 2: %q", len(f96.sys.stdin), f96.sys.stdin)
+	}
+	if !strings.HasPrefix(f96.sys.stdin[0], wantModeReset) || !strings.Contains(f96.sys.stdin[0], "WHERE user = "+wantUser+" AND plugin = 'mysql_native_password'") {
+		t.Errorf("9.6 query stdin[0] lacks leading sql_mode reset or escaped user:\n%s", f96.sys.stdin[0])
+	}
+	wantAlter := "ALTER USER " + wantUser + "@'h''o\\\\st\t1\\n2\\0x' IDENTIFIED WITH caching_sha2_password BY " + wantPW
+	if !strings.HasPrefix(f96.sys.stdin[1], wantModeReset) || !strings.Contains(f96.sys.stdin[1], wantAlter) {
+		t.Errorf("9.6 convertOwn stdin[1] lacks leading sql_mode reset or %q:\n%s", wantAlter, f96.sys.stdin[1])
+	}
+	if calls := strings.Join(f96.sys.calls, "\n"); strings.Contains(calls, pw) || strings.Contains(calls, wantPW) || strings.Contains(calls, "SELECT host") {
+		t.Errorf("9.6 convertOwn leaked password or query to argv: %s", calls)
+	}
+
+	// Empty user or NUL bytes in user/password must be rejected before running mysql.
+	for _, tc := range []struct{ u, p string }{{"", "pw"}, {"bad\x00u", "pw"}, {"u", "bad\x00pw"}} {
+		fBad := newFixture(t)
+		if err := fBad.srv.CreateUser(ctx, fBad.spec, tc.u, tc.p); err == nil {
+			t.Errorf("CreateUser(%q, %q): want error", tc.u, tc.p)
+		}
+		if len(fBad.sys.calls) != 0 {
+			t.Errorf("CreateUser(%q, %q) ran command: %q", tc.u, tc.p, fBad.sys.calls)
+		}
+	}
+	// StartUpgraded convertOwn: empty user skips conversion without touching anonymous accounts;
+	// NUL in user or password fails without running mysql.
+	fEmpty96 := newFixture(t).with("9.6.0")
+	fEmpty96.sys.outputs = map[string]string{"AND plugin = 'mysql_native_password'": "localhost\n"}
+	if _, err := fEmpty96.srv.StartUpgraded(ctx, fEmpty96.spec, domain.Login{User: "", Password: "pw"}); err != nil {
+		t.Fatalf("StartUpgraded with empty login: %v", err)
+	}
+	if len(fEmpty96.sys.stdin) != 0 {
+		t.Errorf("StartUpgraded with empty user must not query/alter accounts: %q", fEmpty96.sys.stdin)
+	}
+	for _, tc := range []domain.Login{{User: "bad\x00u", Password: "pw"}, {User: "u", Password: "bad\x00pw"}} {
+		fBad96 := newFixture(t).with("9.6.0")
+		if _, err := fBad96.srv.StartUpgraded(ctx, fBad96.spec, tc); err == nil {
+			t.Errorf("StartUpgraded convertOwn(%+v): want error", tc)
+		}
+		if len(fBad96.sys.stdin) != 0 {
+			t.Errorf("StartUpgraded convertOwn(%+v) ran mysql: %q", tc, fBad96.sys.stdin)
 		}
 	}
 }

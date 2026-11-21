@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"compress/gzip"
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"os"
@@ -315,6 +316,78 @@ func TestExecとCreateUser_ソケットからスーパーユーザーとして�
 	}
 }
 
+func TestCreateUser_引用符やバックスラッシュやドル記号を含むパスワードとユーザー名が安全にエスケープされる(t *testing.T) {
+	// Single quote without backslash: standard SQL literal with doubled single quotes.
+	f := newFixture(t)
+	if err := f.srv.CreateUser(ctx, f.spec, "feature-x", "p'w"); err != nil {
+		t.Fatal(err)
+	}
+	if sql := f.sys.stdin[0]; !strings.Contains(sql, `PASSWORD 'p''w'`) {
+		t.Errorf("single-quote escape sql = %s", sql)
+	}
+
+	// Backslash-only (with trailing backslash) and newline/CR in password: E'...' without raw newlines.
+	fBS := newFixture(t)
+	if err := fBS.srv.CreateUser(ctx, fBS.spec, `bs\user`, "line1\n\\! id\r\\"); err != nil {
+		t.Fatal(err)
+	}
+	sqlBS := fBS.sys.stdin[0]
+	for _, want := range []string{
+		`rolname = E'bs\\user'`,
+		`CREATE ROLE "bs\user"`,
+		`PASSWORD E'line1\n\\! id\r\\'`,
+	} {
+		if !strings.Contains(sqlBS, want) {
+			t.Errorf("backslash/newline sql lacks %q:\n%s", want, sqlBS)
+		}
+	}
+	if strings.Contains(sqlBS, "\n\\! id") {
+		t.Errorf("password injected a raw newline line starting with psql meta-command:\n%s", sqlBS)
+	}
+
+	// Single quote, backslash, double quote, and $$ / $dbb1$ dollar-quote breakout attempts.
+	f2 := newFixture(t)
+	user := `u"s'r$$`
+	pw := `p'w\$$$dbb1$; DROP TABLE x; --`
+	if err := f2.srv.CreateUser(ctx, f2.spec, user, pw); err != nil {
+		t.Fatal(err)
+	}
+	sql := f2.sys.stdin[0]
+	if !strings.HasPrefix(sql, "DO $dbb2$\n") || !strings.Contains(sql, "\n$dbb2$;\n") {
+		t.Errorf("DO block did not pick collision-free dollar tag:\n%s", sql)
+	}
+	wantIdent := `"u""s'r$$"`
+	wantUserLit := `'u"s''r$$'`
+	wantPWLit := `E'p''w\\$$$dbb1$; DROP TABLE x; --'`
+	for _, want := range []string{
+		`rolname = ` + wantUserLit,
+		`ALTER ROLE ` + wantIdent + ` WITH LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD ` + wantPWLit,
+		`CREATE ROLE ` + wantIdent + ` WITH LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD ` + wantPWLit,
+		`GRANT "db_branch_owner" TO ` + wantIdent + `;`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("sql lacks %q:\n%s", want, sql)
+		}
+	}
+
+	// Empty user, newlines in user, or NUL bytes in user/password must be rejected before running psql.
+	for _, tc := range []struct{ u, p string }{
+		{"", "pw"},
+		{"bad\n\\! id", "pw"},
+		{"bad\ruser", "pw"},
+		{"bad\x00user", "pw"},
+		{"user", "bad\x00pw"},
+	} {
+		f3 := newFixture(t)
+		if err := f3.srv.CreateUser(ctx, f3.spec, tc.u, tc.p); err == nil {
+			t.Errorf("CreateUser(%q, %q): want error", tc.u, tc.p)
+		}
+		if len(f3.sys.calls) != 0 {
+			t.Errorf("CreateUser(%q, %q) ran external command: %q", tc.u, tc.p, f3.sys.calls)
+		}
+	}
+}
+
 func TestSplitScript_connect行だけを受け_psqlのコマンドは断る(t *testing.T) {
 	parts, err := postgres.SplitScript("UPDATE a SET b = 1;\n\\c shop\nDELETE FROM c;\n\\connect \"my db\"\nSELECT 1;\n")
 	if err != nil {
@@ -343,6 +416,18 @@ func TestExecAs_psqlに通さず_コマンドを書いたスクリプトは走�
 	for _, c := range f.sys.calls {
 		if strings.Contains(c, "psql") {
 			t.Errorf("psql ran the caller's text: %q", f.sys.calls)
+		}
+	}
+	// Empty, NUL, or newline user must be rejected before opening a socket connection.
+	for _, badUser := range []string{"", "bad\x00user", "bad\nuser", "bad\ruser"} {
+		f2 := newFixture(t)
+		opened := false
+		f2.srv.Open = func(_, _ string) (*sql.DB, error) { opened = true; return nil, errors.New("should not open") }
+		if err := f2.srv.ExecAs(ctx, f2.spec, badUser, "pw1", "SELECT 1;"); err == nil {
+			t.Errorf("ExecAs(%q): want error", badUser)
+		}
+		if opened {
+			t.Errorf("ExecAs(%q) opened DB connection", badUser)
 		}
 	}
 }

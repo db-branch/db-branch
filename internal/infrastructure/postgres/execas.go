@@ -151,6 +151,9 @@ func kv(v string) string {
 // reads the SQL itself: no psql runs the caller's text, so no psql command
 // can run a program on the node.
 func (p *Server) ExecAs(ctx context.Context, s domain.Server, user, _ string, script string) error {
+	if err := validateUser(user); err != nil {
+		return err
+	}
 	parts, err := splitScript(script)
 	if err != nil {
 		return fmt.Errorf("init sql: %w", err)

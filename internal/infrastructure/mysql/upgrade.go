@@ -91,19 +91,57 @@ func adaptOptions(series string, extra []string) (out, notes []string) {
 	return out, notes
 }
 
-// query runs sql as root and returns the tab separated rows.
+// query runs sql as root and returns the unescaped tab separated rows.
 func (m *Server) query(ctx context.Context, s domain.Server, sql string) ([][]string, error) {
-	out, err := m.Run.Run(ctx, m.bin(s, "mysql"), "--socket="+m.socket(s), "-uroot", "--batch", "--skip-column-names", "-e", sql)
+	out, err := m.Run.RunInput(ctx, strings.NewReader(sql), m.bin(s, "mysql"), "--socket="+m.socket(s), "-uroot", "--batch", "--skip-column-names")
 	if err != nil {
 		return nil, err
 	}
+	if len(out) == 0 {
+		return nil, nil
+	}
 	var rows [][]string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line != "" {
-			rows = append(rows, strings.Split(line, "\t"))
+	for _, line := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
+		fields := strings.Split(line, "\t")
+		for i, f := range fields {
+			fields[i] = unescapeBatch(f)
 		}
+		rows = append(rows, fields)
 	}
 	return rows, nil
+}
+
+// unescapeBatch reverses mysql --batch (non-raw) output escaping (\\, \t, \n, \0).
+func unescapeBatch(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case '\\':
+				b.WriteByte('\\')
+				i++
+				continue
+			case 't':
+				b.WriteByte('\t')
+				i++
+				continue
+			case 'n':
+				b.WriteByte('\n')
+				i++
+				continue
+			case '0':
+				b.WriteByte(0)
+				i++
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 const oldPasswordUsers = "SELECT user, host FROM mysql.user WHERE plugin = 'mysql_old_password' ORDER BY user, host"
@@ -164,7 +202,7 @@ func (m *Server) CheckUpgrade(ctx context.Context, s domain.Server, to domain.Ru
 		}
 		var others [][]string
 		for _, r := range rows {
-			if r[0] != own.User {
+			if own.User == "" || r[0] != own.User {
 				others = append(others, r)
 			}
 		}
@@ -309,12 +347,18 @@ func (m *Server) systemUpgrade(ctx context.Context, s domain.Server) error {
 // convertOwn moves the branch's own account off mysql_native_password, which
 // the new server no longer has.
 func (m *Server) convertOwn(ctx context.Context, s domain.Server, own domain.Login) error {
-	rows, err := m.query(ctx, s, fmt.Sprintf("SELECT host FROM mysql.user WHERE user = '%s' AND plugin = 'mysql_native_password'", own.User))
+	if own.User == "" {
+		return nil
+	}
+	if err := validateLogin(own.User, own.Password); err != nil {
+		return err
+	}
+	rows, err := m.query(ctx, s, fmt.Sprintf(allowBackslashEscapes+"SELECT host FROM mysql.user WHERE user = %s AND plugin = 'mysql_native_password'", quoteMySQL(own.User)))
 	if err != nil {
 		return err
 	}
 	for _, r := range rows {
-		sql := fmt.Sprintf("ALTER USER '%s'@'%s' IDENTIFIED WITH caching_sha2_password BY '%s'", own.User, r[0], own.Password)
+		sql := fmt.Sprintf(allowBackslashEscapes+"ALTER USER %s@%s IDENTIFIED WITH caching_sha2_password BY %s", quoteMySQL(own.User), quoteMySQL(r[0]), quoteMySQL(own.Password))
 		if err := m.Exec(ctx, s, sql); err != nil {
 			return err
 		}

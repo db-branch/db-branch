@@ -67,3 +67,45 @@ func TestStreamEnv_環境変数を足して実行し標準出力を流す(t *tes
 		t.Fatalf("out = %q, err = %v", out.String(), err)
 	}
 }
+
+func TestRunInputEnv_環境変数と標準入力を渡して実行しエラーに環境変数を含めない(t *testing.T) {
+	// Overrides an existing parent environment variable with the same name.
+	t.Setenv("DBB_SECRET", "old-parent-value")
+	out, err := execx.Runner{}.RunInputEnv(
+		context.Background(),
+		[]string{"DBB_SECRET=hunter2"},
+		strings.NewReader("from-stdin"),
+		"sh", "-c", `printf "%s:%s" "$DBB_SECRET" "$(cat)"`,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(out) != "hunter2:from-stdin" {
+		t.Errorf("stdout = %q, want %q", out, "hunter2:from-stdin")
+	}
+
+	// nil env and nil stdin work like Run.
+	out, err = execx.Runner{}.RunInputEnv(context.Background(), nil, nil, "sh", "-c", "printf ok")
+	if err != nil || string(out) != "ok" {
+		t.Fatalf("nil env/stdin: out=%q err=%v", out, err)
+	}
+
+	// Non-zero exit and missing binary errors never leak secret env values.
+	for _, cmd := range [][]string{
+		{"sh", "-c", "echo failed >&2; exit 2"},
+		{"/nonexistent-binary-db-branch-test"},
+	} {
+		_, err = execx.Runner{}.RunInputEnv(
+			context.Background(),
+			[]string{"DBB_SECRET=super-secret-pw"},
+			strings.NewReader("bad-input"),
+			cmd[0], cmd[1:]...,
+		)
+		if err == nil {
+			t.Fatalf("%v: want error", cmd)
+		}
+		if strings.Contains(err.Error(), "super-secret-pw") {
+			t.Errorf("%v: error leaked secret env: %q", cmd, err.Error())
+		}
+	}
+}

@@ -254,25 +254,67 @@ func (p *Server) Exec(ctx context.Context, s domain.Server, sql string) error {
 	return err
 }
 
+// quotePGLiteral quotes s as a PostgreSQL string literal (matching libpq's
+// PQescapeLiteral: standard '...' when there are no backslashes or line breaks,
+// or E'...' with escaped backslashes and line breaks so it is safe regardless
+// of standard_conforming_strings and never emits raw newlines to psql).
+func quotePGLiteral(s string) string {
+	if strings.ContainsAny(s, "\\\r\n") {
+		return "E'" + strings.NewReplacer(`\`, `\\`, `'`, `''`, "\n", `\n`, "\r", `\r`).Replace(s) + "'"
+	}
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// quotePGIdent quotes s as a PostgreSQL double-quoted identifier.
+func quotePGIdent(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+// dollarTag picks a PostgreSQL dollar-quote delimiter that does not occur in body.
+func dollarTag(body string) string {
+	tag := "$$"
+	for i := 1; strings.Contains(body, tag); i++ {
+		tag = fmt.Sprintf("$dbb%d$", i)
+	}
+	return tag
+}
+
+func validateUser(user string) error {
+	if user == "" {
+		return errors.New("postgres login user cannot be empty")
+	}
+	if strings.ContainsAny(user, "\x00\r\n") {
+		return errors.New("postgres login user cannot contain NUL bytes or newlines")
+	}
+	return nil
+}
+
 // CreateUser makes the login for clients, or puts it right and resets its
 // password. It is no superuser (a superuser can run programs on the node with
 // COPY ... TO PROGRAM and read any file the server can): it is a member of
-// OwnerRole, which owns the objects in the databases. Names are branch names
-// and passwords letters and digits: the quoting below is enough.
+// OwnerRole, which owns the objects in the databases.
 func (p *Server) CreateUser(ctx context.Context, s domain.Server, user, password string) error {
-	err := p.Exec(ctx, s, fmt.Sprintf(`DO $$
-BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '%[3]s') THEN
-    CREATE ROLE "%[3]s" NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+	if err := validateUser(user); err != nil {
+		return err
+	}
+	if strings.ContainsRune(password, 0) {
+		return errors.New("postgres password cannot contain NUL bytes")
+	}
+	uLit, uIdent := quotePGLiteral(user), quotePGIdent(user)
+	pwLit := quotePGLiteral(password)
+	oLit, oIdent := quotePGLiteral(OwnerRole), quotePGIdent(OwnerRole)
+	body := fmt.Sprintf(`BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = %[4]s) THEN
+    CREATE ROLE %[5]s NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
   END IF;
-  IF EXISTS (SELECT FROM pg_roles WHERE rolname = '%[1]s') THEN
-    ALTER ROLE "%[1]s" WITH LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%[2]s';
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = %[1]s) THEN
+    ALTER ROLE %[2]s WITH LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %[3]s;
   ELSE
-    CREATE ROLE "%[1]s" WITH LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%[2]s';
+    CREATE ROLE %[2]s WITH LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %[3]s;
   END IF;
-END
-$$;
-GRANT "%[3]s" TO "%[1]s";`, user, password, OwnerRole))
+END`, uLit, uIdent, pwLit, oLit, oIdent)
+	tag := dollarTag(body)
+	err := p.Exec(ctx, s, fmt.Sprintf("DO %[1]s\n%[2]s\n%[1]s;\nGRANT %[3]s TO %[4]s;", tag, body, oIdent, uIdent))
 	if err != nil {
 		return err
 	}
