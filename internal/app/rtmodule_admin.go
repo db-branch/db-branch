@@ -21,21 +21,45 @@ import (
 	"github.com/db-branch/db-branch/internal/usecase/rtmodule"
 )
 
-// RuntimeModules wires the local runtime module management service for cfg.
-func (n Node) RuntimeModules(cfg config.Config, prompter rtmodule.TrustPrompter) *rtmodule.Service {
-	loader := runtimemodule.Loader{AllowUnsigned: cfg.AllowUnsignedRuntimes}
+type runtimeModuleWiring struct {
+	rootDir       string
+	keysDir       string
+	allowUnsigned bool
+	releases      rtmodule.ReleaseSource
+	usage         rtmodule.UsageChecker
+	prompter      rtmodule.TrustPrompter
+	restarter     rtmodule.AgentRestarter
+}
+
+func newRuntimeModuleService(w runtimeModuleWiring) *rtmodule.Service {
+	loader := runtimemodule.Loader{
+		Root:          w.rootDir,
+		KeysDir:       w.keysDir,
+		AllowUnsigned: w.allowUnsigned,
+	}
 	return &rtmodule.Service{
-		Releases:  githubReleaseAdapter{client: &githubrelease.Client{Resolve: artifact.SystemResolver}},
-		Extractor: archiveExtractorAdapter{extractor: runtimemodule.ArchiveExtractor{}},
-		Keys:      keyStoreAdapter{store: runtimemodule.KeyStore{}},
-		Verifier:  verifierAdapter{loader: runtimemodule.Loader{}},
+		Releases:  w.releases,
+		Extractor: archiveExtractorAdapter{extractor: runtimemodule.ArchiveExtractor{Root: w.rootDir}},
+		Keys:      keyStoreAdapter{store: runtimemodule.KeyStore{Dir: w.keysDir}},
+		Verifier:  verifierAdapter{loader: runtimemodule.Loader{Root: w.rootDir, KeysDir: w.keysDir}},
 		Store:     moduleStoreAdapter{store: runtimemodule.ModuleStore{Loader: loader}},
 		Users:     &sysuser.Users{},
-		Usage:     runtimeUsageChecker{cfg: cfg},
-		Prompter:  prompter,
-		Restarter: nodeRestarter{fn: n.Restart},
+		Usage:     w.usage,
+		Prompter:  w.prompter,
+		Restarter: w.restarter,
 		Arch:      goruntime.GOARCH,
 	}
+}
+
+// RuntimeModules wires the local runtime module management service for cfg.
+func (n Node) RuntimeModules(cfg config.Config, prompter rtmodule.TrustPrompter) *rtmodule.Service {
+	return newRuntimeModuleService(runtimeModuleWiring{
+		allowUnsigned: cfg.AllowUnsignedRuntimes,
+		releases:      githubReleaseAdapter{client: &githubrelease.Client{Resolve: artifact.SystemResolver}},
+		usage:         runtimeUsageChecker{cfg: cfg},
+		prompter:      prompter,
+		restarter:     nodeRestarter{fn: n.Restart},
+	})
 }
 
 type githubReleaseAdapter struct {
