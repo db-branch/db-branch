@@ -113,8 +113,8 @@ func TestQuiesce_クリーン停止の前にInnoDBを完全にフラッシュさ
 	if err := p.Quiesce(ctx, inst, domain.StopClean); err != nil {
 		t.Fatal(err)
 	}
-	if !f.sys.called("mysql --socket=") || !strings.Contains(strings.Join(f.sys.calls, "\n"), "SET GLOBAL innodb_fast_shutdown = 0") {
-		t.Errorf("calls = %q", f.sys.calls)
+	if !f.sys.called("mysql --socket=") || !strings.Contains(strings.Join(f.sys.stdin, "\n"), "SET GLOBAL innodb_fast_shutdown = 0") {
+		t.Errorf("calls = %q stdin = %q", f.sys.calls, f.sys.stdin)
 	}
 }
 

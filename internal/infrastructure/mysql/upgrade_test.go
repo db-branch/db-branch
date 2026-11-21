@@ -121,6 +121,24 @@ func TestCheckUpgrade_ブランチのユーザーだけなら9へもエラーに
 	if domain.HasErrors(plan.Findings) {
 		t.Errorf("findings = %+v", plan.Findings)
 	}
+	// Backslash in user name is escaped as \\ in mysql --batch output; query must unescape it,
+	// including literal \t encoded as \\t (escaped backslash followed by 't'), trailing spaces/\r,
+	// and empty leading columns (anonymous user "\tlocalhost\n") without panicking.
+	f2 := newFixture(t)
+	f2.sys.outputs = map[string]string{"FROM mysql.user": "branch\\\\tx \r\t%\n"}
+	plan2, _ := f2.srv.CheckUpgrade(ctx, f2.spec, mysqlRT("9.6.0"), domain.Login{User: "branch\\tx \r"})
+	if domain.HasErrors(plan2.Findings) {
+		t.Errorf("backslash/space/CR user findings = %+v", plan2.Findings)
+	}
+	f3 := newFixture(t)
+	f3.sys.outputs = map[string]string{"FROM mysql.user": "\tlocalhost\n"}
+	plan3, err := f3.srv.CheckUpgrade(ctx, f3.spec, mysqlRT("9.6.0"), domain.Login{User: ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := finding(plan3.Findings, domain.CodeNativePasswordGone); !ok || !strings.Contains(e.Message, "''@'localhost'") {
+		t.Errorf("anonymous user findings = %+v", plan3.Findings)
+	}
 }
 
 func TestCheckUpgrade_該当ユーザーがなければ何も言わない(t *testing.T) {
@@ -225,13 +243,13 @@ func TestStartUpgraded_9では起動後にブランチのユーザーをcaching_
 		t.Fatal("no client call")
 	}
 	found := false
-	for _, c := range f.sys.calls {
-		if strings.Contains(c, "ALTER USER 'branch-x'@'%' IDENTIFIED WITH caching_sha2_password BY 'pw1'") {
+	for _, s := range f.sys.stdin {
+		if strings.Contains(s, "ALTER USER 'branch-x'@'%' IDENTIFIED WITH caching_sha2_password BY 'pw1'") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("calls = %q", f.sys.calls)
+		t.Errorf("stdin = %q", f.sys.stdin)
 	}
 }
 
@@ -282,8 +300,8 @@ func TestCheckUpgrade_5_6から5_7へは旧パスワード方式のユーザー�
 		t.Errorf("findings = %+v", plan.Findings)
 	}
 	// 5.6 has no native password issue and no partition check for 5.7.
-	if f.sys.called("information_schema.partitions") || plan.LegacyAuth {
-		t.Errorf("calls = %q legacy = %v", f.sys.calls, plan.LegacyAuth)
+	if strings.Contains(strings.Join(f.sys.stdin, "\n"), "information_schema.partitions") || plan.LegacyAuth {
+		t.Errorf("stdin = %q legacy = %v", f.sys.stdin, plan.LegacyAuth)
 	}
 }
 
@@ -299,8 +317,8 @@ func TestCheckUpgrade_5_7から8_0へはInnoDB以外のパーティションを�
 	if !ok || e.Level != domain.LevelError || !strings.Contains(e.Message, "`shop`.`orders`") || !strings.Contains(e.Message, "`shop`.`log`") {
 		t.Errorf("findings = %+v", plan.Findings)
 	}
-	if f.sys.called("mysql_old_password") {
-		t.Errorf("5.7 has no old passwords: %q", f.sys.calls)
+	if strings.Contains(strings.Join(f.sys.stdin, "\n"), "mysql_old_password") {
+		t.Errorf("5.7 has no old passwords: %q", f.sys.stdin)
 	}
 }
 

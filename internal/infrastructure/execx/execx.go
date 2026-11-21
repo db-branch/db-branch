@@ -31,9 +31,14 @@ func (r Runner) Run(ctx context.Context, name string, args ...string) ([]byte, e
 
 // RunInput is Run with stdin connected to in.
 func (r Runner) RunInput(ctx context.Context, in io.Reader, name string, args ...string) ([]byte, error) {
+	return r.RunInputEnv(ctx, nil, in, name, args...)
+}
+
+// RunInputEnv is RunInput with extra environment variables (NAME=value), which
+// keeps secrets off the command line. The error never contains them.
+func (r Runner) RunInputEnv(ctx context.Context, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
 	var stdout bytes.Buffer
-	err := r.Stream(ctx, in, &stdout, name, args...)
-	if err != nil {
+	if err := r.run(ctx, env, in, &stdout, name, args...); err != nil {
 		return nil, err
 	}
 	return stdout.Bytes(), nil
