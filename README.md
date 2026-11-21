@@ -120,6 +120,7 @@ There is no hosted or cloud version of db-branch.
 - Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Commits need a DCO sign-off (`git commit -s`).
 - Security issues: see [SECURITY.md](SECURITY.md). Please use private vulnerability reporting, not public issues.
 - Support: see [SUPPORT.md](SUPPORT.md). No support is promised; Issues are read when possible.
+- Sponsor: if db-branch is useful to you, you can support its development on [GitHub Sponsors](https://github.com/sponsors/MaSuCcHI). It is optional and does not buy support or paid modules.
 - Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
@@ -131,3 +132,5 @@ Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 db-branch は、ZFS クローンで MySQL / PostgreSQL のデータベースブランチを発行・リセット・破棄するツールです。現在は Beta で、1.0 までに API が変わる可能性があります。コアは Apache-2.0 で、有償モジュール（認証/SSO・監査・履歴・差分・FSx ストレージ）は別パッケージ（クローズドソース、セルフホスト、ライセンスキー）です。
 
 Mac / Windows では、Multipass のコマンド1つで試せます: <https://db-branch.com/ja/docs/getting-started/#multipass-ですぐ試す>。日本語のサイトは <https://db-branch.com/ja/>、設計ドキュメントは [docs/](docs/) にあります（日本語）。
+
+開発を支援していただける場合は、[GitHub Sponsors](https://github.com/sponsors/MaSuCcHI) からお願いします（任意です。サポートや有償モジュールの提供を伴うものではありません）。
