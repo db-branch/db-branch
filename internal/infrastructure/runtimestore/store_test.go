@@ -318,3 +318,37 @@ func TestInstall_tar_gz_の旧版も最上位ディレクトリを外して展�
 		t.Fatal(err)
 	}
 }
+
+func TestInstall_バージョン付きの後処理は展開先とバージョンを受け取る(t *testing.T) {
+	var gotRef domain.RuntimeRef
+	var gotDir string
+	s, dir := newStore(t)
+	s.RefFixups = map[domain.Engine]func(context.Context, domain.RuntimeRef, string) error{
+		domain.MySQL: func(_ context.Context, ref domain.RuntimeRef, d string) error {
+			gotRef, gotDir = ref, d
+			return os.WriteFile(filepath.Join(d, "prepared"), nil, 0o644)
+		},
+	}
+	if err := s.Install(ctx, mysql84, []string{archive(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if gotRef != mysql84 || !strings.HasPrefix(filepath.Base(gotDir), ".staging-") {
+		t.Fatalf("ref %v dir %q", gotRef, gotDir)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "mysql", "8.4.13", "prepared")); err != nil {
+		t.Errorf("the result is part of the installed runtime: %v", err)
+	}
+}
+
+func TestInstall_バージョン付きの後処理に失敗したら何も残さない(t *testing.T) {
+	s, dir := newStore(t)
+	s.RefFixups = map[domain.Engine]func(context.Context, domain.RuntimeRef, string) error{
+		domain.MySQL: func(context.Context, domain.RuntimeRef, string) error { return errors.New("does not run") },
+	}
+	if err := s.Install(ctx, mysql84, []string{archive(t)}); err == nil || !strings.Contains(err.Error(), "does not run") {
+		t.Fatalf("error = %v", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(dir, "mysql")); len(entries) != 0 {
+		t.Errorf("leftovers: %v", entries)
+	}
+}

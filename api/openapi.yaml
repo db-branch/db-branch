@@ -284,7 +284,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: 'already_exists: names are unique across the cluster. conflict: the limit of branches without a login is reached. other_node.'
+          description: 'already_exists: names are unique across the cluster. conflict: the limit of branches without a login is reached. other_node. feature_not_supported: with `runtime`, the base''s database engine cannot be upgraded; with `record`, the engine does not declare `history_record` (before 2026-11-20 this was a 400).'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -686,7 +686,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: 'checkpoints_unavailable: the node holding the branch has no ZFS pool of its own for checkpoints.'
+          description: 'checkpoints_unavailable: the node holding the branch has no ZFS pool of its own for checkpoints; or feature_not_supported: the branch''s database engine has no checkpoints.'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -727,7 +727,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: 'already_exists: the name is taken. conflict: the limit is reached, or the branch is not ready. checkpoints_unavailable.'
+          description: 'already_exists: the name is taken. conflict: the limit is reached, or the branch is not ready. checkpoints_unavailable. feature_not_supported: the database engine has no checkpoints.'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -762,7 +762,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: 'conflict: the branch is not `ready`. checkpoints_unavailable.'
+          description: 'conflict: the branch is not `ready`. checkpoints_unavailable. feature_not_supported: the database engine has no checkpoints.'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -791,7 +791,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: conflict. checkpoints_unavailable.
+          description: conflict. checkpoints_unavailable. feature_not_supported (the database engine has no checkpoints).
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -849,7 +849,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: 'conflict: the branch is not `ready`.'
+          description: 'conflict: the branch is not `ready`; or feature_not_supported: the branch''s database engine cannot be upgraded.'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -1845,7 +1845,7 @@ paths:
       x-dbb-action: capability.read
       x-dbb-token-scopes: [full, branches]
       description: |-
-        Returns this node's version, the modules it runs, the console pages that modules add, and whether branches can be recorded.
+        Returns this node's version, the modules it runs, the console pages that modules add, whether branches can be recorded, and what each database engine offers (`engines`).
 
         **Action:** `capability.read`. Allowed for `full` and `branches` tokens.
       responses:
@@ -4362,13 +4362,47 @@ components:
         record:
           type: boolean
           description: 'A branch can be created with `record: true` (a recording module is loaded and licensed).'
-      required: [version, node, modules, pages, record]
+        warnings:
+          type: array
+          items: {type: string}
+          description: Things the operator should know about, for example that a database engine module loaded without a signature (`allow_unsigned_runtimes`). Absent when there are none.
+        engines:
+          type: object
+          description: |-
+            The database engines this node can run, by name. Every feature is listed, true or false: a client shows or hides an action from it, and the API refuses an operation the engine does not offer with `409 feature_not_supported`.
+          additionalProperties:
+            type: object
+            properties:
+              display_name: {type: string, examples: [PostgreSQL]}
+              collation_bound:
+                type: boolean
+                description: Copies of its data may only run on nodes of the same operating system release.
+              protocols:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name: {type: string}
+                    primary: {type: boolean}
+                  required: [name, primary]
+              features:
+                type: object
+                description: 'By key: `query`, `checkpoints`, `live_freeze`, `upgrade`, `source_dump`, `branch_merge`, `history_record` (also needs a licensed recording module), `update_stats`, `instance_metrics`.'
+                additionalProperties: {type: boolean}
+            required: [display_name, collation_bound, protocols, features]
+      required: [version, node, modules, pages, record, engines]
       example:
         version: 0.2.0
         node: node1
         modules: [history 0.2.0]
         pages: []
         record: true
+        engines:
+          mysql:
+            display_name: MySQL
+            collation_bound: false
+            protocols: [{name: mysql, primary: true}]
+            features: {query: true, checkpoints: true, live_freeze: false, upgrade: true, source_dump: true, branch_merge: false, history_record: true, update_stats: true, instance_metrics: false}
     Login:
       type: object
       description: The built-in login has one user, `admin`. Modules can add users and sign-in methods.
@@ -4618,6 +4652,14 @@ components:
         name: {type: string}
         version: {type: string}
         wanted: {type: boolean, description: The cluster wants the module on every node.}
+        kind:
+          type: string
+          enum: [runtime]
+          description: '`runtime` for a database engine (named `rt-<engine>`); absent for a plugin of the agent.'
+        source:
+          type: string
+          enum: [apt, local]
+          description: For a runtime module, whether the cluster installs its package (`apt`) or the operator puts it on each node (`local`).
         requires_license: {type: boolean, description: The module works only under a licence key (after the trial).}
         nodes:
           type: array

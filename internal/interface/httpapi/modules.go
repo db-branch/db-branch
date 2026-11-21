@@ -42,10 +42,14 @@ type moduleNodeJSON struct {
 }
 
 type moduleJSON struct {
-	Name    string           `json:"name"`
-	Version string           `json:"version"`
-	Wanted  bool             `json:"wanted"`
-	Nodes   []moduleNodeJSON `json:"nodes"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Wanted  bool   `json:"wanted"`
+	// Kind is "runtime" for a database engine (a plugin: left out); Source is
+	// "apt" or "local" for it.
+	Kind   string           `json:"kind,omitempty"`
+	Source string           `json:"source,omitempty"`
+	Nodes  []moduleNodeJSON `json:"nodes"`
 	// RequiresLicense: the module works only under a licence key.
 	RequiresLicense bool `json:"requires_license"`
 }
@@ -105,7 +109,7 @@ func (s *Server) listModules(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(nodes)
 	out := make([]moduleJSON, 0, len(specs))
 	for _, m := range specs {
-		v := moduleJSON{Name: m.Name, Version: m.Version, Wanted: m.Wanted, Nodes: []moduleNodeJSON{}, RequiresLicense: slices.Contains(s.PaidModules, m.Name)}
+		v := moduleJSON{Name: m.Name, Version: m.Version, Wanted: m.Wanted, Kind: m.Kind, Source: m.Source, Nodes: []moduleNodeJSON{}, RequiresLicense: slices.Contains(s.PaidModules, m.Name)}
 		for _, n := range nodes {
 			got := loaded[n][m.Name]
 			v.Nodes = append(v.Nodes, moduleNodeJSON{Node: n, Loaded: got, Current: got != "" && got == m.Version, Problem: problems[n][m.Name]})

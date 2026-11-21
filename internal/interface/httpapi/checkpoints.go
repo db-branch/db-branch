@@ -37,7 +37,17 @@ func checkpointView(c domain.Checkpoint) checkpointJSON {
 // checkpointBranch finds the branch and forwards the request to the node
 // holding it. ok is false when the request is answered already.
 func (s *Server) checkpointBranch(w http.ResponseWriter, r *http.Request, svc Branches, n domain.Name) (domain.Branch, bool) {
+	return s.featureBranch(w, r, svc, n, "checkpoints")
+}
+
+// featureBranch is checkpointBranch for an operation that needs the branch's
+// engine to offer feature: when it does not, the answer is 409
+// feature_not_supported, before anything is forwarded or started.
+func (s *Server) featureBranch(w http.ResponseWriter, r *http.Request, svc Branches, n domain.Name, feature string) (domain.Branch, bool) {
 	b, err := svc.GetBranch(r.Context(), n)
+	if err == nil {
+		err = s.requireFeature(r.Context(), b.Runtime.Engine, feature)
+	}
 	if err != nil {
 		fail(w, err)
 		return b, false

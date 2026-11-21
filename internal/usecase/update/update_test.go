@@ -860,3 +860,22 @@ func TestApply_モジュールの更新は実際に入っている版から決�
 		t.Errorf("modules = %v", r.Modules)
 	}
 }
+
+func TestView_APTで入れるランタイムモジュールは対象で_運用者が入れるものは対象外(t *testing.T) {
+	e := newEnv(t)
+	_ = e.store.PutModule(ctx, domain.ModuleSpec{Name: "rt-clickhouse", Version: "0.3.0", Wanted: true, Kind: domain.ModuleKindRuntime, Source: domain.SourceAPT})
+	_ = e.store.PutModule(ctx, domain.ModuleSpec{Name: "rt-duckdb", Version: "0.1.0", Wanted: true, Kind: domain.ModuleKindRuntime, Source: domain.SourceLocal})
+	_, _ = e.Check(ctx)
+	v, err := e.View(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, p := range v.Packages {
+		names = append(names, p.Name)
+	}
+	got := strings.Join(names, ",")
+	if !strings.Contains(got, "db-branch-rt-clickhouse") || strings.Contains(got, "db-branch-rt-duckdb") {
+		t.Errorf("packages = %s: an APT runtime module is updated with the cluster, a local one is not APT's business", got)
+	}
+}

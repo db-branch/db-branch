@@ -792,3 +792,61 @@ func TestStore_ブランチの記録の有無は作成時に決まり後から�
 		}
 	}
 }
+
+func TestProtocol_ランタイムモジュールのために予約した番号に達している(t *testing.T) {
+	if raftstore.Protocol < domain.ProtocolRuntimeModules {
+		t.Errorf("Protocol = %d, below domain.ProtocolRuntimeModules (%d)", raftstore.Protocol, domain.ProtocolRuntimeModules)
+	}
+}
+
+func TestPutModule_ランタイムモジュールの種類と配布元を保存し_従来のモジュールは変わらない(t *testing.T) {
+	l := newCluster(t, 1).leader(t)
+	want := []domain.ModuleSpec{
+		{Name: "auth", Version: "1.0", Wanted: true},
+		{Name: "rt-clickhouse", Version: "0.3.0", Wanted: true, Kind: domain.ModuleKindRuntime, Source: domain.SourceLocal},
+	}
+	for _, m := range want {
+		if err := l.PutModule(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := l.ListModules(ctx)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("modules = %+v, %v", got, err)
+	}
+	for _, m := range got {
+		if m.Name == "rt-clickhouse" && (m.Kind != domain.ModuleKindRuntime || m.Source != domain.SourceLocal) {
+			t.Errorf("runtime module = %+v", m)
+		}
+		if m.Name == "auth" && (m.Kind != "" || m.Source != "") {
+			t.Errorf("plain module = %+v", m)
+		}
+	}
+}
+
+func TestStore_古い版のノードがいる間はランタイムモジュールを記録しない(t *testing.T) {
+	l := newCluster(t, 1).leader(t)
+	_ = l.PutNode(ctx, domain.Node{Name: "new", Protocol: raftstore.Protocol})
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: 18})
+	rt := domain.ModuleSpec{Name: "rt-clickhouse", Version: "0.3.0", Wanted: true, Kind: domain.ModuleKindRuntime}
+
+	if err := l.PutModule(ctx, rt); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Errorf("a runtime module with a node at protocol 18: %v, want ErrClusterUpgrading", err)
+	}
+	if err := l.PutModule(ctx, domain.ModuleSpec{Name: "auth", Version: "1.0", Wanted: true}); err != nil {
+		t.Errorf("a plain module must still be recorded: %v", err)
+	}
+	if got, _ := l.ListModules(ctx); len(got) != 1 || got[0].Name != "auth" {
+		t.Errorf("modules = %+v", got)
+	}
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: domain.ProtocolRuntimeModules})
+	if err := l.PutModule(ctx, rt); err != nil {
+		t.Errorf("after the upgrade: %v", err)
+	}
+	// removing it (Wanted false) is a runtime module still: no node at 18 can be left to misread it
+	_ = l.PutNode(ctx, domain.Node{Name: "older", Protocol: 18})
+	rt.Wanted = false
+	if err := l.PutModule(ctx, rt); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Errorf("changing a runtime module with a node at 18: %v", err)
+	}
+}

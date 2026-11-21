@@ -132,3 +132,17 @@ func TestPatchBranch_作成後に記録の有無を変える手段は無い(t *t
 		t.Errorf("branch = %v", got)
 	}
 }
+
+func TestCreateBranch_記録を宣言しないエンジンのベースは409で作らない(t *testing.T) {
+	f := newFixture(t)
+	rec := &recorder{}
+	f.srv.Ext = ext.Module{ServerOptioner: rec}
+	f.branches.bases["pgbase"] = domain.Base{Name: name("pgbase"), Runtime: pg18, Status: domain.BaseReady}
+	resp, body := f.do(t, "POST", "/v1/branches", map[string]any{"name": "x", "base": "pgbase", "record": true})
+	if resp.StatusCode != 409 || fmt.Sprint(body["error"].(map[string]any)["code"]) != "feature_not_supported" || !strings.Contains(fmt.Sprint(body), "history_record") {
+		t.Fatalf("%d %v", resp.StatusCode, body)
+	}
+	if len(rec.seen) != 0 || len(f.branches.calls) != 0 {
+		t.Errorf("the module was asked or the branch created: %v %v", rec.seen, f.branches.calls)
+	}
+}

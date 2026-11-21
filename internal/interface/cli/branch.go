@@ -130,7 +130,7 @@ func (a *App) branchCommand() *cobra.Command {
 				body["record"] = true
 			}
 			if runtime != "" {
-				if _, err := domain.ParseRuntimeRef(runtime); err != nil {
+				if _, err := parseRuntimeArg(runtime); err != nil {
 					return fmt.Errorf("--runtime: %w", err)
 				}
 				body["runtime"] = runtime

@@ -29,11 +29,15 @@ type Config struct {
 	// Empty means the first non-loopback IPv4 address.
 	Advertise string `toml:"advertise"`
 	// Bind is the address database servers listen on.
-	Bind    string  `toml:"bind"`
-	Ports   Ports   `toml:"ports"`
-	Branch  Branch  `toml:"branch"`
-	ZFS     ZFS     `toml:"zfs"`
-	Console Console `toml:"console"`
+	Bind string `toml:"bind"`
+	// AllowUnsignedRuntimes lets runtime modules without a valid signature
+	// load (for development and testing only; a warning is shown). A bad
+	// signature is never accepted.
+	AllowUnsignedRuntimes bool    `toml:"allow_unsigned_runtimes"`
+	Ports                 Ports   `toml:"ports"`
+	Branch                Branch  `toml:"branch"`
+	ZFS                   ZFS     `toml:"zfs"`
+	Console               Console `toml:"console"`
 }
 
 // Ports is the inclusive TCP port range handed to bases and branches.

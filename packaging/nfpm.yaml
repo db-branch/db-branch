@@ -52,6 +52,19 @@ contents:
     dst: /usr/lib/systemd/system/db-branch-mysqld@.service
   - src: packaging/db-branch-postgres@.service
     dst: /usr/lib/systemd/system/db-branch-postgres@.service
+  # Instances of external database engines (runtime modules); see
+  # docs/runtime-modules-standard.md. The agent writes each instance's drop-in.
+  - src: packaging/db-branch-rt@.service
+    dst: /usr/lib/systemd/system/db-branch-rt@.service
+  # Where runtime modules install, and the public keys that vouch for them.
+  - dst: /usr/lib/db-branch/runtimes
+    type: dir
+    file_info:
+      mode: 0755
+  - dst: /etc/db-branch/trusted-keys
+    type: dir
+    file_info:
+      mode: 0755
   - src: packaging/config.toml
     dst: /etc/db-branch/config.toml
     type: config|noreplace

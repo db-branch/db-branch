@@ -38,6 +38,10 @@ func (s *Server) checkRecord(ctx context.Context, svc Branches, p ext.Principal,
 	if err != nil {
 		return err
 	}
+	// An engine that does not declare history_record cannot be recorded, whatever the module says.
+	if err := s.requireFeature(ctx, b.Runtime.Engine, "history_record"); err != nil {
+		return err
+	}
 	_, err = s.Ext.ServerOptioner.ServerOptions(ctx, ext.ServerBranch{Name: in.Name, Owner: in.Owner, Engine: string(b.Runtime.Engine),
 		Version: b.Runtime.Version, Record: true})
 	if err != nil && !errors.Is(err, ext.ErrForbidden) {
@@ -46,20 +50,30 @@ func (s *Server) checkRecord(ctx context.Context, svc Branches, p ext.Principal,
 	return err
 }
 
-// recordAvailable reports whether a branch can be created with recording:
-// a module that records is loaded and accepts a recorded branch (it is
-// licensed) of an engine that can be recorded. The console shows its checkbox
-// only then.
-func (s *Server) recordAvailable(ctx context.Context) bool {
+// recordProbe asks, once per engine that can be recorded, whether a module
+// that records accepts a recorded branch of it (it is licensed).
+func (s *Server) recordProbe(ctx context.Context) map[domain.Engine]bool {
+	out := map[domain.Engine]bool{}
 	if s.Ext.ServerOptioner == nil {
-		return false
+		return out
 	}
 	for _, e := range domain.DefaultRuntimes.Engines() {
-		spec, _ := domain.DefaultRuntimes.Spec(e)
-		if !spec.Capabilities.HistoryRecord {
+		spec, ok, err := s.engineSpec(ctx, e) // the provider's word where it has one, as the engines map says
+		if err != nil || !ok || !spec.Capabilities.HistoryRecord {
 			continue
 		}
-		if _, err := s.Ext.ServerOptioner.ServerOptions(ctx, ext.ServerBranch{Name: "probe", Owner: "probe", Engine: string(e), Record: true}); err == nil {
+		_, err = s.Ext.ServerOptioner.ServerOptions(ctx, ext.ServerBranch{Name: "probe", Owner: "probe", Engine: string(e), Record: true})
+		out[e] = err == nil
+	}
+	return out
+}
+
+// recordAvailable reports whether a branch can be created with recording: a
+// module that records is loaded and accepts a recorded branch of some engine.
+// The console shows its checkbox only then.
+func recordAvailable(probe map[domain.Engine]bool) bool {
+	for _, ok := range probe {
+		if ok {
 			return true
 		}
 	}

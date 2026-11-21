@@ -64,7 +64,7 @@ func (s *Server) upgradeBranch(w http.ResponseWriter, r *http.Request, svc Branc
 	// Forwarding re-reads the body: hand it back.
 	body, _ := json.Marshal(in)
 	r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(body)), int64(len(body))
-	if _, ok := s.checkpointBranch(w, r, svc, n); !ok {
+	if _, ok := s.featureBranch(w, r, svc, n, "upgrade"); !ok {
 		return
 	}
 	if _, err := svc.ValidateUpgrade(r.Context(), n, to, in.CheckOnly); err != nil {
@@ -95,6 +95,9 @@ func (s *Server) createRuntime(r *http.Request, svc Branches, in createBranchJSO
 	}
 	b, err := svc.GetBase(r.Context(), base)
 	if err != nil {
+		return to, from, err
+	}
+	if err = s.requireFeature(r.Context(), b.Runtime.Engine, "upgrade"); err != nil {
 		return to, from, err
 	}
 	return to, b.Runtime, domain.CheckUpgradePath(b.Runtime, to)

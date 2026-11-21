@@ -2,6 +2,7 @@
 package app
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -121,6 +122,8 @@ func New(cfg config.Config) (*App, error) {
 			domain.MySQL:    mysqlFixup,
 			domain.Postgres: postgres.Fixup,
 		},
+		// The runtime modules' PrepareRuntime, added when a module is attached.
+		RefFixups: map[domain.Engine]func(context.Context, domain.RuntimeRef, string) error{},
 	}
 	a := &App{
 		Config: cfg,

@@ -147,7 +147,7 @@ type LaunchPlan struct {
 	KillSignal string
 	// TimeoutStopSec is how long a stop may take, in seconds.
 	TimeoutStopSec int
-	// KillMode is systemd's KillMode= (control-group, mixed, process or none);
+	// KillMode is systemd's KillMode= (control-group, mixed or process; "none" would leave processes the core cannot stop);
 	// empty: the unit'"'"'s default. PostgreSQL asks for mixed: SIGINT to the
 	// postmaster, then SIGKILL to what is left.
 	KillMode string
@@ -155,6 +155,10 @@ type LaunchPlan struct {
 	// ServiceType notify; empty: the unit'"'"'s default.
 	NotifyAccess string
 }
+
+// MaxTimeoutStopSec bounds how long a module may ask the core to wait for a
+// stop (a day): a module must not be able to hold up systemctl stop for ever.
+const MaxTimeoutStopSec = 86400
 
 // ErrInvalidLaunchPlan is returned for a LaunchPlan that could not be written
 // into a systemd unit safely.
@@ -165,7 +169,7 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var (
 	serviceTypes = map[string]bool{"": true, "simple": true, "exec": true, "notify": true, "forking": true}
 	killSignals  = map[string]bool{"": true, "SIGTERM": true, "SIGINT": true, "SIGQUIT": true, "SIGHUP": true}
-	killModes    = map[string]bool{"": true, "control-group": true, "mixed": true, "process": true, "none": true}
+	killModes    = map[string]bool{"": true, "control-group": true, "mixed": true, "process": true}
 	notifyAccess = map[string]bool{"": true, "none": true, "main": true, "exec": true, "all": true}
 )
 
@@ -210,8 +214,8 @@ func (p LaunchPlan) Validate() error {
 	if !notifyAccess[p.NotifyAccess] {
 		return bad("notify access %q", p.NotifyAccess)
 	}
-	if p.TimeoutStopSec < 0 {
-		return bad("negative stop timeout")
+	if p.TimeoutStopSec < 0 || p.TimeoutStopSec > MaxTimeoutStopSec {
+		return bad("stop timeout %d is outside 0..%d seconds", p.TimeoutStopSec, MaxTimeoutStopSec)
 	}
 	return nil
 }

@@ -1,7 +1,10 @@
 package ext_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -283,5 +286,52 @@ func TestCombine_復元後の処理は全モジュールが走り失敗はまと
 	}
 	if ext.Combine([]ext.Module{{Name: "a"}}).RestoreFinisher != nil {
 		t.Error("no finisher")
+	}
+}
+
+// legacyDBAccess is DBAccess as modules built before Endpoints and Env knew it.
+type legacyDBAccess struct {
+	Engine, Host, Socket string
+	Port                 int
+	User, BinDir, LibDir string
+}
+
+func TestDBAccess_Endpointsとenvを足しても古いモジュールと互いに読める(t *testing.T) {
+	now := ext.DBAccess{Engine: "clickhouse", Host: "127.0.0.1", Socket: "/run/ch.sock", Port: 8123, User: "default", BinDir: "/rt/bin", LibDir: "/rt/lib",
+		Endpoints: map[string]ext.Endpoint{"http": {Host: "127.0.0.1", Port: 8123}, "native": {Host: "127.0.0.1", Port: 9000, Socket: "/run/ch-native.sock"}},
+		Env:       map[string]string{"CLICKHOUSE_HOST": "127.0.0.1"}}
+
+	// the agent (new) calls a module built with the old type: gob drops what the old type lacks
+	var wire bytes.Buffer
+	if err := gob.NewEncoder(&wire).Encode(now); err != nil {
+		t.Fatal(err)
+	}
+	var old legacyDBAccess
+	if err := gob.NewDecoder(&wire).Decode(&old); err != nil {
+		t.Fatalf("an old module cannot read the new value: %v", err)
+	}
+	if old.Engine != "clickhouse" || old.Port != 8123 || old.LibDir != "/rt/lib" {
+		t.Errorf("old module saw %+v", old)
+	}
+
+	// and the other way round: a value from an old agent has no Endpoints
+	wire.Reset()
+	if err := gob.NewEncoder(&wire).Encode(legacyDBAccess{Engine: "mysql", Host: "h", Port: 3306}); err != nil {
+		t.Fatal(err)
+	}
+	var fresh ext.DBAccess
+	if err := gob.NewDecoder(&wire).Decode(&fresh); err != nil || fresh.Engine != "mysql" || fresh.Endpoints != nil || fresh.Env != nil {
+		t.Errorf("new module read an old value: %+v, %v", fresh, err)
+	}
+}
+
+func TestDBAccess_JSONでは空のEndpointsとenvを出さない(t *testing.T) {
+	b, _ := json.Marshal(ext.DBAccess{Engine: "mysql", Host: "h", Port: 3306})
+	if strings.Contains(string(b), "endpoints") || strings.Contains(string(b), "env") {
+		t.Errorf("json = %s", b)
+	}
+	b, _ = json.Marshal(ext.DBAccess{Engine: "x", Endpoints: map[string]ext.Endpoint{"http": {Host: "h", Port: 1}}, Env: map[string]string{"A": "b"}})
+	if !strings.Contains(string(b), `"endpoints":{"http":{"host":"h","port":1}}`) || !strings.Contains(string(b), `"env":{"A":"b"}`) {
+		t.Errorf("json = %s", b)
 	}
 }

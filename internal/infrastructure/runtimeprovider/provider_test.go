@@ -3,6 +3,7 @@ package runtimeprovider_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -130,8 +131,30 @@ func TestAdminAccess_DBServerのAdminを返す(t *testing.T) {
 	f := &fakeServer{admin: domain.AdminAccess{Engine: "testdb", User: "root", Port: 4001}}
 	p := runtimeprovider.New(testSpec(), f, runtimeprovider.Hooks{})
 	got, err := p.AdminAccess(ctx, testInstance())
-	if err != nil || got != f.admin {
+	if err != nil || got.Engine != "testdb" || got.User != "root" || got.Port != 4001 {
 		t.Errorf("AdminAccess = %+v, %v", got, err)
+	}
+}
+
+func TestAdminAccess_主プロトコルのエンドポイントも埋める(t *testing.T) {
+	f := &fakeServer{admin: domain.AdminAccess{Engine: "testdb", Host: "127.0.0.1", Socket: "/run/t.sock", Port: 4001, User: "root"}}
+	p := runtimeprovider.New(testSpec(), f, runtimeprovider.Hooks{})
+	got, _ := p.AdminAccess(ctx, testInstance())
+	want := map[string]domain.Endpoint{"sql": {Host: "127.0.0.1", Port: 4001, Socket: "/run/t.sock"}}
+	if !reflect.DeepEqual(got.Endpoints, want) {
+		t.Errorf("Endpoints = %+v, want %+v", got.Endpoints, want)
+	}
+	// what the server already says about its endpoints is kept
+	f.admin.Endpoints = map[string]domain.Endpoint{"sql": {Port: 1}, "other": {Port: 2}}
+	got, _ = p.AdminAccess(ctx, testInstance())
+	if len(got.Endpoints) != 2 || got.Endpoints["sql"].Port != 1 {
+		t.Errorf("Endpoints = %+v", got.Endpoints)
+	}
+	// and an engine that declares no protocols gets none
+	q := runtimeprovider.New(domain.EngineSpec{Engine: "noports"}, f, runtimeprovider.Hooks{})
+	f.admin.Endpoints = nil
+	if got, _ := q.AdminAccess(ctx, domain.InstanceSpec{ID: "x"}); got.Endpoints != nil {
+		t.Errorf("Endpoints = %+v", got.Endpoints)
 	}
 }
 

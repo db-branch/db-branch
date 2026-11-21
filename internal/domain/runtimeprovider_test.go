@@ -130,7 +130,10 @@ func TestLaunchPlan_systemdディレクティブを注入できる計画を拒�
 		"許可外のKillSignal":   func(p *domain.LaunchPlan) { p.KillSignal = "SIGUSR3" },
 		"許可外のKillMode":     func(p *domain.LaunchPlan) { p.KillMode = "mixed\nUser=root" },
 		"許可外のNotifyAccess": func(p *domain.LaunchPlan) { p.NotifyAccess = "everyone" },
-		"負のタイムアウト":         func(p *domain.LaunchPlan) { p.TimeoutStopSec = -1 },
+		"KillMode=none(止められないプロセスを残せる)": func(p *domain.LaunchPlan) { p.KillMode = "none" },
+		"大きすぎるタイムアウト":                   func(p *domain.LaunchPlan) { p.TimeoutStopSec = 86401 },
+		"桁あふれするタイムアウト":                  func(p *domain.LaunchPlan) { p.TimeoutStopSec = 1 << 62 },
+		"負のタイムアウト":                      func(p *domain.LaunchPlan) { p.TimeoutStopSec = -1 },
 	}
 	for name, mutate := range cases {
 		p := ok
@@ -184,3 +187,15 @@ func TestBranch_InstanceはブランチをInstanceSpecへ写す(t *testing.T) {
 
 // fakeProvider is a RuntimeProvider whose methods are not called.
 type fakeProvider struct{ domain.RuntimeProvider }
+
+func TestAdminAccess_JSONでは空のEndpointsとenvを出さない(t *testing.T) {
+	b, _ := json.Marshal(domain.AdminAccess{Engine: domain.MySQL, Host: "h", Port: 3306})
+	if strings.Contains(string(b), "endpoints") || strings.Contains(string(b), "env") {
+		t.Errorf("json = %s", b)
+	}
+	a := domain.AdminAccess{Engine: "x", Endpoints: map[string]domain.Endpoint{"http": {Host: "h", Port: 1}}, Env: map[string]string{"A": "b"}}
+	b, _ = json.Marshal(a)
+	if !strings.Contains(string(b), `"endpoints":{"http":{"host":"h","port":1}}`) {
+		t.Errorf("json = %s", b)
+	}
+}

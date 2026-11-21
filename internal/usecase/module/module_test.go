@@ -211,3 +211,101 @@ func TestSync_ロールアウトで入れた版は記録が古くても戻さな
 		t.Errorf("ran %v", apt.ran)
 	}
 }
+
+func TestInstallRuntime_エンジン用のランタイムモジュールを記録する(t *testing.T) {
+	s, apt := newService(t)
+	apt.candidates["db-branch-rt-clickhouse"] = "0.3.0"
+
+	m, err := s.InstallRuntime(ctx, "clickhouse", "", "")
+	want := domain.ModuleSpec{Name: "rt-clickhouse", Version: "0.3.0", Wanted: true, Kind: domain.ModuleKindRuntime, Source: domain.SourceAPT}
+	if err != nil || m != want {
+		t.Fatalf("InstallRuntime = %+v, %v; want %+v", m, err, want)
+	}
+	changed, err := s.Sync(ctx)
+	if err != nil || !changed || strings.Join(apt.ran, ",") != "install db-branch-rt-clickhouse=0.3.0" {
+		t.Errorf("sync: %v %v %v", changed, err, apt.ran)
+	}
+}
+
+func TestInstallRuntime_APT以外の配布は版が必須でAPTの同期の対象にしない(t *testing.T) {
+	s, apt := newService(t)
+	if _, err := s.InstallRuntime(ctx, "duckdb", "", domain.SourceLocal); err == nil {
+		t.Error("a local runtime module without a version was accepted")
+	}
+	m, err := s.InstallRuntime(ctx, "duckdb", "0.1.0", domain.SourceLocal)
+	if err != nil || m.Source != domain.SourceLocal || m.Version != "0.1.0" {
+		t.Fatalf("InstallRuntime = %+v, %v", m, err)
+	}
+	if changed, err := s.Sync(ctx); err != nil || changed || len(apt.ran) != 0 {
+		t.Errorf("APT was used for a local module: %v %v %v", changed, err, apt.ran)
+	}
+	if _, err := s.InstallRuntime(ctx, "duckdb", "0.1.0", "carrier-pigeon"); err == nil {
+		t.Error("an unknown source was accepted")
+	}
+}
+
+func TestInstallRuntime_不正なエンジン名やパッケージなしは断る(t *testing.T) {
+	s, _ := newService(t)
+	for _, e := range []string{"mysql", "postgres", "Bad Name", ""} {
+		if _, err := s.InstallRuntime(ctx, e, "1.0", ""); !errors.Is(err, domain.ErrInvalidModule) {
+			t.Errorf("InstallRuntime(%q) = %v, want ErrInvalidModule", e, err)
+		}
+	}
+	if _, err := s.InstallRuntime(ctx, "nopackage", "", ""); !errors.Is(err, module.ErrUnavailable) {
+		t.Errorf("no package: %v", err)
+	}
+}
+
+func TestInstallRuntime_全ノードがプロトコル21になるまで記録しない(t *testing.T) {
+	s, apt := newService(t)
+	apt.candidates["db-branch-rt-clickhouse"] = "0.3.0"
+	nodes := []domain.Node{{Name: "a", Protocol: 21}, {Name: "b", Protocol: 18}}
+	s.Nodes = func(context.Context) ([]domain.Node, error) { return nodes, nil }
+
+	if _, err := s.InstallRuntime(ctx, "clickhouse", "", ""); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("with a node at protocol 18: %v, want ErrClusterUpgrading", err)
+	}
+	if list, _ := s.List(ctx); len(list) != 0 {
+		t.Errorf("recorded anyway: %+v", list)
+	}
+	nodes[1].Protocol = 21
+	if _, err := s.InstallRuntime(ctx, "clickhouse", "", ""); err != nil {
+		t.Errorf("every node at 21: %v", err)
+	}
+	s.Nodes = func(context.Context) ([]domain.Node, error) { return nil, errors.New("down") }
+	if _, err := s.InstallRuntime(ctx, "clickhouse", "", ""); err == nil {
+		t.Error("an unreadable node list was taken as permission")
+	}
+	// plain modules never wait for it
+	s.Nodes = func(context.Context) ([]domain.Node, error) { return []domain.Node{{Name: "old", Protocol: 18}}, nil }
+	if _, err := s.Install(ctx, "proxysql", ""); err != nil {
+		t.Errorf("Install of a plain module = %v", err)
+	}
+}
+
+func TestランタイムモジュールのパッケージはAdoptされずAvailableにも出ない(t *testing.T) {
+	s, apt := newService(t)
+	apt.installed["db-branch-rt-clickhouse"] = "0.3.0"
+	apt.installed["db-branch-auth"] = "1.0"
+	if err := s.Adopt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := s.List(ctx)
+	if len(list) != 1 || list[0].Name != "auth" {
+		t.Errorf("adopted = %+v, want only the plain module", list)
+	}
+}
+
+func TestRemove_ランタイムモジュールも名前で消せる(t *testing.T) {
+	s, apt := newService(t)
+	apt.candidates["db-branch-rt-clickhouse"] = "0.3.0"
+	_, _ = s.InstallRuntime(ctx, "clickhouse", "", "")
+	_, _ = s.Sync(ctx)
+	apt.ran = nil
+	if err := s.Remove(ctx, "rt-clickhouse"); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := s.Sync(ctx); err != nil || !changed || strings.Join(apt.ran, ",") != "remove db-branch-rt-clickhouse" {
+		t.Errorf("sync after remove: %v %v %v", changed, err, apt.ran)
+	}
+}

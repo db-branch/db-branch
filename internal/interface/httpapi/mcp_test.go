@@ -56,16 +56,20 @@ func (f *fakeTokens) Revoke(_ context.Context, id string) error {
 // fakeQuery is the runtime provider of mysql that answers every statement with 42.
 type fakeQuery struct {
 	domain.RuntimeProvider
-	gotInst  domain.InstanceSpec
-	got      domain.QueryRequest
-	err      error
-	noSQL    bool // the engine declares no query support
-	describe error
+	gotInst    domain.InstanceSpec
+	got        domain.QueryRequest
+	err        error
+	noSQL      bool // the engine declares no query support
+	noUpgrade  bool
+	histRecord bool // the provider declares history_record whatever the registry says
+	describe   error
 }
 
 func (q *fakeQuery) Describe(context.Context) (domain.EngineSpec, error) {
 	spec, _ := domain.DefaultRuntimes.Spec(domain.MySQL)
 	spec.Capabilities.Query = !q.noSQL
+	spec.Capabilities.Upgrade = spec.Capabilities.Upgrade && !q.noUpgrade
+	spec.Capabilities.HistoryRecord = spec.Capabilities.HistoryRecord || q.histRecord
 	return spec, q.describe
 }
 

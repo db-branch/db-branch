@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 )
 
 // ModuleSpec is a module the cluster should have: the package
@@ -12,6 +13,53 @@ type ModuleSpec struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
 	Wanted  bool   `json:"wanted"`
+	// Kind is "" for a plugin of the agent (/usr/lib/db-branch/modules) or
+	// ModuleKindRuntime for a database engine (/usr/lib/db-branch/runtimes),
+	// named "rt-<engine>". Source is "" or SourceAPT for a package every node
+	// installs, SourceLocal for one the operator puts on each node. Both are
+	// left out of the stored form when empty, so a plain module is stored as before.
+	Kind   string `json:"kind,omitempty"`
+	Source string `json:"source,omitempty"`
+}
+
+const (
+	// ModuleKindRuntime marks a runtime module (an external database engine).
+	ModuleKindRuntime = "runtime"
+	// SourceAPT: the package comes from the APT repositories and the cluster installs it everywhere.
+	SourceAPT = "apt"
+	// SourceLocal: the operator installs the module on each node; the cluster only checks it is there.
+	SourceLocal = "local"
+	// ProtocolRuntimeModules is the cluster protocol from which runtime modules
+	// may be recorded. They travel inside put_module (no new command), but a
+	// node that does not know them would wait for a "plugin" that never comes
+	// and refuse the API. 19 and 20 are reserved for branch fork and merge.
+	ProtocolRuntimeModules = 21
+	runtimeModulePrefix    = "rt-"
+	// maxRuntimeEngine keeps "db-branch-rt-<engine>" a valid login name (32 characters).
+	maxRuntimeEngine = 19
+)
+
+// IsRuntime reports whether the module is a database engine.
+func (m ModuleSpec) IsRuntime() bool { return m.Kind == ModuleKindRuntime }
+
+// Engine is the engine of a runtime module ("" for a plugin).
+func (m ModuleSpec) Engine() string {
+	if !m.IsRuntime() {
+		return ""
+	}
+	return strings.TrimPrefix(m.Name, runtimeModulePrefix)
+}
+
+// RuntimeModuleName is the module name of an engine's runtime module.
+func RuntimeModuleName(engine string) string { return runtimeModulePrefix + engine }
+
+// ValidRuntimeModuleEngine reports whether engine can have a runtime module:
+// a valid engine name that is not built into the core and fits its service user.
+func ValidRuntimeModuleEngine(engine string) error {
+	if !enginePattern.MatchString(engine) || len(engine) > maxRuntimeEngine || Engine(engine) == MySQL || Engine(engine) == Postgres {
+		return ErrInvalidModule
+	}
+	return nil
 }
 
 // Package is the APT package that ships the module.
@@ -27,7 +75,8 @@ var moduleName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
 
 // ValidModuleName reports whether name can be a module (lowercase, digits, hyphens).
 func ValidModuleName(name string) error {
-	if !moduleName.MatchString(name) {
+	if !moduleName.MatchString(name) || strings.HasPrefix(name, runtimeModulePrefix) { // rt- is for runtime modules
+
 		return ErrInvalidModule
 	}
 	return nil
@@ -48,8 +97,24 @@ func PendingModules(specs []ModuleSpec, loaded []string) []string {
 	}
 	var out []string
 	for _, m := range specs {
-		if m.Wanted && !have[m.Name] {
+		if m.Wanted && !m.IsRuntime() && !have[m.Name] {
 			out = append(out, m.Name)
+		}
+	}
+	return out
+}
+
+// PendingRuntimeModules returns the engines of wanted runtime modules that
+// loaded (the engines this node's agent runs) lacks, whatever their source.
+func PendingRuntimeModules(specs []ModuleSpec, loaded []string) []string {
+	have := map[string]bool{}
+	for _, l := range loaded {
+		have[l] = true
+	}
+	var out []string
+	for _, m := range specs {
+		if m.Wanted && m.IsRuntime() && !have[m.Engine()] {
+			out = append(out, m.Engine())
 		}
 	}
 	return out

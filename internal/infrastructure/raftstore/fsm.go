@@ -110,7 +110,14 @@ type Command struct {
 // so there is no new command; nodes at 15 would reset or recreate such a
 // branch on the base's runtime, so the feature waits for protocol 16
 // everywhere (domain.ProtocolBranchRuntime, checked by the use case).
-const Protocol = 18
+//
+// 21: runtime modules (external database engines). ModuleSpec gets Kind and
+// Source, which travel inside put_module, so there is no new command; a node
+// at 18 would take such a module for a plugin that never loads and refuse the
+// API (503 modules_pending), so the feature waits for protocol 21 everywhere
+// (domain.ProtocolRuntimeModules, checked by the use case). 19 and 20 are
+// reserved for branch fork and branch merge.
+const Protocol = 21
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a
@@ -136,7 +143,14 @@ var opProtocol = map[string]int{
 }
 
 // Needs returns the protocol the command requires (0 for unknown commands).
-func (c Command) Needs() int { return opProtocol[c.Op] }
+// put_module needs more when it carries a runtime module: an older node would
+// take it for a plugin that never loads.
+func (c Command) Needs() int {
+	if c.Op == "put_module" && c.Module != nil && c.Module.IsRuntime() {
+		return domain.ProtocolRuntimeModules
+	}
+	return opProtocol[c.Op]
+}
 
 // Encode serializes the command for raft.Apply. A command received from
 // another node keeps its original bytes, so fields this version does not
