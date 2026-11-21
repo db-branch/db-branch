@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"text/tabwriter"
@@ -20,37 +21,84 @@ type moduleView struct {
 }
 
 func (a *App) moduleCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "module", Short: "Enable modules on every node of the cluster"}
-	var version string
+	cmd := &cobra.Command{Use: "module", Short: "Manage cluster modules and local runtime modules"}
+	var (
+		version   string
+		trustKey  string
+		upgrade   bool
+		noRestart bool
+	)
 	install := &cobra.Command{
-		Use: "install <name>", Short: "Install a module (package db-branch-<name>) on every node", Args: cobra.ExactArgs(1),
+		Use:   "install <name|github.com/owner/repo[@tag]>",
+		Short: "Install a cluster APT module or a local runtime module from GitHub Releases",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			target := args[0]
+			if isRuntimeInstallTarget(target) {
+				if version != "" {
+					return exitError(exitCodeUsage, fmt.Errorf("--version is only for cluster APT modules; specify @<tag> on the GitHub reference"))
+				}
+				return a.runRuntimeModuleInstall(cmd.Context(), target, trustKey, upgrade, noRestart)
+			}
+			if trustKey != "" || upgrade || noRestart {
+				return exitError(exitCodeUsage, fmt.Errorf("--trust-key, --upgrade, and --no-restart are only for local runtime modules (github.com/<owner>/<repo>)"))
+			}
 			c, err := a.client()
 			if err != nil {
 				return err
 			}
 			var m moduleView
-			if err := c.Do(cmd.Context(), "POST", "/v1/modules", map[string]any{"name": args[0], "version": version}, &m); err != nil {
+			if err := c.Do(cmd.Context(), "POST", "/v1/modules", map[string]any{"name": target, "version": version}, &m); err != nil {
 				return err
 			}
 			fmt.Fprintf(a.Stdout, "module %s %s: every node installs it and restarts its agent; see `db-branch module list`\n", m.Name, m.Version)
 			return nil
 		},
 	}
-	install.Flags().StringVar(&version, "version", "", "package version (default: the newest available)")
+	install.Flags().StringVar(&version, "version", "", "package version for cluster APT modules (default: the newest available)")
+	install.Flags().StringVar(&trustKey, "trust-key", "", "expected SHA-256 fingerprint (sha256:<64hex>) for trusting an unknown runtime module signing key")
+	install.Flags().BoolVar(&upgrade, "upgrade", false, "upgrade an already installed local runtime module")
+	install.Flags().BoolVar(&noRestart, "no-restart", false, "do not restart db-branch.service after installing a local runtime module")
+	var (
+		removeRuntime   bool
+		removeNoRestart bool
+	)
 	remove := &cobra.Command{
-		Use: "remove <name>", Short: "Remove a module from every node", Args: cobra.ExactArgs(1),
+		Use:   "remove <name|engine>",
+		Short: "Remove a cluster APT module or a locally installed runtime module",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			isLocal := removeRuntime
+			if !isLocal {
+				var err error
+				isLocal, err = a.hasLocalRuntimeModule(name)
+				if err != nil {
+					return err
+				}
+			}
+			if isLocal {
+				return a.runRuntimeModuleRemove(cmd.Context(), name, removeNoRestart)
+			}
+			if removeNoRestart {
+				return exitError(exitCodeUsage, fmt.Errorf("--no-restart is only for local runtime modules"))
+			}
 			c, err := a.client()
 			if err != nil {
 				return err
 			}
-			return c.Do(cmd.Context(), "DELETE", "/v1/modules/"+args[0], nil, nil)
+			return c.Do(cmd.Context(), "DELETE", "/v1/modules/"+name, nil, nil)
 		},
 	}
+	remove.Flags().BoolVar(&removeRuntime, "runtime", false, "remove a locally installed runtime module")
+	remove.Flags().BoolVar(&removeNoRestart, "no-restart", false, "do not restart db-branch.service after removing a local runtime module")
+	var listRuntime bool
 	list := &cobra.Command{
-		Use: "list", Short: "List modules and where they run", Args: cobra.NoArgs,
+		Use: "list", Short: "List cluster modules and locally installed runtime modules", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if listRuntime {
+				return a.runRuntimeModuleList()
+			}
 			c, err := a.client()
 			if err != nil {
 				return err
@@ -58,39 +106,104 @@ func (a *App) moduleCommand() *cobra.Command {
 			var out struct {
 				Items []moduleView `json:"items"`
 			}
-			if err := c.Do(cmd.Context(), "GET", "/v1/modules", nil, &out); err != nil {
-				return err
-			}
+			apiErr := c.Do(cmd.Context(), "GET", "/v1/modules", nil, &out)
 			if a.output == "json" {
+				if apiErr != nil {
+					return apiErr
+				}
 				return a.printJSON(out.Items)
 			}
-			tw := tabwriter.NewWriter(a.Stdout, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "MODULE\tVERSION\tSTATE\tNODES")
-			for _, m := range out.Items {
-				state, done := "enabled", 0
-				if !m.Wanted {
-					state = "removed"
+			if a.RuntimeModules == nil {
+				if apiErr != nil {
+					return apiErr
 				}
-				var nodes []string
-				for _, n := range m.Nodes {
-					mark := n.Node
-					if n.Current {
-						done++
-					} else if m.Wanted {
-						mark += "(pending)"
-					}
-					nodes = append(nodes, mark)
-				}
-				if m.Wanted {
-					state = fmt.Sprintf("%s %d/%d", state, done, len(m.Nodes))
-				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", m.Name, m.Version, state, strings.Join(nodes, ","))
+				return a.printClusterModulesTable(out.Items)
 			}
-			return tw.Flush()
+			var httpErr *APIError
+			if errors.As(apiErr, &httpErr) {
+				return apiErr
+			}
+			svc, err := a.rtService(nil)
+			if err != nil {
+				return err
+			}
+			if apiErr != nil {
+				fmt.Fprintf(a.Stderr, "Note: agent unreachable (%v); showing local runtime modules only.\n", apiErr)
+			} else {
+				fmt.Fprintln(a.Stdout, "CLUSTER MODULES")
+				if err := a.printClusterModulesTable(out.Items); err != nil {
+					return err
+				}
+				fmt.Fprintln(a.Stdout)
+			}
+			fmt.Fprintln(a.Stdout, "RUNTIME MODULES (LOCAL NODE)")
+			return a.printRuntimeModulesTable(svc.List())
 		},
 	}
-	cmd.AddCommand(install, remove, list)
+	list.Flags().BoolVar(&listRuntime, "runtime", false, "list locally installed runtime modules only")
+	cmd.AddCommand(install, remove, list, a.moduleTrustCommand())
 	return cmd
+}
+
+func (a *App) moduleTrustCommand() *cobra.Command {
+	trust := &cobra.Command{
+		Use:   "trust",
+		Short: "Manage trusted Ed25519 public keys for local runtime modules",
+	}
+	var expectedFP string
+	add := &cobra.Command{
+		Use:   "add <key_id> <pub-file|->",
+		Short: "Register a trusted Ed25519 public key (run as root)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return a.runTrustAdd(args[0], args[1], expectedFP)
+		},
+	}
+	add.Flags().StringVar(&expectedFP, "fingerprint", "", "expected SHA-256 fingerprint (sha256:<64hex>)")
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List trusted Ed25519 public keys",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return a.runTrustList()
+		},
+	}
+	remove := &cobra.Command{
+		Use:   "remove <key_id>",
+		Short: "Remove a trusted Ed25519 public key (run as root)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.runTrustRemove(cmd.Context(), args[0])
+		},
+	}
+	trust.AddCommand(add, list, remove)
+	return trust
+}
+
+func (a *App) printClusterModulesTable(items []moduleView) error {
+	tw := tabwriter.NewWriter(a.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "MODULE\tVERSION\tSTATE\tNODES")
+	for _, m := range items {
+		state, done := "enabled", 0
+		if !m.Wanted {
+			state = "removed"
+		}
+		var nodes []string
+		for _, n := range m.Nodes {
+			mark := n.Node
+			if n.Current {
+				done++
+			} else if m.Wanted {
+				mark += "(pending)"
+			}
+			nodes = append(nodes, mark)
+		}
+		if m.Wanted {
+			state = fmt.Sprintf("%s %d/%d", state, done, len(m.Nodes))
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", m.Name, m.Version, state, strings.Join(nodes, ","))
+	}
+	return tw.Flush()
 }
 
 func (a *App) settingsCommand() *cobra.Command {

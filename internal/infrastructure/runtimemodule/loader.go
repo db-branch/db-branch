@@ -24,7 +24,8 @@ import (
 )
 
 const (
-	defaultKeysDir   = "/etc/db-branch/trusted-keys"
+	// DefaultKeysDir is the default directory holding trusted Ed25519 public keys (<key_id>.pub).
+	DefaultKeysDir   = "/etc/db-branch/trusted-keys"
 	maxManifestBytes = 1 << 20  // 1 MiB
 	maxSigBytes      = 64 << 10 // 64 KiB
 	maxKeyBytes      = 4 << 10  // 4 KiB
@@ -75,6 +76,12 @@ type Result struct {
 	Err    error
 }
 
+// Signature is a decoded manifest.json.sig payload.
+type Signature struct {
+	KeyID string
+	Bytes []byte
+}
+
 type manifestSignature struct {
 	KeyID     string `json:"key_id"`
 	Signature string `json:"signature"`
@@ -93,15 +100,43 @@ func (l Loader) TrustedKeysDir() string {
 	if l.KeysDir != "" {
 		return l.KeysDir
 	}
-	return defaultKeysDir
+	return DefaultKeysDir
+}
+
+// KeyIDValid reports whether id is a safe trusted-key identifier.
+func KeyIDValid(id string) bool {
+	return keyIDPattern.MatchString(id) && id != "." && !strings.Contains(id, "..")
+}
+
+// ParsePublicKey decodes a base64-encoded 32-byte Ed25519 public key (allowing trailing CR/LF).
+func ParsePublicKey(keyData []byte) (ed25519.PublicKey, error) {
+	pubBytes, err := base64.StdEncoding.DecodeString(strings.TrimRight(string(keyData), "\r\n"))
+	if err != nil || len(pubBytes) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("%w: invalid public key", ErrBadSignature)
+	}
+	return ed25519.PublicKey(pubBytes), nil
+}
+
+// KeyFingerprint computes the SHA-256 fingerprint of a 32-byte Ed25519 public key.
+func KeyFingerprint(pub ed25519.PublicKey) (domain.Fingerprint, error) {
+	return domain.NewFingerprint(pub)
 }
 
 // Load checks and reads the module of one engine.
 func (l Loader) Load(engine string) (Loaded, error) {
+	return l.VerifyDir(filepath.Join(l.RootDir(), engine), engine, false)
+}
+
+// VerifyDir checks a module directory (installed or staging) against the
+// production RootDir manifest contract, verifying signature, file ownership
+// and permissions, and binary/catalog SHA-256 digests on files inside dir.
+// When strict is true (for newly installed modules), manifest.json must
+// explicitly set run_as_user to "db-branch-rt-<engine>" and unsigned modules
+// are refused even if AllowUnsigned is true.
+func (l Loader) VerifyDir(dir, engine string, strict bool) (Loaded, error) {
 	if !enginePattern.MatchString(engine) {
 		return Loaded{}, fmt.Errorf("invalid engine name %q", engine)
 	}
-	dir := filepath.Join(l.RootDir(), engine)
 	for _, d := range []string{l.RootDir(), l.TrustedKeysDir(), dir} {
 		if err := l.checkTrustDir(d); err != nil {
 			return Loaded{}, err
@@ -112,7 +147,7 @@ func (l Loader) Load(engine string) (Loaded, error) {
 	if err != nil {
 		return Loaded{}, err
 	}
-	signed, keyID, warning, err := l.verifySignature(engine, manPath+".sig", manData)
+	signed, keyID, warning, err := l.verifySignature(engine, manPath+".sig", manData, l.AllowUnsigned && !strict)
 	if err != nil {
 		return Loaded{}, err
 	}
@@ -123,10 +158,21 @@ func (l Loader) Load(engine string) (Loaded, error) {
 	if manifest.Engine != engine {
 		return Loaded{}, fmt.Errorf("%w: manifest engine %q does not match directory %q", domain.ErrInvalidManifest, manifest.Engine, engine)
 	}
-	if err := l.verifyDigest(manifest.Binary, manifest.BinarySHA256, true); err != nil {
+	if strict {
+		var raw struct {
+			RunAsUser string `json:"run_as_user"`
+		}
+		_ = json.Unmarshal(manData, &raw) // manData already validated by ParseManifestIn
+		if want := domain.RuntimeUserPrefix + engine; raw.RunAsUser != want {
+			return Loaded{}, fmt.Errorf("%w: run_as_user %q must explicitly equal %q", domain.ErrInvalidManifest, raw.RunAsUser, want)
+		}
+	}
+	binPath := filepath.Join(dir, filepath.Base(manifest.Binary))
+	catPath := filepath.Join(dir, filepath.Base(manifest.Catalog))
+	if err := l.verifyDigest(binPath, manifest.BinarySHA256, true); err != nil {
 		return Loaded{}, err
 	}
-	if err := l.verifyDigest(manifest.Catalog, manifest.CatalogSHA256, false); err != nil {
+	if err := l.verifyDigest(catPath, manifest.CatalogSHA256, false); err != nil {
 		return Loaded{}, err
 	}
 	return Loaded{
@@ -138,7 +184,8 @@ func (l Loader) Load(engine string) (Loaded, error) {
 }
 
 // LoadAll loads every engine directory under Root, in name order; a broken
-// module does not stop the others. A missing Root is no engines.
+// module does not stop the others. Dot-prefixed entries (.staging-*, .lock,
+// etc.) are skipped. A missing Root is no engines.
 func (l Loader) LoadAll() []Result {
 	entries, err := os.ReadDir(l.RootDir())
 	if err != nil {
@@ -146,6 +193,9 @@ func (l Loader) LoadAll() []Result {
 	}
 	var results []Result
 	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
 		if !e.IsDir() && e.Type()&fs.ModeSymlink == 0 {
 			continue
 		}
@@ -246,42 +296,52 @@ func (l Loader) verifyDigest(path, want string, wantExec bool) error {
 	return err
 }
 
-func decodeSignature(sigData []byte) (manifestSignature, error) {
+// DecodeSignature strictly decodes a manifest.json.sig JSON payload and validates
+// both key_id and the base64-encoded 64-byte Ed25519 signature.
+func DecodeSignature(sigData []byte) (Signature, error) {
 	dec := json.NewDecoder(bytes.NewReader(sigData))
 	dec.DisallowUnknownFields()
 	var sf manifestSignature
 	if err := dec.Decode(&sf); err != nil {
-		return manifestSignature{}, fmt.Errorf("%w: %v", ErrBadSignature, err)
+		return Signature{}, fmt.Errorf("%w: %v", ErrBadSignature, err)
 	}
 	if _, err := dec.Token(); err != io.EOF {
-		return manifestSignature{}, fmt.Errorf("%w: trailing data in signature file", ErrBadSignature)
+		return Signature{}, fmt.Errorf("%w: trailing data in signature file", ErrBadSignature)
 	}
-	return sf, nil
+	if !KeyIDValid(sf.KeyID) {
+		return Signature{}, fmt.Errorf("%w: invalid key_id %q", ErrBadSignature, sf.KeyID)
+	}
+	sigBytes, err := base64.StdEncoding.DecodeString(sf.Signature)
+	if err != nil || len(sigBytes) != ed25519.SignatureSize {
+		return Signature{}, fmt.Errorf("%w: invalid signature", ErrBadSignature)
+	}
+	return Signature{KeyID: sf.KeyID, Bytes: sigBytes}, nil
 }
 
-func (l Loader) verifySignature(engine, sigPath string, manifestData []byte) (bool, string, string, error) {
+// VerifyWithKey verifies an Ed25519 signature over manifestData using pub.
+func VerifyWithKey(pub ed25519.PublicKey, manifestData, sig []byte) error {
+	if len(pub) != ed25519.PublicKeySize || len(sig) != ed25519.SignatureSize || !ed25519.Verify(pub, manifestData, sig) {
+		return fmt.Errorf("%w: verification failed", ErrBadSignature)
+	}
+	return nil
+}
+
+func (l Loader) verifySignature(engine, sigPath string, manifestData []byte, allowUnsigned bool) (bool, string, string, error) {
 	sigData, err := l.readTrustedFile(sigPath, maxSigBytes, ErrBadSignature)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			if !l.AllowUnsigned {
+			if !allowUnsigned {
 				return false, "", "", fmt.Errorf("%w: %s", ErrUnsigned, engine)
 			}
 			return false, "", fmt.Sprintf("runtime module %s is unsigned", engine), nil
 		}
 		return false, "", "", err
 	}
-	sf, err := decodeSignature(sigData)
+	sig, err := DecodeSignature(sigData)
 	if err != nil {
 		return false, "", "", err
 	}
-	if !keyIDPattern.MatchString(sf.KeyID) {
-		return false, "", "", fmt.Errorf("%w: invalid key_id %q", ErrBadSignature, sf.KeyID)
-	}
-	sigBytes, err := base64.StdEncoding.DecodeString(sf.Signature)
-	if err != nil || len(sigBytes) != ed25519.SignatureSize {
-		return false, "", "", fmt.Errorf("%w: invalid signature", ErrBadSignature)
-	}
-	keyPath := filepath.Join(l.TrustedKeysDir(), sf.KeyID+".pub")
+	keyPath := filepath.Join(l.TrustedKeysDir(), sig.KeyID+".pub")
 	keyData, err := l.readTrustedFile(keyPath, maxKeyBytes, ErrBadSignature)
 	if err != nil {
 		if errors.Is(err, ErrUntrusted) || errors.Is(err, ErrBadSignature) {
@@ -289,9 +349,12 @@ func (l Loader) verifySignature(engine, sigPath string, manifestData []byte) (bo
 		}
 		return false, "", "", fmt.Errorf("%w: %v", ErrBadSignature, err)
 	}
-	pubBytes, err := base64.StdEncoding.DecodeString(strings.TrimRight(string(keyData), "\r\n"))
-	if err != nil || len(pubBytes) != ed25519.PublicKeySize || !ed25519.Verify(ed25519.PublicKey(pubBytes), manifestData, sigBytes) {
-		return false, "", "", fmt.Errorf("%w: verification failed", ErrBadSignature)
+	pub, err := ParsePublicKey(keyData)
+	if err != nil {
+		return false, "", "", err
 	}
-	return true, sf.KeyID, "", nil
+	if err := VerifyWithKey(pub, manifestData, sig.Bytes); err != nil {
+		return false, "", "", err
+	}
+	return true, sig.KeyID, "", nil
 }
