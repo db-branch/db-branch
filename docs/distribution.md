@@ -21,7 +21,7 @@ sudo db-branch init --pool <pool>
 
 - 構成: `dists/stable/{InRelease,Release,Release.gpg}`、`dists/stable/main/binary-{amd64,arm64}/Packages`、`pool/main/...`、公開鍵 `db-branch.asc` / `db-branch.gpg`
 - 作り方: `make deb deb-proxysql && make apt-repo APT_KEY=<鍵の指紋>`（`scripts/fetch-proxysql.sh` が ProxySQL を取得して SHA-256 を確認し、`scripts/apt-repo.sh` が `apt-ftparchive` で索引を作って署名する）
-- CI（`.github/workflows/release.yml`）: `v*` のタグを push すると、両アーキテクチャの .deb（`make deb-oss`: db-branch、proxysql、greenmask、greenmask-mysql、anon の各モジュール）を作り、`release` 環境の `publish` ジョブが次を行う。タイマーでの定期実行はない。
+- CI（`.github/workflows/release.yml`）: `v*` のタグを push すると、両アーキテクチャの .deb（`make deb-oss`: `db-branch` と `db-branch-proxysql`。マスカーの各モジュールは別リポジトリで配布）を作り、`release` 環境の `publish` ジョブが次を行う。タイマーでの定期実行はない。
   1. タグが main の履歴にあることを確かめる
   2. 署名鍵を取り込み、`packaging/apt-signing-key.fpr` に書いた指紋と同じ鍵か確かめる（違えば止まる）
   3. 公開済みの索引から、これまでの版を取り込む（`scripts/apt-restore-pool.sh`。古い版が消えない）

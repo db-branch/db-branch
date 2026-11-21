@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - `db-branch module forget <name>` (`POST /v1/modules/{name}/forget`, console **Forget** button): deletes the cluster record of a removed module so it is no longer listed (Raft Protocol 22).
 
+### Removed
+
+- Removed the `db-branch-anon`, `db-branch-greenmask`, and `db-branch-greenmask-mysql` masker modules from this repository; they are now maintained in separate repositories (not yet public). The `base mask` command and the `Masker` extension point (`pkg/ext`) remain in the core repository.
+
 ## [0.2.7] - 2026-11-18
 
 This is the security fix first tagged v0.2.6. That release run stopped at a test-coverage check before anything was published, and the tag cannot be moved, so the release is 0.2.7. There is no 0.2.6 package.
