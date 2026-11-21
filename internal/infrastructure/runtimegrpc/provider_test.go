@@ -93,6 +93,30 @@ func Testエラー_その他の失敗は元のメッセージを保つ(t *testin
 	}
 }
 
+type pathFake struct {
+	pb.UnimplementedRuntimeServer
+	err error
+}
+
+func (f pathFake) CheckUpgradePath(context.Context, *pb.CheckUpgradePathRequest) (*pb.Empty, error) {
+	return nil, f.err
+}
+
+func Testエラー_モジュールが移行経路を拒否したらErrUpgradeRefusedとして扱える(t *testing.T) {
+	p := connect(t, pathFake{err: status.Error(codes.FailedPrecondition, "26.8.1.1 cannot go back to 26.3.19.3")})
+	err := p.CheckUpgradePath(context.Background(), "26.8.1.1", "26.3.19.3")
+	if !errors.Is(err, domain.ErrUpgradeRefused) || !strings.Contains(err.Error(), "cannot go back") {
+		t.Fatalf("err = %v, want ErrUpgradeRefused with the module's reason", err)
+	}
+}
+
+func Testエラー_移行経路の確認での拒否以外のFailedPreconditionはErrUpgradeRefusedにしない(t *testing.T) {
+	p := connect(t, pathFake{err: status.Error(codes.Internal, "boom")})
+	if err := p.CheckUpgradePath(context.Background(), "1", "2"); errors.Is(err, domain.ErrUpgradeRefused) {
+		t.Fatalf("an internal failure must not read as a refusal: %v", err)
+	}
+}
+
 // AdminAccess lets the integration test see who the module process runs as and
 // what it inherited.
 func (f fake) AdminAccess(context.Context, *pb.InstanceRequest) (*pb.AdminAccessInfo, error) {

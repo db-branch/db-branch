@@ -27,8 +27,9 @@ var _ domain.RuntimeProvider = (*Provider)(nil)
 func New(conn grpc.ClientConnInterface) *Provider { return &Provider{c: pb.NewRuntimeClient(conn)} }
 
 // wrap turns a gRPC failure into the core's errors: UNIMPLEMENTED is "the
-// engine does not offer it", FAILED_PRECONDITION is an unclean shutdown (only
-// VerifyCleanShutdown uses it), anything else keeps the module's message.
+// engine does not offer it", FAILED_PRECONDITION is an unclean shutdown for
+// VerifyCleanShutdown and a refused version move for CheckUpgradePath (422 for
+// the caller), anything else keeps the module's message.
 func wrap(op string, err error) error {
 	if err == nil {
 		return nil
@@ -41,8 +42,11 @@ func wrap(op string, err error) error {
 	case codes.Unimplemented:
 		return fmt.Errorf("%w: %s", domain.ErrFeatureNotSupported, op)
 	case codes.FailedPrecondition:
-		if op == "VerifyCleanShutdown" {
+		switch op {
+		case "VerifyCleanShutdown":
 			return fmt.Errorf("%w: %s", domain.ErrUncleanShutdown, st.Message())
+		case "CheckUpgradePath":
+			return fmt.Errorf("%w: %s", domain.ErrUpgradeRefused, st.Message())
 		}
 	}
 	return errors.New("runtime module " + op + ": " + st.Message())
@@ -221,7 +225,7 @@ func (p *Provider) UpdateStats(ctx context.Context, s domain.InstanceSpec) error
 
 func (p *Provider) CheckUpgradePath(ctx context.Context, from, to string) error {
 	_, err := p.c.CheckUpgradePath(ctx, &pb.CheckUpgradePathRequest{FromVersion: from, ToVersion: to})
-	return wrap("upgrade", err)
+	return wrap("CheckUpgradePath", err)
 }
 
 func (p *Provider) CheckUpgrade(ctx context.Context, s domain.InstanceSpec, to string, own domain.Login) (domain.UpgradePlan, error) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -313,5 +314,273 @@ func TestDump_上限で打ち切られたときはツールのエラーに加え
 	_, err := d.Dump(context.Background(), job(domain.MySQL, "app"))
 	if err == nil || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "signal: killed") {
 		t.Errorf("Dump = %v, want the tool's error and the deadline", err)
+	}
+}
+
+func externalSpec(runAsUser string) domain.EngineSpec {
+	return domain.EngineSpec{
+		Engine:       domain.Engine("fakedb"),
+		DisplayName:  "FakeDB",
+		RunAsUser:    runAsUser,
+		Capabilities: domain.RuntimeCaps{SourceDump: true},
+	}
+}
+
+func TestDump_外部モジュールはRunAsUser所有の専用ディレクトリにダンプしWorkDirを0711にする(t *testing.T) {
+	workDir := filepath.Join(t.TempDir(), "work")
+	// 組み込みエンジンが先に 0700 で作っていた状態を想定する。
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var chowned []struct {
+		path     string
+		uid, gid int
+	}
+	var lookedUp string
+	var gotOutPath string
+	var chownedBeforeDump bool
+	var preExisted bool
+	var dirPermDuringDump os.FileMode
+	var workPermDuringDump os.FileMode
+
+	dumpHook := func(_ context.Context, _ domain.SourceDumpJob, outPath string) error {
+		gotOutPath = outPath
+		chownedBeforeDump = len(chowned) == 1 && chowned[0].path == filepath.Dir(outPath)
+		_, statErr := os.Stat(outPath)
+		preExisted = statErr == nil
+		if fi, err := os.Stat(filepath.Dir(outPath)); err == nil {
+			dirPermDuringDump = fi.Mode().Perm()
+		}
+		if fi, err := os.Stat(workDir); err == nil {
+			workPermDuringDump = fi.Mode().Perm()
+		}
+		return os.WriteFile(outPath, []byte("-- external dump\n"), 0o600)
+	}
+	d := srcdump.Dumper{
+		WorkDir: workDir,
+		Providers: domain.ProviderSet{
+			domain.Engine("fakedb"): runtimeprovider.New(externalSpec("db-branch-rt-fakedb"), nil, runtimeprovider.Hooks{DumpSource: dumpHook}),
+		},
+		LookupUser: func(name string) (int, int, error) {
+			lookedUp = name
+			return 1234, 5678, nil
+		},
+		Chown: func(path string, uid, gid int) error {
+			chowned = append(chowned, struct {
+				path     string
+				uid, gid int
+			}{path, uid, gid})
+			return nil
+		},
+	}
+
+	path, err := d.Dump(context.Background(), job(domain.Engine("fakedb"), "app"))
+	if err != nil {
+		t.Fatalf("Dump: %v", err)
+	}
+	if lookedUp != "db-branch-rt-fakedb" {
+		t.Errorf("lookedUp = %q, want db-branch-rt-fakedb", lookedUp)
+	}
+	if path != gotOutPath {
+		t.Errorf("path = %q, want %q", path, gotOutPath)
+	}
+	dumpDir := filepath.Dir(path)
+	if filepath.Dir(dumpDir) != workDir || !strings.HasPrefix(filepath.Base(dumpDir), "refresh-") {
+		t.Errorf("dumpDir = %q, want %s/refresh-*", dumpDir, workDir)
+	}
+	if !chownedBeforeDump {
+		t.Errorf("dump dir must be chowned before DumpSource runs: %+v", chowned)
+	}
+	if len(chowned) != 1 || chowned[0].uid != 1234 || chowned[0].gid != 5678 {
+		t.Errorf("chowned = %+v, want uid=1234 gid=5678", chowned)
+	}
+	if preExisted {
+		t.Error("outPath must not be pre-created as root before DumpSource runs")
+	}
+	if dirPermDuringDump != 0o700 {
+		t.Errorf("dumpDir perm = %o, want 0700", dirPermDuringDump)
+	}
+	if workPermDuringDump != 0o711 {
+		t.Errorf("workDir perm = %o, want 0711", workPermDuringDump)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || string(b) != "-- external dump\n" {
+		t.Errorf("read dump = %q, %v", b, err)
+	}
+
+	d.Discard(path)
+	if _, err := os.Stat(dumpDir); !os.IsNotExist(err) {
+		t.Errorf("dumpDir still exists after Discard: %v", err)
+	}
+	if left, _ := os.ReadDir(workDir); len(left) != 0 {
+		t.Errorf("left behind in workDir: %v", left)
+	}
+	// Idempotent second Discard does not panic or remove WorkDir.
+	d.Discard(path)
+	if _, err := os.Stat(workDir); err != nil {
+		t.Errorf("workDir removed unexpectedly: %v", err)
+	}
+}
+
+func TestDump_外部モジュールの失敗やタイムアウト時に専用ディレクトリを残さない(t *testing.T) {
+	t.Run("DumpSourceの失敗", func(t *testing.T) {
+		workDir := filepath.Join(t.TempDir(), "work")
+		d := srcdump.Dumper{
+			WorkDir: workDir,
+			Providers: domain.ProviderSet{
+				domain.Engine("fakedb"): runtimeprovider.New(externalSpec("db-branch-rt-fakedb"), nil, runtimeprovider.Hooks{
+					DumpSource: func(_ context.Context, _ domain.SourceDumpJob, outPath string) error {
+						_ = os.WriteFile(outPath, []byte("partial"), 0o600)
+						return errors.New("dump failed")
+					},
+				}),
+			},
+			LookupUser: func(string) (int, int, error) { return 1000, 1000, nil },
+			Chown:      func(string, int, int) error { return nil },
+		}
+		path, err := d.Dump(context.Background(), job(domain.Engine("fakedb"), "app"))
+		if err == nil || path != "" || !strings.Contains(err.Error(), "dump failed") {
+			t.Fatalf("Dump = %q, %v", path, err)
+		}
+		if left, _ := os.ReadDir(workDir); len(left) != 0 {
+			t.Errorf("left behind: %v", left)
+		}
+	})
+
+	t.Run("タイムアウト", func(t *testing.T) {
+		workDir := filepath.Join(t.TempDir(), "work")
+		d := srcdump.Dumper{
+			WorkDir: workDir,
+			Timeout: 20 * time.Millisecond,
+			Providers: domain.ProviderSet{
+				domain.Engine("fakedb"): runtimeprovider.New(externalSpec("db-branch-rt-fakedb"), nil, runtimeprovider.Hooks{
+					DumpSource: func(ctx context.Context, _ domain.SourceDumpJob, outPath string) error {
+						_ = os.WriteFile(outPath, []byte("partial"), 0o600)
+						<-ctx.Done()
+						return errors.New("signal: killed")
+					},
+				}),
+			},
+			LookupUser: func(string) (int, int, error) { return 1000, 1000, nil },
+			Chown:      func(string, int, int) error { return nil },
+		}
+		path, err := d.Dump(context.Background(), job(domain.Engine("fakedb"), "app"))
+		if err == nil || path != "" || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Dump = %q, %v", path, err)
+		}
+		if left, _ := os.ReadDir(workDir); len(left) != 0 {
+			t.Errorf("left behind: %v", left)
+		}
+	})
+}
+
+func TestDump_外部モジュールでユーザー検索やchownや作業ディレクトリに失敗したら何も残さない(t *testing.T) {
+	noopDump := func(_ context.Context, _ domain.SourceDumpJob, _ string) error {
+		t.Error("DumpSource must not be called")
+		return nil
+	}
+	prov := domain.ProviderSet{
+		domain.Engine("fakedb"): runtimeprovider.New(externalSpec("db-branch-rt-fakedb"), nil, runtimeprovider.Hooks{DumpSource: noopDump}),
+	}
+
+	t.Run("ユーザー検索失敗", func(t *testing.T) {
+		workDir := filepath.Join(t.TempDir(), "work")
+		d := srcdump.Dumper{
+			WorkDir:    workDir,
+			Providers:  prov,
+			LookupUser: func(string) (int, int, error) { return 0, 0, errors.New("unknown user") },
+			Chown:      func(string, int, int) error { return nil },
+		}
+		if _, err := d.Dump(context.Background(), job(domain.Engine("fakedb"), "app")); err == nil || !strings.Contains(err.Error(), "unknown user") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("chown失敗", func(t *testing.T) {
+		workDir := filepath.Join(t.TempDir(), "work")
+		d := srcdump.Dumper{
+			WorkDir:    workDir,
+			Providers:  prov,
+			LookupUser: func(string) (int, int, error) { return 1000, 1000, nil },
+			Chown:      func(string, int, int) error { return errors.New("operation not permitted") },
+		}
+		if _, err := d.Dump(context.Background(), job(domain.Engine("fakedb"), "app")); err == nil || !strings.Contains(err.Error(), "operation not permitted") {
+			t.Fatalf("err = %v", err)
+		}
+		if left, _ := os.ReadDir(workDir); len(left) != 0 {
+			t.Errorf("left behind: %v", left)
+		}
+	})
+
+	t.Run("WorkDir作成失敗", func(t *testing.T) {
+		blocker := filepath.Join(t.TempDir(), "file")
+		_ = os.WriteFile(blocker, nil, 0o600)
+		d := srcdump.Dumper{
+			WorkDir:    filepath.Join(blocker, "work"),
+			Providers:  prov,
+			LookupUser: func(string) (int, int, error) { return 1000, 1000, nil },
+			Chown:      func(string, int, int) error { return nil },
+		}
+		if _, err := d.Dump(context.Background(), job(domain.Engine("fakedb"), "app")); err == nil {
+			t.Fatal("unusable work dir accepted")
+		}
+	})
+
+	t.Run("読み取り専用WorkDirではMkdirTemp失敗", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root can write anywhere")
+		}
+		ro := filepath.Join(t.TempDir(), "ro")
+		if err := os.Mkdir(ro, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		// Chmod 0711 will make ro writable by owner unless ro is owned by someone else,
+		// so test when WorkDir itself is a regular file (Chmod succeeds or MkdirAll fails).
+		blocker := filepath.Join(t.TempDir(), "notadir")
+		_ = os.WriteFile(blocker, nil, 0o600)
+		d := srcdump.Dumper{
+			WorkDir:    blocker,
+			Providers:  prov,
+			LookupUser: func(string) (int, int, error) { return 1000, 1000, nil },
+			Chown:      func(string, int, int) error { return nil },
+		}
+		if _, err := d.Dump(context.Background(), job(domain.Engine("fakedb"), "app")); err == nil {
+			t.Fatal("non-directory work dir accepted")
+		}
+	})
+}
+
+func TestDump_外部モジュールで既定のユーザー検索とchownが動く(t *testing.T) {
+	cur, err := user.Current()
+	if err != nil {
+		t.Skip(err)
+	}
+	workDir := filepath.Join(t.TempDir(), "work")
+	d := srcdump.Dumper{
+		WorkDir: workDir,
+		Providers: domain.ProviderSet{
+			domain.Engine("fakedb"): runtimeprovider.New(externalSpec(cur.Username), nil, runtimeprovider.Hooks{
+				DumpSource: func(_ context.Context, _ domain.SourceDumpJob, outPath string) error {
+					return os.WriteFile(outPath, []byte("-- default lookup\n"), 0o600)
+				},
+			}),
+		},
+	}
+	path, err := d.Dump(context.Background(), job(domain.Engine("fakedb"), "app"))
+	if err != nil {
+		t.Fatalf("Dump with default lookup/chown: %v", err)
+	}
+	d.Discard(path)
+	if left, _ := os.ReadDir(workDir); len(left) != 0 {
+		t.Errorf("left behind: %v", left)
+	}
+
+	d.Providers = domain.ProviderSet{
+		domain.Engine("fakedb"): runtimeprovider.New(externalSpec("db-branch-rt-no-such-user-xyz"), nil, runtimeprovider.Hooks{
+			DumpSource: func(context.Context, domain.SourceDumpJob, string) error { return nil },
+		}),
+	}
+	if _, err := d.Dump(context.Background(), job(domain.Engine("fakedb"), "app")); err == nil {
+		t.Fatal("unknown user must fail")
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ type provider struct {
 	startErr error
 	users    [][2]string
 	access   domain.AdminAccess
+	loadFn   func(ctx context.Context, i domain.InstanceSpec, path string) error
 }
 
 func (p *provider) note(name string, i domain.InstanceSpec) {
@@ -99,9 +101,12 @@ func (p *provider) Query(context.Context, domain.InstanceSpec, domain.QueryReque
 	return domain.QueryResult{}, nil
 }
 func (p *provider) TailLog(context.Context, domain.InstanceSpec, int) (string, error) { return "", nil }
-func (p *provider) Load(_ context.Context, i domain.InstanceSpec, path string) error {
+func (p *provider) Load(ctx context.Context, i domain.InstanceSpec, path string) error {
 	p.note("Load", i)
 	p.users = append(p.users, [2]string{"load", path})
+	if p.loadFn != nil {
+		return p.loadFn(ctx, i, path)
+	}
 	return nil
 }
 
@@ -396,6 +401,11 @@ func TestPrepareClone_領域を渡してモジュールに委ねる(t *testing.T
 
 func TestユーザーとSQL_モジュールに委ねる(t *testing.T) {
 	e := newEnv(t)
+	e.srv.StateRoot = t.TempDir()
+	dump := filepath.Join(t.TempDir(), "dump.sql")
+	if err := os.WriteFile(dump, []byte("SELECT 1;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 	if err := e.srv.CreateUser(ctx, server, "u", "pw"); err != nil {
 		t.Fatal(err)
@@ -403,11 +413,59 @@ func TestユーザーとSQL_モジュールに委ねる(t *testing.T) {
 	if err := e.srv.ExecAs(ctx, server, "u", "pw", "select 1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.srv.Load(ctx, server, "/dump.sql"); err != nil {
+	if err := e.srv.Load(ctx, server, dump); err != nil {
 		t.Fatal(err)
 	}
-	if len(e.prov.users) != 3 || e.prov.users[0] != [2]string{"u", "pw"} || e.prov.users[1] != [2]string{"u", "select 1"} || e.prov.users[2] != [2]string{"load", "/dump.sql"} {
+	if len(e.prov.users) != 3 || e.prov.users[0] != [2]string{"u", "pw"} || e.prov.users[1] != [2]string{"u", "select 1"} ||
+		e.prov.users[2][0] != "load" || filepath.Dir(e.prov.users[2][1]) != filepath.Join(e.srv.StateRoot, server.ID) {
 		t.Fatalf("%v", e.prov.users)
+	}
+}
+
+func TestLoad_ダンプがすでにモジュール所有ならコピーせずそのまま渡す(t *testing.T) {
+	e := newEnv(t)
+	e.srv.StateRoot = t.TempDir()
+	dump := filepath.Join(t.TempDir(), "dump.bin")
+	if err := os.WriteFile(dump, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var asked [2]string
+	e.srv.OwnedBy = func(user, path string) bool { asked = [2]string{user, path}; return true }
+	if err := e.srv.Load(context.Background(), server, dump); err != nil {
+		t.Fatal(err)
+	}
+	last := e.prov.users[len(e.prov.users)-1]
+	if last[0] != "load" || last[1] != dump {
+		t.Fatalf("the module must get the dump itself, got %v", last)
+	}
+	if asked != [2]string{e.srv.User, dump} {
+		t.Fatalf("ownership asked for %v", asked)
+	}
+	if left, _ := os.ReadDir(filepath.Join(e.srv.StateRoot, server.ID)); len(left) != 0 {
+		t.Fatalf("no copy may be made: %v", left)
+	}
+	if _, err := os.Stat(dump); err != nil {
+		t.Fatalf("the dump must stay (the core discards it): %v", err)
+	}
+}
+
+func TestLoad_ダンプがモジュール所有でなければコピーを渡して消す(t *testing.T) {
+	e := newEnv(t)
+	e.srv.StateRoot = t.TempDir()
+	dump := filepath.Join(t.TempDir(), "dump.bin")
+	if err := os.WriteFile(dump, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.OwnedBy = func(string, string) bool { return false }
+	if err := e.srv.Load(context.Background(), server, dump); err != nil {
+		t.Fatal(err)
+	}
+	last := e.prov.users[len(e.prov.users)-1]
+	if last[0] != "load" || last[1] == dump || filepath.Dir(last[1]) != filepath.Join(e.srv.StateRoot, server.ID) {
+		t.Fatalf("the module must get a copy in its state directory, got %v", last)
+	}
+	if _, err := os.Stat(last[1]); err == nil {
+		t.Fatal("the copy must be removed after Load")
 	}
 }
 
@@ -553,4 +611,517 @@ func TestInstance_モジュールに伝えるインスタンスを公開する(t
 	if i.ID != "branch-x" || i.Ports["sql"] != 15432 || i.StateDir != rtunit.StateRoot+"/branch-x" {
 		t.Fatalf("%+v", i)
 	}
+}
+
+type upgradeProvider struct {
+	*provider
+	checkPlan  domain.UpgradePlan
+	checkErr   error
+	checkTo    string
+	checkLogin domain.Login
+	upPlan     domain.LaunchPlan
+	upLog      domain.UpgradeLog
+	upErr      error
+	upLogin    domain.Login
+}
+
+func (u *upgradeProvider) CheckUpgrade(_ context.Context, i domain.InstanceSpec, toVersion string, own domain.Login) (domain.UpgradePlan, error) {
+	u.note("CheckUpgrade", i)
+	u.checkTo = toVersion
+	u.checkLogin = own
+	return u.checkPlan, u.checkErr
+}
+
+func (u *upgradeProvider) StartUpgraded(_ context.Context, i domain.InstanceSpec, own domain.Login) (domain.LaunchPlan, domain.UpgradeLog, error) {
+	u.note("StartUpgraded", i)
+	u.upLogin = own
+	return u.upPlan, u.upLog, u.upErr
+}
+
+var upgradedServer = domain.Server{
+	ID: "branch-x", Runtime: domain.RuntimeRef{Engine: "fakeengine", Version: "2.0"},
+	DataDir: "/tank/branches/x", Port: 15432, MemoryMB: 256, Extra: []string{"a=1"},
+}
+
+func TestCheckUpgrade_プロバイダに委譲し結果を返す(t *testing.T) {
+	var _ domain.Upgrader = (*rtserver.Server)(nil)
+	e := newEnv(t)
+	up := &upgradeProvider{
+		provider: e.prov,
+		checkPlan: domain.UpgradePlan{
+			Findings:   []domain.Finding{{Level: domain.LevelWarning, Code: "w1", Message: "watch out"}},
+			LegacyAuth: true,
+		},
+	}
+	e.srv.Provider = up
+	to := domain.RuntimeRef{Engine: "fakeengine", Version: "2.0"}
+	own := domain.Login{User: "app", Password: "secret"}
+
+	got, err := e.srv.CheckUpgrade(context.Background(), server, to, own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.LegacyAuth || len(got.Findings) != 1 || got.Findings[0].Code != "w1" {
+		t.Fatalf("plan = %+v", got)
+	}
+	if up.checkTo != "2.0" || up.checkLogin != own || e.prov.calls[0] != "CheckUpgrade" || e.prov.insts[0].Runtime.Version != "1.2" {
+		t.Fatalf("delegation: to=%q login=%+v calls=%v inst=%+v", up.checkTo, up.checkLogin, e.prov.calls, e.prov.insts[0])
+	}
+}
+
+func TestCheckUpgrade_機能非対応エラーをそのまま返す(t *testing.T) {
+	e := newEnv(t)
+	// e.prov embeds domain.UnsupportedFeatures, so CheckUpgrade returns ErrFeatureNotSupported.
+	_, err := e.srv.CheckUpgrade(context.Background(), server, domain.RuntimeRef{Engine: "fakeengine", Version: "2.0"}, domain.Login{User: "app"})
+	if !errors.Is(err, domain.ErrFeatureNotSupported) {
+		t.Fatalf("err = %v, want ErrFeatureNotSupported", err)
+	}
+}
+
+func TestStartUpgraded_新しいランタイムでLaunchPlanを起動しログを返す(t *testing.T) {
+	e := newEnv(t)
+	e.prov.health = []domain.HealthState{domain.HealthStopped, domain.HealthStarting, domain.HealthReady}
+	up := &upgradeProvider{
+		provider: e.prov,
+		upPlan: domain.LaunchPlan{
+			Command:     runtimeRoot + "/fakeengine/2.0/bin/fakedbd",
+			Args:        []string{"--upgrade"},
+			ServiceType: "simple",
+		},
+		upLog: domain.UpgradeLog{
+			Findings: []domain.Finding{{Level: domain.LevelInfo, Code: domain.CodeLogProgress, Message: "upgraded"}},
+			Excerpt:  "upgrade ok",
+		},
+	}
+	e.srv.Provider = up
+	login := domain.Login{User: "app", Password: "pw"}
+
+	got, err := e.srv.StartUpgraded(context.Background(), upgradedServer, login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Findings) != 1 || got.Findings[0].Message != "upgraded" || got.Excerpt != "upgrade ok" {
+		t.Fatalf("log = %+v", got)
+	}
+	if up.upLogin != login || e.prov.calls[0] != "StartUpgraded" ||
+		e.prov.insts[0].Runtime.Version != "2.0" || e.prov.insts[0].RuntimeDir != runtimeRoot+"/fakeengine/2.0" {
+		t.Fatalf("instance = %+v, login = %+v, calls = %v", e.prov.insts[0], up.upLogin, e.prov.calls)
+	}
+	if len(e.chowned) != 3 {
+		t.Fatalf("chowned = %v", e.chowned)
+	}
+	dropin, err := os.ReadFile(filepath.Join(e.unitDir, "db-branch-rt@branch-x.service.d", "override.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"User=db-branch-rt-fakeengine", runtimeRoot + "/fakeengine/2.0/bin/fakedbd", "\"--upgrade\""} {
+		if !strings.Contains(string(dropin), want) {
+			t.Errorf("drop-in lacks %q:\n%s", want, dropin)
+		}
+	}
+	reload, start := e.run.index("systemctl daemon-reload"), e.run.index("systemctl start db-branch-rt@branch-x.service")
+	if reload < 0 || start < 0 || reload > start {
+		t.Fatalf("daemon-reload must precede start: %v", e.run.cmds)
+	}
+}
+
+func TestStartUpgraded_機能非対応エラーをそのまま返し何も起動しない(t *testing.T) {
+	e := newEnv(t)
+	_, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{User: "app"})
+	if !errors.Is(err, domain.ErrFeatureNotSupported) {
+		t.Fatalf("err = %v, want ErrFeatureNotSupported", err)
+	}
+	if e.run.has("systemctl start") {
+		t.Fatal("systemctl start must not run")
+	}
+	if _, err := os.Stat(filepath.Join(e.unitDir, "db-branch-rt@branch-x.service.d")); err == nil {
+		t.Fatal("no drop-in may be written")
+	}
+}
+
+func TestStartUpgraded_領域の準備に失敗したらモジュールを呼ばない(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Chown = func(string, string) error { return errors.New("operation not permitted") }
+	e.srv.Provider = &upgradeProvider{provider: e.prov, upPlan: e.prov.plan}
+	if _, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{}); err == nil || !strings.Contains(err.Error(), "operation not permitted") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(e.prov.calls) != 0 {
+		t.Fatalf("the module must not be called: %v", e.prov.calls)
+	}
+}
+
+func TestStartUpgraded_プロバイダが失敗したらログとエラーを返し起動しない(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Provider = &upgradeProvider{
+		provider: e.prov,
+		upLog:    domain.UpgradeLog{Excerpt: "pre-launch error"},
+		upErr:    errors.New("incompatible data"),
+	}
+	log, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{})
+	if err == nil || !strings.Contains(err.Error(), "incompatible data") || log.Excerpt != "pre-launch error" {
+		t.Fatalf("log = %+v, err = %v", log, err)
+	}
+	if e.run.has("systemctl start") {
+		t.Fatal("systemctl start must not run")
+	}
+}
+
+func TestStartUpgraded_起動計画が危険なら何も起動しない(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Provider = &upgradeProvider{
+		provider: e.prov,
+		upPlan:   domain.LaunchPlan{Command: "/usr/lib/db-branch/runtimes/fakeengine/x", Args: []string{"a\nExecStartPre=/bin/evil"}},
+	}
+	_, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{})
+	if err == nil {
+		t.Fatal("an unsafe plan must be refused")
+	}
+	if e.run.has("systemctl start") {
+		t.Fatal("systemctl start must not run")
+	}
+	if _, err := os.Stat(filepath.Join(e.unitDir, "db-branch-rt@branch-x.service.d")); err == nil {
+		t.Fatal("no drop-in may be written")
+	}
+}
+
+func TestStartUpgraded_起動失敗やタイムアウト時にStartと同じ後始末でジャーナルを返す(t *testing.T) {
+	t.Run("systemctl_start_fails", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.Provider = &upgradeProvider{provider: e.prov, upPlan: e.prov.plan}
+		e.run.fail = map[string]error{"systemctl start": errors.New("exit status 5")}
+		e.run.log = "unit not found"
+		log, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{})
+		if err == nil || !strings.Contains(err.Error(), "unit not found") || log.Excerpt != "unit not found" {
+			t.Fatalf("log = %+v, err = %v", log, err)
+		}
+	})
+	t.Run("exited_while_starting", func(t *testing.T) {
+		e := newEnv(t)
+		e.prov.health = []domain.HealthState{domain.HealthStopped}
+		e.srv.Provider = &upgradeProvider{provider: e.prov, upPlan: e.prov.plan}
+		e.run.state, e.run.log = "failed", "boom: upgrade failed"
+		log, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{})
+		if err == nil || !strings.Contains(err.Error(), "stopped while starting") || !strings.Contains(err.Error(), "upgrade failed") || log.Excerpt != "boom: upgrade failed" {
+			t.Fatalf("log = %+v, err = %v", log, err)
+		}
+	})
+	t.Run("timeout", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StartTimeout = 20 * time.Millisecond
+		e.prov.health = []domain.HealthState{domain.HealthStarting}
+		e.srv.Provider = &upgradeProvider{
+			provider: e.prov,
+			upPlan:   e.prov.plan,
+			upLog:    domain.UpgradeLog{Excerpt: "module excerpt"},
+		}
+		e.run.log = "journal line"
+		log, err := e.srv.StartUpgraded(context.Background(), upgradedServer, domain.Login{})
+		if err == nil || !strings.Contains(err.Error(), "did not become ready") || log.Excerpt != "module excerpt" {
+			t.Fatalf("log = %+v, err = %v", log, err)
+		}
+	})
+}
+
+func TestLoad_ダンプを専用ユーザー所有の0600でコピーしてモジュールに渡し終了後に消す(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		fileName  string
+		wantExt   string
+		preCreate bool
+	}{
+		{"既存StateDirのsql", "prod.sql", ".sql", true},
+		{"未作成StateDirのsql.gz", "prod.sql.gz", ".sql.gz", false},
+		{"拡張子なし", "rawdump", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.srv.StateRoot = t.TempDir()
+			stateDir := filepath.Join(e.srv.StateRoot, server.ID)
+			if tc.preCreate {
+				if err := os.MkdirAll(stateDir, 0o750); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				e.srv.Mkdir = func(p string) error { return os.MkdirAll(p, 0o750) }
+			}
+			srcDir := filepath.Join(t.TempDir(), "src")
+			if err := os.MkdirAll(srcDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			origPath := filepath.Join(srcDir, tc.fileName)
+			origBody := "-- dump body\nCREATE TABLE t(id int);\n"
+			if err := os.WriteFile(origPath, []byte(origBody), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			var receivedPath string
+			var receivedPerm os.FileMode
+			var receivedBody string
+			var chownedBeforeLoad bool
+			e.prov.loadFn = func(_ context.Context, _ domain.InstanceSpec, path string) error {
+				receivedPath = path
+				fi, err := os.Stat(path)
+				if err != nil {
+					return err
+				}
+				receivedPerm = fi.Mode().Perm()
+				b, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				receivedBody = string(b)
+				wantChown := "db-branch-rt-fakeengine:" + path
+				for _, c := range e.chowned {
+					if c == wantChown {
+						chownedBeforeLoad = true
+					}
+				}
+				return nil
+			}
+
+			if err := e.srv.Load(context.Background(), server, origPath); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if receivedPath == "" || receivedPath == origPath {
+				t.Fatalf("receivedPath = %q, must be a staged copy distinct from %q", receivedPath, origPath)
+			}
+			if filepath.Dir(receivedPath) != stateDir {
+				t.Errorf("staged path %q not under %q", receivedPath, stateDir)
+			}
+			if tc.wantExt != "" && !strings.HasSuffix(receivedPath, tc.wantExt) {
+				t.Errorf("staged path %q lacks extension %q", receivedPath, tc.wantExt)
+			}
+			if receivedPerm != 0o600 {
+				t.Errorf("staged perm = %o, want 0600", receivedPerm)
+			}
+			if !chownedBeforeLoad {
+				t.Errorf("staged file must be chowned to module user before Provider.Load: %v", e.chowned)
+			}
+			if receivedBody != origBody {
+				t.Errorf("staged body = %q, want %q", receivedBody, origBody)
+			}
+			if _, err := os.Stat(receivedPath); !os.IsNotExist(err) {
+				t.Errorf("staged file still exists after Load: %v", err)
+			}
+			if entries, _ := os.ReadDir(stateDir); len(entries) != 0 {
+				t.Errorf("leftover files in stateDir: %v", entries)
+			}
+			afterOrig, err := os.ReadFile(origPath)
+			if err != nil || string(afterOrig) != origBody {
+				t.Errorf("original dump changed: %q, %v", afterOrig, err)
+			}
+		})
+	}
+}
+
+func TestLoad_Providerが失敗してもコピーを消し元のファイルは変えない(t *testing.T) {
+	e := newEnv(t)
+	e.srv.StateRoot = t.TempDir()
+	stateDir := filepath.Join(e.srv.StateRoot, server.ID)
+	origPath := filepath.Join(t.TempDir(), "dump.sql")
+	if err := os.WriteFile(origPath, []byte("-- sql\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var staged string
+	e.prov.loadFn = func(_ context.Context, _ domain.InstanceSpec, path string) error {
+		staged = path
+		return errors.New("syntax error near line 1")
+	}
+
+	err := e.srv.Load(context.Background(), server, origPath)
+	if err == nil || !strings.Contains(err.Error(), "syntax error") {
+		t.Fatalf("err = %v", err)
+	}
+	if staged == "" {
+		t.Fatal("Provider.Load was not called")
+	}
+	if _, err := os.Stat(staged); !os.IsNotExist(err) {
+		t.Errorf("staged copy left behind: %v", err)
+	}
+	if entries, _ := os.ReadDir(stateDir); len(entries) != 0 {
+		t.Errorf("leftover files: %v", entries)
+	}
+	if b, err := os.ReadFile(origPath); err != nil || string(b) != "-- sql\n" {
+		t.Errorf("original file altered: %q, %v", b, err)
+	}
+}
+
+func TestLoad_ctxキャンセルで中断しコピーを残さず元のファイルは変えない(t *testing.T) {
+	t.Run("開始前にキャンセル済み", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		origPath := filepath.Join(t.TempDir(), "dump.sql")
+		if err := os.WriteFile(origPath, []byte("-- sql\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := e.srv.Load(ctx, server, origPath)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if len(e.prov.calls) != 0 {
+			t.Fatalf("Provider.Load must not be called: %v", e.prov.calls)
+		}
+	})
+
+	t.Run("コピー中にキャンセル", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		stateDir := filepath.Join(e.srv.StateRoot, server.ID)
+		fifo := filepath.Join(t.TempDir(), "dump.sql")
+		if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+			t.Skipf("mkfifo: %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			w, err := os.OpenFile(fifo, os.O_WRONLY, 0)
+			if err != nil {
+				return
+			}
+			defer w.Close()
+			chunk := make([]byte, 128*1024)
+			_, _ = w.Write(chunk)
+			cancel()
+			_, _ = w.Write([]byte("more"))
+		}()
+
+		err := e.srv.Load(ctx, server, fifo)
+		<-done
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if len(e.prov.calls) != 0 {
+			t.Fatalf("Provider.Load must not be called on canceled copy: %v", e.prov.calls)
+		}
+		if entries, _ := os.ReadDir(stateDir); len(entries) != 0 {
+			t.Errorf("partial staged copy left behind: %v", entries)
+		}
+	})
+
+	t.Run("Provider実行中にキャンセル", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		stateDir := filepath.Join(e.srv.StateRoot, server.ID)
+		origPath := filepath.Join(t.TempDir(), "dump.sql")
+		if err := os.WriteFile(origPath, []byte("-- sql\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		e.prov.loadFn = func(ctx context.Context, _ domain.InstanceSpec, _ string) error {
+			cancel()
+			return ctx.Err()
+		}
+
+		err := e.srv.Load(ctx, server, origPath)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if entries, _ := os.ReadDir(stateDir); len(entries) != 0 {
+			t.Errorf("staged copy left behind: %v", entries)
+		}
+	})
+}
+
+func TestLoad_読み込み元やコピー先やchownの失敗は分かりやすく返しコピーを残さない(t *testing.T) {
+	t.Run("元のダンプが存在しない", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		err := e.srv.Load(context.Background(), server, filepath.Join(t.TempDir(), "missing.sql"))
+		if err == nil || !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("err = %v, want ErrNotExist", err)
+		}
+		if len(e.prov.calls) != 0 {
+			t.Fatalf("Provider.Load must not be called")
+		}
+	})
+
+	t.Run("コピー先ディレクトリを作れない", func(t *testing.T) {
+		e := newEnv(t)
+		blocker := filepath.Join(t.TempDir(), "file")
+		_ = os.WriteFile(blocker, nil, 0o600)
+		e.srv.StateRoot = blocker
+		origPath := filepath.Join(t.TempDir(), "dump.sql")
+		_ = os.WriteFile(origPath, []byte("x"), 0o600)
+
+		err := e.srv.Load(context.Background(), server, origPath)
+		if err == nil || !strings.Contains(err.Error(), "staging directory") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("Mkdirフックが失敗する", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		e.srv.Mkdir = func(string) error { return errors.New("read-only file system") }
+		origPath := filepath.Join(t.TempDir(), "dump.sql")
+		_ = os.WriteFile(origPath, []byte("x"), 0o600)
+
+		err := e.srv.Load(context.Background(), server, origPath)
+		if err == nil || !strings.Contains(err.Error(), "read-only") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("ディレクトリ作成後のchownに失敗する", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		e.srv.Chown = func(string, string) error { return errors.New("no such user") }
+		origPath := filepath.Join(t.TempDir(), "dump.sql")
+		_ = os.WriteFile(origPath, []byte("x"), 0o600)
+
+		err := e.srv.Load(context.Background(), server, origPath)
+		if err == nil || !strings.Contains(err.Error(), "no such user") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("コピーファイルの作成に失敗する", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root can write anywhere")
+		}
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		stateDir := filepath.Join(e.srv.StateRoot, server.ID)
+		if err := os.MkdirAll(stateDir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(stateDir, 0o700) })
+		origPath := filepath.Join(t.TempDir(), "dump.sql")
+		_ = os.WriteFile(origPath, []byte("x"), 0o600)
+
+		err := e.srv.Load(context.Background(), server, origPath)
+		if err == nil || !strings.Contains(err.Error(), "disk space") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("コピーファイルのchownに失敗したらファイルを消す", func(t *testing.T) {
+		e := newEnv(t)
+		e.srv.StateRoot = t.TempDir()
+		stateDir := filepath.Join(e.srv.StateRoot, server.ID)
+		if err := os.MkdirAll(stateDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		e.srv.Chown = func(string, string) error { return errors.New("operation not permitted") }
+		origPath := filepath.Join(t.TempDir(), "dump.sql")
+		_ = os.WriteFile(origPath, []byte("x"), 0o600)
+
+		err := e.srv.Load(context.Background(), server, origPath)
+		if err == nil || !strings.Contains(err.Error(), "operation not permitted") {
+			t.Fatalf("err = %v", err)
+		}
+		if entries, _ := os.ReadDir(stateDir); len(entries) != 0 {
+			t.Errorf("staged copy left behind after chown error: %v", entries)
+		}
+		if len(e.prov.calls) != 0 {
+			t.Fatalf("Provider.Load must not be called after chown error")
+		}
+	})
 }
