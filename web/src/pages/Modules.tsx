@@ -1,7 +1,7 @@
 import { FormEvent, useState } from "react";
 import { api, can, isAdmin, LicenseReport, ModuleState, SettingScope } from "../api";
 import { ScopeForm } from "../components/scopeform";
-import { ErrorLine } from "../components/ui";
+import { Dialog, ErrorLine } from "../components/ui";
 import { relative } from "../lib/format";
 import { billingLabel, Renewal, renewalInfo, resultLabel } from "../lib/license";
 import { useLive } from "../lib/live";
@@ -13,9 +13,10 @@ import { moduleLabel, planLabel } from "../lib/modules";
 // enabled module's detail with its settings. Its pages are in the sidebar.
 export function Modules({ name, onOpen }: { name?: string; onOpen?: (name: string) => void }) {
   const { data: scopes, error } = useLive(api.settings, ["setting", "module"]);
-  const { data: modules, error: modError } = useLive(api.modules, ["module", "node"]);
+  const { data: modules, error: modError, reload: reloadModules } = useLive(api.modules, ["module", "node"]);
   const { data: lic, reload: reloadLicense } = useLive(api.license, ["setting", "module"]);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [forgetting, setForgetting] = useState<string | null>(null);
   const run = (p: Promise<unknown>) => p.then(() => setActionError(null), (e: Error) => setActionError(e.message));
 
   const covered = (n: string) => !!lic?.report && (lic.report.all || lic.report.license.modules.includes(n)) && ["valid", "grace"].includes(lic.report.state);
@@ -35,6 +36,7 @@ export function Modules({ name, onOpen }: { name?: string; onOpen?: (name: strin
         onConfigure={!detail && state?.wanted ? () => onOpen?.(n) : undefined}
         onEnable={() => run(api.installModule(n))}
         onDisable={() => run(api.removeModule(n))}
+        onForget={() => setForgetting(n)}
       />
     );
   };
@@ -56,11 +58,44 @@ export function Modules({ name, onOpen }: { name?: string; onOpen?: (name: strin
           <div className="modules">{names.map((n) => row(n, false))}</div>
         </>
       )}
+      {forgetting && (
+        <ForgetModuleDialog
+          name={forgetting}
+          onCancel={() => setForgetting(null)}
+          onConfirm={() =>
+            api.forgetModule(forgetting).then(
+              () => {
+                setForgetting(null);
+                setActionError(null);
+                reloadModules();
+              },
+              (e: Error) => {
+                setForgetting(null);
+                setActionError(e.message);
+              },
+            )
+          }
+        />
+      )}
     </section>
   );
 }
 
-function ModuleRow({
+export function ForgetModuleDialog({ name, onCancel, onConfirm }: { name: string; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <Dialog title={t("Forget {name}?", { name })} onClose={onCancel}>
+      <p>{t("Remove the cluster record of this module so it is no longer listed. You can install it again later.")}</p>
+      <div className="form-actions">
+        <button onClick={onCancel}>{t("Cancel")}</button>
+        <button className="danger-button" onClick={onConfirm}>
+          {t("Forget")}
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
+export function ModuleRow({
   name,
   description,
   licensed,
@@ -70,6 +105,7 @@ function ModuleRow({
   onConfigure,
   onEnable,
   onDisable,
+  onForget,
 }: {
   name: string;
   description?: string;
@@ -80,8 +116,10 @@ function ModuleRow({
   onConfigure?: () => void;
   onEnable: () => void;
   onDisable: () => void;
+  onForget?: () => void;
 }) {
   const on = !!state?.wanted;
+  const removed = !!state && !state.wanted;
   const nodes = state?.nodes ?? [];
   const done = nodes.filter((n) => n.current).length;
   return (
@@ -126,6 +164,11 @@ function ModuleRow({
         {onConfigure && (
           <button className="text-button" onClick={onConfigure}>
             {t("Configure ›")}
+          </button>
+        )}
+        {removed && onForget && (
+          <button className="text-button danger" onClick={onForget}>
+            {t("Forget")}
           </button>
         )}
         {on ? <button onClick={onDisable}>{t("Disable")}</button> : <button onClick={onEnable}>{t("Enable")}</button>}

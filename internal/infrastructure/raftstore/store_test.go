@@ -850,3 +850,30 @@ func TestStore_古い版のノードがいる間はランタイムモジュー�
 		t.Errorf("changing a runtime module with a node at 18: %v", err)
 	}
 }
+
+func TestStore_delete_moduleは全ノードがプロトコル22になるまで書かれない(t *testing.T) {
+	if raftstore.Protocol < domain.ProtocolModuleForget {
+		t.Fatalf("Protocol = %d, below domain.ProtocolModuleForget (%d)", raftstore.Protocol, domain.ProtocolModuleForget)
+	}
+	l := newCluster(t, 1).leader(t)
+	_ = l.PutModule(ctx, domain.ModuleSpec{Name: "audit", Version: "1.0", Wanted: false})
+	_ = l.PutModule(ctx, domain.ModuleSpec{Name: "proxysql", Version: "1.0", Wanted: true})
+	_ = l.PutNode(ctx, domain.Node{Name: "new", Protocol: raftstore.Protocol})
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: 21})
+
+	if err := l.DeleteModule(ctx, "audit"); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("with a node at protocol 21: %v, want ErrClusterUpgrading", err)
+	}
+	if got, _ := l.ListModules(ctx); len(got) != 2 {
+		t.Fatalf("deleted while upgrading: %+v", got)
+	}
+
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: domain.ProtocolModuleForget})
+	if err := l.DeleteModule(ctx, "audit"); err != nil {
+		t.Fatalf("after upgrade to 22: %v", err)
+	}
+	got, err := l.ListModules(ctx)
+	if err != nil || len(got) != 1 || got[0].Name != "proxysql" {
+		t.Errorf("modules after delete = %+v, %v", got, err)
+	}
+}

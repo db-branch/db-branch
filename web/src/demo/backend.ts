@@ -305,19 +305,24 @@ export class DemoBackend {
     return this.visible(c.who).find((b) => b.name === c.p.name);
   }
 
+  private moduleActive(name: string) {
+    const st = this.state.modules[name];
+    return st === "on" || st === "installing";
+  }
+
   private moduleView(name: string) {
     const st = this.state.modules[name];
     return {
       name,
       version: VERSION,
-      wanted: st !== "off",
+      wanted: this.moduleActive(name),
       requires_license: MODULES[name].paid,
       nodes: NODES.map((node) => (st === "installing" ? { node, loaded: "", current: false } : { node, loaded: VERSION, current: true })),
     };
   }
 
   private scopes(): SettingScope[] {
-    return this.state.settings.filter((s) => s.scope === "core" || this.state.modules[s.scope] !== "off");
+    return this.state.settings.filter((s) => s.scope === "core" || this.moduleActive(s.scope));
   }
 
   // ---- routes ----
@@ -374,12 +379,12 @@ export class DemoBackend {
       body: {
         version: VERSION,
         node: NODES[0],
-        modules: Object.keys(MODULES).filter((m) => s().modules[m] !== "off").map((m) => `${m} ${VERSION}`),
+        modules: Object.keys(MODULES).filter((m) => this.moduleActive(m)).map((m) => `${m} ${VERSION}`),
         record: s().modules.history === "on",
         pages: [
           { module: "auth", path: "/users", title: "Users" },
           { module: "audit", path: "/log", title: "Audit log" },
-        ].filter((p) => s().modules[p.module] !== "off"),
+        ].filter((p) => this.moduleActive(p.module)),
       },
     }));
     a("GET", "/v1/events", "user", () => fail(404, "not_found", "events are delivered by the demo's EventSource"));
@@ -1041,11 +1046,18 @@ export class DemoBackend {
       return ok(scope);
     });
 
-    a("GET", "/v1/modules", "admin", () => ok({ items: Object.keys(MODULES).map((m) => this.moduleView(m)), available: Object.fromEntries(Object.entries(MODULES).map(([k, v]) => [k, v.description])) }));
+    a("GET", "/v1/modules", "admin", () =>
+      ok({
+        items: Object.keys(MODULES)
+          .filter((m) => m in s().modules)
+          .map((m) => this.moduleView(m)),
+        available: Object.fromEntries(Object.entries(MODULES).map(([k, v]) => [k, v.description])),
+      }),
+    );
     a("POST", "/v1/modules", "admin", (c) => {
       const name = String(c.body.name ?? "");
       if (!(name in MODULES)) return notFound("module");
-      if (s().modules[name] === "off") {
+      if (!this.moduleActive(name)) {
         s().modules[name] = "installing";
         this.schedule(null, TIMING.module, { k: "module.ready", name });
         this.emit("resync", {});
@@ -1055,6 +1067,14 @@ export class DemoBackend {
     a("DELETE", "/v1/modules/:name", "admin", (c) => {
       if (!(c.p.name in MODULES)) return notFound("module");
       s().modules[c.p.name] = "off";
+      this.emit("resync", {});
+      return ok(undefined, 204);
+    });
+    a("POST", "/v1/modules/:name/forget", "admin", (c) => {
+      const name = c.p.name;
+      if (!(name in s().modules)) return notFound("module");
+      if (s().modules[name] !== "off") return fail(409, "conflict", `module ${name} is still enabled; remove it first`);
+      delete s().modules[name];
       this.emit("resync", {});
       return ok(undefined, 204);
     });
@@ -1108,7 +1128,7 @@ export class DemoBackend {
     return {
       checked_at: s.checkedAt,
       checked_by: by,
-      nodes: NODES.map((name, i) => ({ name, leader: i === 0, down: false, version: VERSION, modules: Object.fromEntries(Object.keys(MODULES).filter((m) => s.modules[m] !== "off").map((m) => [m, VERSION])) })),
+      nodes: NODES.map((name, i) => ({ name, leader: i === 0, down: false, version: VERSION, modules: Object.fromEntries(Object.keys(MODULES).filter((m) => this.moduleActive(m)).map((m) => [m, VERSION])) })),
       packages: [{ name: "db-branch", installed: VERSION, available: [] }],
       latest_minor: "",
       rollout: null,

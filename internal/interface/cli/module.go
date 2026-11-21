@@ -3,6 +3,8 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
 	"text/tabwriter"
 
@@ -92,6 +94,31 @@ func (a *App) moduleCommand() *cobra.Command {
 	}
 	remove.Flags().BoolVar(&removeRuntime, "runtime", false, "remove a locally installed runtime module")
 	remove.Flags().BoolVar(&removeNoRestart, "no-restart", false, "do not restart db-branch.service after removing a local runtime module")
+	forget := &cobra.Command{
+		Use:   "forget <name>",
+		Short: "Forget a removed cluster module so it is no longer listed",
+		Long:  "Delete the cluster record of a module whose state is removed. Only removed modules can be forgotten; to install a module again, run `db-branch module install <name>`.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			c, err := a.client()
+			if err != nil {
+				return err
+			}
+			if err := c.Do(cmd.Context(), "POST", "/v1/modules/"+url.PathEscape(name)+"/forget", nil, nil); err != nil {
+				var apiErr *APIError
+				if errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict {
+					return exitError(exitCodeConflict, err)
+				}
+				return err
+			}
+			if a.output == "json" {
+				return a.printJSON(map[string]any{"name": name, "forgotten": true})
+			}
+			fmt.Fprintf(a.Stdout, "Forgot module %s (the cluster no longer lists it)\n", name)
+			return nil
+		},
+	}
 	var listRuntime bool
 	list := &cobra.Command{
 		Use: "list", Short: "List cluster modules and locally installed runtime modules", Args: cobra.NoArgs,
@@ -141,7 +168,7 @@ func (a *App) moduleCommand() *cobra.Command {
 		},
 	}
 	list.Flags().BoolVar(&listRuntime, "runtime", false, "list locally installed runtime modules only")
-	cmd.AddCommand(install, remove, list, a.moduleTrustCommand())
+	cmd.AddCommand(install, remove, forget, list, a.moduleTrustCommand())
 	return cmd
 }
 

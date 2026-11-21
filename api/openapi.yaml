@@ -2735,6 +2735,42 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
+  /v1/modules/{name}/forget:
+    post:
+      tags: [modules]
+      operationId: forgetModule
+      summary: Forget a removed module
+      x-dbb-action: module.forget
+      x-dbb-token-scopes: [full]
+      description: |-
+        Deletes the cluster's record of a module that has already been removed, so it is no longer listed. Refuses if the module is still enabled, if the package is still installed on this node, or if any cluster node has not yet reached protocol 22.
+
+        **Action:** `module.forget`. Needs a console session of an admin, the local socket, or a `full` token.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: The module name.
+          schema: {type: string}
+      responses:
+        '204': {description: Done. No content.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: not_found.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: 'conflict: the module is still enabled or its package is still installed on this node.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: not_initialized or cluster_upgrading.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
   /v1/license:
     get:
       tags: [license]

@@ -600,6 +600,53 @@ func TestModuleとSettingsコマンド(t *testing.T) {
 	}
 }
 
+func TestCLI_module_forgetは記録を消して出力しエラーに応じた終了コードを返す(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["POST /v1/modules/audit/forget"] = nil
+
+	code, out, errOut := runAPI(t, api, "module", "forget", "audit")
+	if code != 0 || strings.TrimSpace(out) != "Forgot module audit (the cluster no longer lists it)" || errOut != "" {
+		t.Fatalf("text forget: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	code, out, errOut = runAPI(t, api, "-o", "json", "module", "forget", "audit")
+	if code != 0 || !strings.Contains(out, `"name": "audit"`) || !strings.Contains(out, `"forgotten": true`) || errOut != "" {
+		t.Fatalf("json forget: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	// 409 conflict -> exit code 4.
+	api.errors["POST /v1/modules/proxysql/forget"] = &cli.APIError{Status: 409, Code: "conflict", Message: "conflict: module proxysql is still enabled; remove it first"}
+	if code, _, errOut := runAPI(t, api, "module", "forget", "proxysql"); code != 4 || !strings.Contains(errOut, "remove it first") {
+		t.Errorf("conflict forget: code=%d err=%q, want code 4", code, errOut)
+	}
+
+	// 404 not found -> exit code 1.
+	api.errors["POST /v1/modules/missing/forget"] = &cli.APIError{Status: 404, Code: "not_found", Message: "module missing: not found"}
+	if code, _, _ := runAPI(t, api, "module", "forget", "missing"); code != 1 {
+		t.Errorf("not found forget: code=%d, want 1", code)
+	}
+
+	// 503 upgrading -> exit code 1.
+	api.errors["POST /v1/modules/old/forget"] = &cli.APIError{Status: 503, Code: "cluster_upgrading", Message: "the cluster is upgrading"}
+	if code, _, _ := runAPI(t, api, "module", "forget", "old"); code != 1 {
+		t.Errorf("upgrading forget: code=%d, want 1", code)
+	}
+
+	// Help explains removed-only semantics and re-installing with module install.
+	if code, out, _ := runAPI(t, api, "module", "forget", "--help"); code != 0 || !strings.Contains(out, "removed") || !strings.Contains(out, "module install") {
+		t.Errorf("help: code=%d out=%q", code, out)
+	}
+
+	// Bad config fails cleanly.
+	badCfg := filepath.Join(t.TempDir(), "bad.toml")
+	writeFile(t, badCfg, "not valid toml = [")
+	var stdout, stderr bytes.Buffer
+	app := cli.App{Version: "test", Stdout: &stdout, Stderr: &stderr, Client: func(string) cli.Client { return api }}
+	if code := app.Run(context.Background(), []string{"--config", badCfg, "module", "forget", "audit"}); code != 1 {
+		t.Errorf("bad config: code=%d, want 1", code)
+	}
+}
+
 func TestTokenコマンド(t *testing.T) {
 	api := newFakeAPI()
 	api.answers["POST /v1/tokens"] = map[string]any{"token": "dbb_x_s", "scope": "branches"}

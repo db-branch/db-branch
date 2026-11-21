@@ -340,6 +340,15 @@ func (s *Store) PutModule(_ context.Context, m domain.ModuleSpec) error {
 	})
 }
 
+// DeleteModule forgets a recorded module. It is idempotent: an unknown name
+// is a no-op, matching the Raft state machine.
+func (s *Store) DeleteModule(_ context.Context, name string) error {
+	return s.update(func(st *state) error {
+		delete(st.Modules, name)
+		return nil
+	})
+}
+
 // GetSettings returns the settings of scope (empty when none were saved).
 func (s *Store) GetSettings(_ context.Context, scope string) (map[string]string, error) {
 	st, err := s.read()

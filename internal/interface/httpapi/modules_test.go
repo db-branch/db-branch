@@ -11,9 +11,10 @@ import (
 )
 
 type fakeModules struct {
-	specs    []domain.ModuleSpec
-	err      error
-	availErr error
+	specs     []domain.ModuleSpec
+	err       error
+	forgetErr error
+	availErr  error
 }
 
 func (f *fakeModules) Available(context.Context) (map[string]string, error) {
@@ -43,6 +44,22 @@ func (f *fakeModules) Remove(_ context.Context, name string) error {
 }
 
 func (f *fakeModules) List(context.Context) ([]domain.ModuleSpec, error) { return f.specs, f.err }
+
+func (f *fakeModules) Forget(_ context.Context, name string) error {
+	if f.forgetErr != nil {
+		return f.forgetErr
+	}
+	for i := range f.specs {
+		if f.specs[i].Name == name {
+			if f.specs[i].Wanted {
+				return domain.ErrConflict
+			}
+			f.specs = append(f.specs[:i], f.specs[i+1:]...)
+			return f.err
+		}
+	}
+	return domain.ErrNotFound
+}
 
 func TestModules_有効化と一覧と無効化(t *testing.T) {
 	f, c := remoteFixture(t)
@@ -139,5 +156,76 @@ func TestModules_一覧にランタイムモジュールの種類と配布元を
 	}
 	if rt["kind"] != "runtime" || rt["source"] != "local" || rt["name"] != "rt-clickhouse" {
 		t.Errorf("runtime module = %v", rt)
+	}
+}
+
+func TestModules_忘却APIのステータスコードと認可と監査(t *testing.T) {
+	f := newFixture(t)
+	sink := &recordingSink{}
+	f.srv.Ext.Authenticator = moduleAuth{}
+	f.srv.Ext.Authorizer = viewerReadsOnly{}
+	f.srv.Ext.AuditSink = sink
+	mods := &fakeModules{specs: []domain.ModuleSpec{
+		{Name: "proxysql", Version: "1.0", Wanted: true},
+		{Name: "audit", Version: "1.0", Wanted: false},
+	}}
+	f.srv.ModuleAdmin = mods
+
+	// Non-admin (viewer) is denied with 403 and audited as denied.
+	h := f.srv.Handler(false)
+	if resp, _ := send(t, h, "POST", "/v1/modules/audit/forget", nil, bearer("t-viewer")); resp.StatusCode != 403 {
+		t.Fatalf("viewer forget: %d, want 403", resp.StatusCode)
+	}
+
+	// Still wanted -> 409 conflict.
+	if resp, body := send(t, h, "POST", "/v1/modules/proxysql/forget", nil, bearer("t-admin")); resp.StatusCode != 409 || errCode(body) != "conflict" {
+		t.Fatalf("wanted forget: %d %v, want 409 conflict", resp.StatusCode, body)
+	}
+
+	// Missing -> 404 not_found.
+	if resp, body := send(t, h, "POST", "/v1/modules/nope/forget", nil, bearer("t-admin")); resp.StatusCode != 404 || errCode(body) != "not_found" {
+		t.Fatalf("missing forget: %d %v, want 404 not_found", resp.StatusCode, body)
+	}
+
+	// Cluster upgrading -> 503 cluster_upgrading.
+	mods.forgetErr = domain.ErrClusterUpgrading
+	if resp, body := send(t, h, "POST", "/v1/modules/audit/forget", nil, bearer("t-admin")); resp.StatusCode != 503 || errCode(body) != "cluster_upgrading" {
+		t.Fatalf("upgrading forget: %d %v, want 503 cluster_upgrading", resp.StatusCode, body)
+	}
+	mods.forgetErr = nil
+
+	// Works even while other modules are pending (module.* is exempt).
+	f.srv.PendingModules = func() []string { return []string{"auth"} }
+	if resp, _ := send(t, h, "POST", "/v1/modules/audit/forget", nil, bearer("t-admin")); resp.StatusCode != 204 {
+		t.Fatalf("removed forget: %d, want 204", resp.StatusCode)
+	}
+	if len(mods.specs) != 1 || mods.specs[0].Name != "proxysql" {
+		t.Errorf("specs after forget = %+v", mods.specs)
+	}
+
+	// Audit events recorded for module.forget (denied, failed, ok).
+	actions := sink.actions()
+	wantEvents := []string{
+		"module.forget:token:viewer:module/audit:denied",
+		"module.forget:token:admin:module/proxysql:failed",
+		"module.forget:token:admin:module/audit:ok",
+	}
+	for _, want := range wantEvents {
+		found := false
+		for _, got := range actions {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing audit event %q in %v", want, actions)
+		}
+	}
+
+	// Without ModuleAdmin -> 503 not_initialized.
+	f.srv.ModuleAdmin = nil
+	if resp, body := f.do(t, "POST", "/v1/modules/audit/forget", nil); resp.StatusCode != 503 || errCode(body) != "not_initialized" {
+		t.Errorf("without admin: %d %v", resp.StatusCode, body)
 	}
 }
