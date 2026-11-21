@@ -278,3 +278,123 @@ func TestEngineSpec_Cloneは元と独立した複製を返す(t *testing.T) {
 		t.Errorf("Clone shares state: %+v", a)
 	}
 }
+
+func TestRuntimeRegistry_CheckUpgradePath_数字で始まらない版は文字列として順序づける(t *testing.T) {
+	reg := domain.NewRuntimeRegistry()
+	if err := reg.Register(domain.EngineSpec{Engine: "rolling", VersionPattern: `^[a-z]+[0-9]+$`}); err != nil {
+		t.Fatal(err)
+	}
+	ref := func(v string) domain.RuntimeRef { return domain.RuntimeRef{Engine: "rolling", Version: v} }
+	cases := []struct {
+		from, to string
+		want     string // "" = allowed
+	}{
+		{"v1", "v2", ""},
+		{"v2", "v10", ""}, // 10 is after 2, not before "2" as text
+		{"v10", "v2", "downgrade"},
+		{"v2", "v1", "downgrade"},
+		{"v2", "v2", "already runs"},
+		{"alpha1", "beta1", ""},
+	}
+	for _, c := range cases {
+		err := reg.CheckUpgradePath(ref(c.from), ref(c.to))
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s -> %s: %v", c.from, c.to, err)
+		case c.want != "" && (!errors.Is(err, domain.ErrUpgradeRefused) || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s -> %s: err = %v, want %q", c.from, c.to, err, c.want)
+		}
+	}
+}
+
+func TestRuntimeRegistry_CheckUpgradePath_段数が多い版や末尾が英字の版も順序づける(t *testing.T) {
+	reg := domain.NewRuntimeRegistry()
+	if err := reg.Register(domain.EngineSpec{Engine: "ch", VersionPattern: `^v?[0-9]+(\.[0-9]+)*[a-z]*$`}); err != nil {
+		t.Fatal(err)
+	}
+	ref := func(v string) domain.RuntimeRef { return domain.RuntimeRef{Engine: "ch", Version: v} }
+	cases := []struct {
+		from, to string
+		want     string // "" = allowed
+	}{
+		{"25.3.1.2703", "25.3.2.100", ""},
+		{"25.3.2.100", "25.3.1.2703", "downgrade"},
+		{"25.3.1", "25.3.2.100", ""},
+		{"25.3.2.100", "25.3.1", "downgrade"},
+		{"25.3.1.2703", "25.3.1.2703", "already runs"},
+		{"25.3.1.9", "25.3.1.10", ""},
+		{"2026a", "2027a", ""},
+		{"2027a", "2026a", "downgrade"},
+		{"v1", "v1a", ""},
+		{"v1a", "v1", "downgrade"},
+		{"v1a", "v1b", ""},
+		{"v1b", "v1a", "downgrade"},
+		{"v007", "v7", "already runs"},
+	}
+	for _, c := range cases {
+		err := reg.CheckUpgradePath(ref(c.from), ref(c.to))
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s -> %s: %v", c.from, c.to, err)
+		case c.want != "" && (!errors.Is(err, domain.ErrUpgradeRefused) || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s -> %s: err = %v, want %q", c.from, c.to, err, c.want)
+		}
+	}
+}
+
+func TestCheckUpgradePath_組み込みエンジンの版の接尾辞は従来どおり数に含めない(t *testing.T) {
+	err := domain.CheckUpgradePath(rt("mysql@8.4.13"), rt("mysql@8.4.13-custom"))
+	if !errors.Is(err, domain.ErrUpgradeRefused) || !strings.Contains(err.Error(), "already runs") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestRuntimeRegistry_ZFSPropsにコアが管理するプロパティは指定できない(t *testing.T) {
+	for _, key := range []string{"canmount", "mountpoint", "db-branch:line", "com.example:x", "readonly", "origin"} {
+		reg := domain.NewRuntimeRegistry()
+		err := reg.Register(domain.EngineSpec{Engine: "x", ZFSProps: map[string]string{key: "on"}})
+		if !errors.Is(err, domain.ErrInvalidEngineSpec) {
+			t.Errorf("ZFSProps[%q]: Register = %v, want ErrInvalidEngineSpec", key, err)
+		}
+	}
+	reg := domain.NewRuntimeRegistry()
+	if err := reg.Register(domain.EngineSpec{Engine: "x", ZFSProps: map[string]string{"recordsize": "128K", "compression": "lz4", "atime": "off"}}); err != nil {
+		t.Errorf("ordinary dataset properties = %v", err)
+	}
+}
+
+func TestRuntimeRegistry_CheckUpgradePath_桁が非常に多い数でも正しく順序づける(t *testing.T) {
+	reg := domain.NewRuntimeRegistry()
+	if err := reg.Register(domain.EngineSpec{Engine: "big", VersionPattern: `^[0-9]+(\.[0-9]+)*$`}); err != nil {
+		t.Fatal(err)
+	}
+	ref := func(v string) domain.RuntimeRef { return domain.RuntimeRef{Engine: "big", Version: v} }
+	if err := reg.CheckUpgradePath(ref("99999999999999999999.0.1"), ref("99999999999999999999.0.2")); err != nil {
+		t.Errorf("upgrade between huge numbers = %v", err)
+	}
+	if err := reg.CheckUpgradePath(ref("99999999999999999999.0.2"), ref("99999999999999999999.0.1")); !errors.Is(err, domain.ErrUpgradeRefused) {
+		t.Errorf("downgrade between huge numbers = %v", err)
+	}
+	if err := reg.CheckUpgradePath(ref("99999999999999999999.0.2"), ref("100000000000000000000.0.1")); err != nil {
+		t.Errorf("upgrade across a digit-count boundary = %v", err)
+	}
+}
+
+func TestRuntimeRegistry_ZFSPropsは性能調整用の許可リストと安全な値だけを受け付ける(t *testing.T) {
+	bad := []map[string]string{
+		{"sharenfs": "on"}, {"sharesmb": "on"}, {"setuid": "on"}, {"devices": "on"}, {"exec": "on"},
+		{"zoned": "on"}, {"overlay": "on"}, {"encryption": "on"}, {"": "x"}, {"RecordSize": "128K"},
+		{"recordsize": ""}, {"recordsize": "128K\nmountpoint=/"}, {"recordsize": "a b"}, {"recordsize": "-o x"},
+	}
+	for _, props := range bad {
+		reg := domain.NewRuntimeRegistry()
+		if err := reg.Register(domain.EngineSpec{Engine: "x", ZFSProps: props}); !errors.Is(err, domain.ErrInvalidEngineSpec) {
+			t.Errorf("ZFSProps %q: Register = %v, want ErrInvalidEngineSpec", props, err)
+		}
+	}
+	good := map[string]string{"recordsize": "128K", "compression": "zstd-3", "atime": "off", "xattr": "sa", "logbias": "throughput",
+		"sync": "standard", "primarycache": "metadata", "redundant_metadata": "most"}
+	if err := domain.NewRuntimeRegistry().Register(domain.EngineSpec{Engine: "x", ZFSProps: good}); err != nil {
+		t.Errorf("performance tuning properties = %v", err)
+	}
+}

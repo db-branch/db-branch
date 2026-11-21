@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers "pgx"
 )
@@ -145,4 +146,20 @@ func (r Runner) Run(ctx context.Context, t Target, q string, maxRows int) (Resul
 	}
 	res.Millis = time.Since(start).Milliseconds()
 	return res, rows.Err()
+}
+
+// QueryHook is the Query of a runtime provider for the built-in engines: it
+// runs one statement as the request's login on the instance's port.
+func (r Runner) QueryHook() func(context.Context, domain.Server, domain.QueryRequest) (domain.QueryResult, error) {
+	return func(ctx context.Context, s domain.Server, q domain.QueryRequest) (domain.QueryResult, error) {
+		host := q.Host
+		if host == "" {
+			host = "127.0.0.1"
+		}
+		res, err := r.Run(ctx, Target{Engine: string(s.Runtime.Engine), Host: host, Port: s.Port, User: q.User, Password: q.Password}, q.SQL, q.MaxRows)
+		if err != nil {
+			return domain.QueryResult{}, err
+		}
+		return domain.QueryResult(res), nil
+	}
 }

@@ -47,6 +47,10 @@ const (
 	// PropAuto is "on" for checkpoints the system took (before an upgrade, or
 	// before a restore in older versions).
 	PropAuto = "db-branch:auto"
+	// PropFreeze is "on" on a live dataset from before the engine's PreFreeze
+	// until its PostFreeze succeeded: if the agent dies in between, recovery
+	// sees it and releases the freeze.
+	PropFreeze = "db-branch:freeze"
 	// PropHead (on the live dataset) names the checkpoint the current state descends from.
 	PropHead = "db-branch:head"
 	// PropOp, PropSource, PropNewLine and PropAutoName (on the history

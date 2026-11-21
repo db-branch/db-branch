@@ -8,11 +8,13 @@ package srcdump
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
 )
@@ -21,48 +23,99 @@ import (
 // standard output to out (execx.Runner.StreamEnv).
 type StreamFunc func(ctx context.Context, env []string, out io.Writer, name string, args ...string) error
 
-// Dumper implements domain.SourceDumper.
+// Dumper implements domain.SourceDumper for any engine whose runtime provider
+// can dump sources (its DumpSource): the engine specific part is the provider's.
 type Dumper struct {
 	// WorkDir holds dumps while they exist.
-	WorkDir string
-	Stream  StreamFunc
+	WorkDir   string
+	Providers domain.RuntimeProviders
+	// Timeout bounds one dump (0: 6 hours), so a source that accepts the
+	// connection and never answers cannot hold the base's refresh forever.
+	// (mysqldump has no connect timeout of its own.)
+	Timeout time.Duration
 }
+
+const defaultDumpTimeout = 6 * time.Hour
 
 var _ domain.SourceDumper = Dumper{}
 
 // Dump writes the source databases into one new SQL script and returns its path.
 func (d Dumper) Dump(ctx context.Context, job domain.SourceDumpJob) (string, error) {
-	var run func(context.Context, io.Writer, domain.SourceDumpJob) error
-	switch job.Tools.Engine {
-	case domain.Postgres:
-		run = d.postgres
-	case domain.MySQL:
-		run = d.mysql
-	default:
+	var p domain.RuntimeProvider
+	ok := false
+	if d.Providers != nil {
+		p, ok = d.Providers.Provider(job.Tools.Engine)
+	}
+	if !ok {
 		return "", fmt.Errorf("%w: %s", domain.ErrUnsupportedEngine, job.Tools.Engine)
+	}
+	spec, err := p.Describe(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := spec.Capabilities.Require("source_dump"); err != nil {
+		return "", err
 	}
 	if err := os.MkdirAll(d.WorkDir, 0o700); err != nil {
 		return "", err
 	}
+	timeout := d.Timeout
+	if timeout <= 0 {
+		timeout = defaultDumpTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	f, err := os.CreateTemp(d.WorkDir, "refresh-*.sql") // 0600
 	if err != nil {
 		return "", err
 	}
-	err = run(ctx, f, job)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		_ = os.Remove(f.Name())
+	name := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
 		return "", err
 	}
-	return f.Name(), nil
+	if err := p.DumpSource(ctx, job, name); err != nil {
+		_ = os.Remove(name)
+		if cerr := ctx.Err(); cerr != nil && !errors.Is(err, cerr) {
+			// A tool killed with its context only says "signal: killed".
+			err = fmt.Errorf("%w (%w)", err, cerr)
+		}
+		return "", err
+	}
+	return name, nil
 }
 
 // Discard deletes a dump.
 func (Dumper) Discard(path string) {
 	if path != "" {
 		_ = os.Remove(path)
+	}
+}
+
+// PostgresDump is the DumpSource of the PostgreSQL provider: it writes the
+// dump into outPath (an existing file, which keeps its mode).
+func PostgresDump(stream StreamFunc) func(context.Context, domain.SourceDumpJob, string) error {
+	return dumpTo(stream, postgresDump)
+}
+
+// MySQLDump is the DumpSource of the MySQL provider.
+func MySQLDump(stream StreamFunc) func(context.Context, domain.SourceDumpJob, string) error {
+	return dumpTo(stream, mysqlDump)
+}
+
+type engineDump func(ctx context.Context, stream StreamFunc, out io.Writer, job domain.SourceDumpJob) error
+
+func dumpTo(stream StreamFunc, run engineDump) func(context.Context, domain.SourceDumpJob, string) error {
+	return func(ctx context.Context, job domain.SourceDumpJob, outPath string) error {
+		f, err := os.OpenFile(outPath, os.O_WRONLY|os.O_TRUNC, 0)
+		if err != nil {
+			return err
+		}
+		err = run(ctx, stream, f, job)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		return err
 	}
 }
 
@@ -76,7 +129,7 @@ func withPassword(env []string, name, password string) []string {
 // postgres dumps each database with its own CREATE DATABASE (the base is
 // refreshed in place, so the old one is dropped first). The maintenance
 // database "postgres" cannot be dropped while connected: it is cleaned only.
-func (d Dumper) postgres(ctx context.Context, out io.Writer, job domain.SourceDumpJob) error {
+func postgresDump(ctx context.Context, stream StreamFunc, out io.Writer, job domain.SourceDumpJob) error {
 	s := job.Source
 	env := withPassword([]string{"LD_LIBRARY_PATH=" + job.Tools.LibDir, "PGCONNECT_TIMEOUT=30"}, "PGPASSWORD", s.Password)
 	for _, db := range s.Databases {
@@ -85,20 +138,20 @@ func (d Dumper) postgres(ctx context.Context, out io.Writer, job domain.SourceDu
 		if db != "postgres" {
 			args = append(args, "--create")
 		}
-		if err := d.Stream(ctx, env, out, filepath.Join(job.Tools.BinDir, "pg_dump"), append(args, db)...); err != nil {
+		if err := stream(ctx, env, out, filepath.Join(job.Tools.BinDir, "pg_dump"), append(args, db)...); err != nil {
 			return fmt.Errorf("pg_dump %s: %w", db, err)
 		}
 	}
 	return nil
 }
 
-func (d Dumper) mysql(ctx context.Context, out io.Writer, job domain.SourceDumpJob) error {
+func mysqlDump(ctx context.Context, stream StreamFunc, out io.Writer, job domain.SourceDumpJob) error {
 	s := job.Source
 	env := withPassword([]string{"LD_LIBRARY_PATH=" + job.Tools.LibDir}, "MYSQL_PWD", s.Password)
-	args := []string{"--protocol=tcp", "-h", s.Host, "-P", strconv.Itoa(s.Port), "-u", s.User, "--connect-timeout=30",
+	args := []string{"--protocol=tcp", "-h", s.Host, "-P", strconv.Itoa(s.Port), "-u", s.User,
 		"--single-transaction", "--routines", "--triggers", "--events", "--no-tablespaces", "--set-gtid-purged=OFF",
 		"--add-drop-database", "--databases"}
-	if err := d.Stream(ctx, env, out, filepath.Join(job.Tools.BinDir, "mysqldump"), append(args, s.Databases...)...); err != nil {
+	if err := stream(ctx, env, out, filepath.Join(job.Tools.BinDir, "mysqldump"), append(args, s.Databases...)...); err != nil {
 		return fmt.Errorf("mysqldump: %w", err)
 	}
 	return nil

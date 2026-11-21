@@ -52,13 +52,21 @@ func (m *Server) prepareStart(_ context.Context, s domain.Server) (domain.Launch
 }
 
 func (m *Server) health(ctx context.Context, s domain.Server) (domain.HealthState, error) {
-	if ok, _ := m.Running(ctx, s); !ok {
+	out, err := m.Run.Run(ctx, "systemctl", "show", "--property=ActiveState", "--value", unit(s))
+	if err != nil {
+		return domain.HealthStopped, err
+	}
+	switch strings.TrimSpace(string(out)) {
+	case "active":
+		if _, err := m.Run.Run(ctx, m.bin(s, "mysqladmin"), "--socket="+m.socket(s), "-uroot", "ping"); err != nil {
+			return domain.HealthStarting, nil
+		}
+		return domain.HealthReady, nil
+	case "activating", "reloading":
+		return domain.HealthStarting, nil
+	default:
 		return domain.HealthStopped, nil
 	}
-	if _, err := m.Run.Run(ctx, m.bin(s, "mysqladmin"), "--socket="+m.socket(s), "-uroot", "ping"); err != nil {
-		return domain.HealthStarting, nil
-	}
-	return domain.HealthReady, nil
 }
 
 // quiesce makes InnoDB finish purge and change-buffer merges before a clean
@@ -74,11 +82,12 @@ func (m *Server) quiesce(ctx context.Context, s domain.Server, mode domain.StopM
 }
 
 // verifyShutdown checks the error log says the last stop completed: a
-// "Shutdown complete" after the last time the server came up.
+// "Shutdown complete" after the last time the server started or came up.
 func (m *Server) verifyShutdown(_ context.Context, s domain.Server) error {
 	b, _ := os.ReadFile(m.errLog(s))
 	log := string(b)
-	up, down := strings.LastIndex(log, "ready for connections"), strings.LastIndex(log, "Shutdown complete")
+	up := max(strings.LastIndex(log, "ready for connections"), strings.LastIndex(log, "starting as process"))
+	down := strings.LastIndex(log, "Shutdown complete")
 	if down < 0 || down < up {
 		return fmt.Errorf("%w: %s: the error log does not end with a completed shutdown", domain.ErrUncleanShutdown, s.ID)
 	}

@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -84,5 +85,21 @@ func TestBaseRefreshDue_次回時刻を過ぎたら期限(t *testing.T) {
 	}
 	if !r.Due(r.NextRun()) {
 		t.Error("not due at the next run")
+	}
+}
+
+func TestBaseRefreshValidate_エンジンの宣言したsource_dumpに従う(t *testing.T) {
+	old := domain.DefaultRuntimes
+	domain.DefaultRuntimes = domain.NewBuiltinRuntimes()
+	defer func() { domain.DefaultRuntimes = old }()
+	_ = domain.DefaultRuntimes.Register(domain.EngineSpec{Engine: "dumpable", Capabilities: domain.RuntimeCaps{SourceDump: true}})
+	_ = domain.DefaultRuntimes.Register(domain.EngineSpec{Engine: "sealed"})
+
+	if err := validRefresh().Validate("dumpable"); err != nil {
+		t.Errorf("an engine that dumps sources = %v", err)
+	}
+	err := validRefresh().Validate("sealed")
+	if !errors.Is(err, domain.ErrInvalidRefresh) || !strings.Contains(err.Error(), `engine "sealed" cannot be refreshed`) {
+		t.Errorf("an engine without source_dump = %v", err)
 	}
 }

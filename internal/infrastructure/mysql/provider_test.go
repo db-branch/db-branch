@@ -230,3 +230,38 @@ func TestNewProvider_全フックを配線するとレジストリの宣言と�
 		t.Errorf("Describe %+v differs from the registry %+v", got.Capabilities, want.Capabilities)
 	}
 }
+
+func TestVerifyCleanShutdown_停止のあとの起動の途中で落ちていたら未完了(t *testing.T) {
+	f, p, inst := providerFixture(t)
+	appendFile(f.sys.errorLog, "[Server] /mysqld (mysqld 8.4.13) starting as process 11\n[Server] /mysqld: ready for connections.\n[Server] /mysqld: Shutdown complete (mysqld 8.4.13)\n")
+	if err := p.VerifyCleanShutdown(ctx, inst); err != nil {
+		t.Fatalf("clean stop = %v", err)
+	}
+	appendFile(f.sys.errorLog, "[Server] /mysqld (mysqld 8.4.13) starting as process 12\n[ERROR] InnoDB: recovery failed\n")
+	if err := p.VerifyCleanShutdown(ctx, inst); !errors.Is(err, domain.ErrUncleanShutdown) {
+		t.Errorf("died while starting after the last clean stop = %v, want ErrUncleanShutdown", err)
+	}
+}
+
+func TestHealth_systemctlの状態で停止_起動中_準備完了を見分けエラーは返す(t *testing.T) {
+	f, p, inst := providerFixture(t)
+	f.sys.active = true
+	f.sys.outputs = map[string]string{"--property=ActiveState": "activating\n"}
+	if h, _ := p.Health(ctx, inst); h != domain.HealthStarting {
+		t.Errorf("activating = %v, want starting", h)
+	}
+	if f.sys.called("mysqladmin") {
+		t.Errorf("mysqladmin asked while the unit is activating: %q", f.sys.calls)
+	}
+	for _, state := range []string{"inactive", "failed", "deactivating"} {
+		f.sys.outputs = map[string]string{"--property=ActiveState": state + "\n"}
+		if h, _ := p.Health(ctx, inst); h != domain.HealthStopped {
+			t.Errorf("%s = %v, want stopped", state, h)
+		}
+	}
+	f.sys.outputs = nil
+	f.sys.failOn = "--property=ActiveState"
+	if h, err := p.Health(ctx, inst); err == nil || h != domain.HealthStopped {
+		t.Errorf("systemctl failing: Health = %v, %v: want the failure reported", h, err)
+	}
+}

@@ -175,6 +175,10 @@ func (s *Service) buildBranch(ctx context.Context, br *domain.Branch, initSQL st
 	if err := s.Storage.Clone(ctx, domain.Snapshot{Dataset: s.sourceDataset(base), Name: br.Snapshot}, ds); err != nil {
 		return err
 	}
+	// A clone takes the properties of its new parent, not of its origin.
+	if err := s.applyEngineProps(ctx, br.Runtime, ds); err != nil {
+		return err
+	}
 	spec, err := s.branchSpec(ctx, *br, ds, false, true)
 	if err != nil {
 		return err
@@ -386,13 +390,15 @@ func (s *Service) Recover(ctx context.Context) error {
 				// Say why it is down; the next start retries (resumeFailedRestore).
 				err = errors.Join(err, s.markFailed(ctx, br, err))
 			}
-			if err == nil {
-				err = s.ownUser(ctx, br)
+			if err != nil {
+				errs = append(errs, err)
+			} else {
+				errs = append(errs, s.ownUser(ctx, br))
+				if !started {
+					errs = append(errs, s.hardenRunning(ctx, br))
+				}
 			}
-			if err == nil && !started {
-				err = s.hardenRunning(ctx, br)
-			}
-			errs = append(errs, err)
+			errs = append(errs, s.releaseFreeze(ctx, br))
 		case domain.BranchResetting:
 			_, err := s.doReset(ctx, br, nil)
 			errs = append(errs, err)

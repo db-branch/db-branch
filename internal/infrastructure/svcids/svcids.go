@@ -105,7 +105,7 @@ func (h *Host) StopServices(ctx context.Context) error {
 		return err
 	}
 	out, err := h.Run.Run(ctx, "systemctl", "list-units", "--plain", "--no-legend", "--all", "--type=service",
-		"db-branch-mysqld@*.service", "db-branch-postgres@*.service")
+		"db-branch-mysqld@*.service", "db-branch-postgres@*.service", "db-branch-rt@*.service")
 	if err != nil {
 		return err
 	}

@@ -378,8 +378,14 @@ func (s *Service) setAside(ctx context.Context, br domain.Branch, in restoreInte
 		if !ok {
 			return fmt.Errorf("snapshot %s of branch %s: %w", in.Source, br.Name, domain.ErrNotFound)
 		}
-		props := map[string]string{"canmount": "off", domain.PropLine: strconv.Itoa(in.NewLine),
-			domain.PropFrom: in.Source, domain.PropParent: strconv.Itoa(domain.SnapshotLine(lines, in.Source))}
+		props := map[string]string{}
+		for k, v := range engineProps(br.Runtime) { // the clone does not keep its origin's properties
+			props[k] = v
+		}
+		props["canmount"] = "off"
+		props[domain.PropLine] = strconv.Itoa(in.NewLine)
+		props[domain.PropFrom] = in.Source
+		props[domain.PropParent] = strconv.Itoa(domain.SnapshotLine(lines, in.Source))
 		if err := s.Lineage.CloneWith(ctx, domain.Snapshot{Dataset: ds, Name: in.Source}, pending, props); err != nil {
 			return err
 		}

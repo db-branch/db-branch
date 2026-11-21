@@ -247,7 +247,9 @@ func TestUpdateStatsとアップグレード_DBServerの任意ポートに委譲
 	hooks := runtimeprovider.Hooks{PrepareStart: func(context.Context, domain.Server) (domain.LaunchPlan, error) {
 		return domain.LaunchPlan{Command: "/bin/db", ServiceType: "notify"}, nil
 	}}
-	p := runtimeprovider.New(testSpec(), f, hooks)
+	reg := domain.NewRuntimeRegistry()
+	_ = reg.Register(domain.EngineSpec{Engine: "testdb"})
+	p := runtimeprovider.New(testSpec(), f, hooks).WithRegistry(reg)
 	i := testInstance()
 
 	if err := p.UpdateStats(ctx, i); err != nil {
@@ -289,7 +291,7 @@ func TestCheckUpgradePath_バージョン文字列をエンジンの規則で判
 		}
 		return nil
 	}})
-	p := runtimeprovider.New(testSpec(), &fakeServer{}, runtimeprovider.Hooks{}).WithRegistry(reg)
+	p := runtimeprovider.New(testSpec(), &fakeFull{}, runtimeprovider.Hooks{}).WithRegistry(reg)
 
 	if err := p.CheckUpgradePath(ctx, "1.0", "1.1"); err != nil {
 		t.Errorf("1.0 -> 1.1 = %v", err)
@@ -330,14 +332,14 @@ func TestPrepareStart_フックの失敗をそのまま返す(t *testing.T) {
 }
 
 func TestCheckUpgradePath_移行先の版が読めなければ断る(t *testing.T) {
-	p := runtimeprovider.New(testSpec(), &fakeServer{}, runtimeprovider.Hooks{}).WithRegistry(domain.NewRuntimeRegistry())
+	p := runtimeprovider.New(testSpec(), &fakeFull{}, runtimeprovider.Hooks{}).WithRegistry(domain.NewRuntimeRegistry())
 	// "testdb" is unknown to this registry: neither side parses
 	if err := p.CheckUpgradePath(ctx, "1.0", "1.1"); !errors.Is(err, domain.ErrInvalidRuntime) {
 		t.Errorf("unknown engine = %v", err)
 	}
 	reg := domain.NewRuntimeRegistry()
 	_ = reg.Register(domain.EngineSpec{Engine: "testdb", VersionPattern: `^1\.[0-9]$`})
-	q := runtimeprovider.New(testSpec(), &fakeServer{}, runtimeprovider.Hooks{}).WithRegistry(reg)
+	q := runtimeprovider.New(testSpec(), &fakeFull{}, runtimeprovider.Hooks{}).WithRegistry(reg)
 	if err := q.CheckUpgradePath(ctx, "1.0", "2.0"); !errors.Is(err, domain.ErrInvalidRuntime) {
 		t.Errorf("target outside the pattern = %v", err)
 	}
@@ -399,10 +401,111 @@ func TestPrepareStart_主ポートが割り当てられていなければ断る(
 	i := testInstance()
 	i.Ports = nil
 
-	if _, err := p.PrepareStart(ctx, i); err == nil || called {
+	if _, err := p.PrepareStart(ctx, i); !errors.Is(err, runtimeprovider.ErrNoPrimaryPort) || called {
 		t.Errorf("PrepareStart without a port = %v (hook called: %v)", err, called)
 	}
-	if _, _, err := runtimeprovider.New(testSpec(), &fakeFull{}, hooks).StartUpgraded(ctx, i, domain.Login{}); err == nil {
-		t.Error("StartUpgraded without a port succeeded")
+	if _, _, err := runtimeprovider.New(testSpec(), &fakeFull{}, hooks).StartUpgraded(ctx, i, domain.Login{}); !errors.Is(err, runtimeprovider.ErrNoPrimaryPort) {
+		t.Errorf("StartUpgraded without a port = %v", err)
+	}
+}
+
+func TestポートをDBServerに渡すメソッドは主ポート未割当を拒否し何も呼ばない(t *testing.T) {
+	hooks := runtimeprovider.Hooks{
+		PrepareStart: func(context.Context, domain.Server) (domain.LaunchPlan, error) {
+			return domain.LaunchPlan{Command: "/bin/db"}, nil
+		},
+		Health:  func(context.Context, domain.Server) (domain.HealthState, error) { return domain.HealthReady, nil },
+		Quiesce: func(context.Context, domain.Server, domain.StopMode) error { return nil },
+		Query: func(context.Context, domain.Server, domain.QueryRequest) (domain.QueryResult, error) {
+			return domain.QueryResult{}, nil
+		},
+	}
+	f := &fakeFull{}
+	p := runtimeprovider.New(testSpec(), f, hooks)
+	i := testInstance()
+	i.Ports = map[string]int{"sql": 0}
+	calls := map[string]func() error{
+		"Initialize":   func() error { return p.Initialize(ctx, i) },
+		"PrepareClone": func() error { return p.PrepareClone(ctx, i) },
+		"Health":       func() error { _, err := p.Health(ctx, i); return err },
+		"Quiesce":      func() error { return p.Quiesce(ctx, i, domain.StopClean) },
+		"CreateUser":   func() error { return p.CreateUser(ctx, i, "u", "p") },
+		"ExecAs":       func() error { return p.ExecAs(ctx, i, "u", "p", "x") },
+		"AdminAccess":  func() error { _, err := p.AdminAccess(ctx, i); return err },
+		"Query":        func() error { _, err := p.Query(ctx, i, domain.QueryRequest{}); return err },
+		"Load":         func() error { return p.Load(ctx, i, "/d.sql") },
+		"PrepareStart": func() error { _, err := p.PrepareStart(ctx, i); return err },
+		"FormatDSN":    func() error { _, err := p.FormatDSN(ctx, i, "h", "u", "p"); return err },
+		"UpdateStats":  func() error { return p.UpdateStats(ctx, i) },
+		"CheckUpgrade": func() error { _, err := p.CheckUpgrade(ctx, i, "1.3", domain.Login{}); return err },
+		"StartUpgraded": func() error {
+			_, _, err := p.StartUpgraded(ctx, i, domain.Login{})
+			return err
+		},
+	}
+	for name, call := range calls {
+		if err := call(); !errors.Is(err, runtimeprovider.ErrNoPrimaryPort) {
+			t.Errorf("%s = %v, want ErrNoPrimaryPort", name, err)
+		}
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("the server was called: %q", f.calls)
+	}
+	// without the primary port in the spec there is nothing to check
+	noPorts := domain.EngineSpec{Engine: "noports"}
+	q := runtimeprovider.New(noPorts, &fakeServer{}, runtimeprovider.Hooks{})
+	if err := q.Initialize(ctx, domain.InstanceSpec{ID: "x"}); err != nil {
+		t.Errorf("an engine without declared protocols = %v", err)
+	}
+}
+
+func TestポートがOSの範囲外ならどのメソッドも拒否する(t *testing.T) {
+	p := runtimeprovider.New(testSpec(), &fakeServer{}, runtimeprovider.Hooks{})
+	for _, port := range []int{-1, 0, 65536} {
+		i := testInstance()
+		i.Ports = map[string]int{"sql": port}
+		if err := p.Initialize(ctx, i); !errors.Is(err, runtimeprovider.ErrNoPrimaryPort) {
+			t.Errorf("port %d: Initialize = %v", port, err)
+		}
+		if _, err := p.FormatDSN(ctx, i, "h", "u", "p"); !errors.Is(err, runtimeprovider.ErrNoPrimaryPort) {
+			t.Errorf("port %d: FormatDSN = %v", port, err)
+		}
+	}
+	i := testInstance()
+	i.Ports = map[string]int{"sql": 65535}
+	if err := p.Initialize(ctx, i); err != nil {
+		t.Errorf("the highest port = %v", err)
+	}
+}
+
+func TestCheckUpgradePath_アップグレードを持たないサーバーならErrFeatureNotSupported(t *testing.T) {
+	p := runtimeprovider.New(testSpec(), &fakeServer{}, runtimeprovider.Hooks{})
+	if err := p.CheckUpgradePath(ctx, "1.0", "1.1"); !errors.Is(err, domain.ErrFeatureNotSupported) {
+		t.Errorf("CheckUpgradePath = %v", err)
+	}
+}
+
+func TestCheckUpgrade_移行先の版が読めなければサーバーに渡さず断る(t *testing.T) {
+	reg := domain.NewRuntimeRegistry()
+	_ = reg.Register(domain.EngineSpec{Engine: "testdb"})
+	f := &fakeFull{}
+	p := runtimeprovider.New(testSpec(), f, runtimeprovider.Hooks{}).WithRegistry(reg)
+
+	for _, v := range []string{"latest", "1.3/../x", ""} {
+		if _, err := p.CheckUpgrade(ctx, testInstance(), v, domain.Login{}); !errors.Is(err, domain.ErrInvalidRuntime) {
+			t.Errorf("CheckUpgrade to %q = %v, want ErrInvalidRuntime", v, err)
+		}
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("the server was asked: %q", f.calls)
+	}
+}
+
+func TestDescribe_このアダプタが実装しない任意機能はtrueと宣言されていてもfalseにする(t *testing.T) {
+	spec := testSpec()
+	spec.Capabilities.LiveFreeze, spec.Capabilities.InstanceMetrics = true, true
+	got, _ := runtimeprovider.New(spec, &fakeFull{}, runtimeprovider.Hooks{}).Describe(ctx)
+	if got.Capabilities.LiveFreeze || got.Capabilities.InstanceMetrics {
+		t.Errorf("capabilities = %+v: PreFreeze and InstanceMetrics always answer ErrFeatureNotSupported here", got.Capabilities)
 	}
 }

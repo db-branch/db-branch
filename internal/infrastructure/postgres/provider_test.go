@@ -59,6 +59,9 @@ func TestPrepareStart_envを書き_unitが実行するpostgresのコマンドを
 			t.Errorf("args lack %q: %s", want, args)
 		}
 	}
+	if plan.KillMode != "mixed" || plan.NotifyAccess != "main" {
+		t.Errorf("the unit's KillMode and NotifyAccess = %q, %q", plan.KillMode, plan.NotifyAccess)
+	}
 	if plan.ServiceType != "notify" || plan.KillSignal != "SIGINT" || plan.TimeoutStopSec != 900 {
 		t.Errorf("unit settings = %+v", plan)
 	}
@@ -220,5 +223,65 @@ func TestNewProvider_全フックを配線するとレジストリの宣言と�
 	want, _ := domain.DefaultRuntimes.Spec(domain.Postgres)
 	if got.Capabilities != want.Capabilities {
 		t.Errorf("Describe %+v differs from the registry %+v", got.Capabilities, want.Capabilities)
+	}
+}
+
+func TestPrepareStart_メンテナンス中はTCPを待ち受けずソケットだけにする(t *testing.T) {
+	f, p, inst := providerFixture(t)
+	inst.Maintenance = true
+
+	plan, err := p.PrepareStart(ctx, inst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(plan.Args, "listen_addresses=") {
+		t.Errorf("args = %q, want an empty listen_addresses", plan.Args)
+	}
+	if env := read(t, filepath.Join(f.state, "base-prod", "env")); !strings.Contains(env, "PG_BIND=\n") {
+		t.Errorf("env = %q, want PG_BIND empty", env)
+	}
+	inst.Maintenance = false
+	plan, _ = p.PrepareStart(ctx, inst)
+	if !contains(plan.Args, "listen_addresses=0.0.0.0") {
+		t.Errorf("normal start args = %q", plan.Args)
+	}
+	if env := read(t, filepath.Join(f.state, "base-prod", "env")); !strings.Contains(env, "PG_BIND=0.0.0.0\n") {
+		t.Errorf("env = %q", env)
+	}
+}
+
+func contains(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestHealth_Type_notifyの起動中_activating_は起動中でありpg_isreadyは呼ばない(t *testing.T) {
+	f, p, inst := providerFixture(t)
+	f.sys.active = true
+	f.sys.outputs = map[string]string{"--property=ActiveState": "activating\n"}
+
+	if h, _ := p.Health(ctx, inst); h != domain.HealthStarting {
+		t.Errorf("activating = %v, want starting", h)
+	}
+	if f.sys.called("pg_isready") {
+		t.Errorf("pg_isready asked while the unit is still activating: %q", f.sys.calls)
+	}
+	for _, state := range []string{"inactive", "failed", "deactivating"} {
+		f.sys.outputs = map[string]string{"--property=ActiveState": state + "\n"}
+		if h, _ := p.Health(ctx, inst); h != domain.HealthStopped {
+			t.Errorf("%s = %v, want stopped", state, h)
+		}
+	}
+}
+
+func TestHealth_systemctlに聞けなければ停止と決めつけずエラーを返す(t *testing.T) {
+	f, p, inst := providerFixture(t)
+	f.sys.failOn = "--property=ActiveState"
+	if h, err := p.Health(ctx, inst); err == nil || h != domain.HealthStopped {
+		t.Errorf("Health = %v, %v: want the failure reported", h, err)
 	}
 }

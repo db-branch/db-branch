@@ -186,7 +186,7 @@ func (z *zsim) CloneWith(_ context.Context, origin domain.Snapshot, name string,
 	}
 	d := &zds{origin: origin.String(), props: map[string]string{}, mounted: props["canmount"] != "off", data: s.data}
 	for k, v := range props {
-		if strings.Contains(k, ":") {
+		if strings.Contains(k, ":") || k == "recordsize" {
 			d.props[k] = v
 		}
 	}
@@ -351,7 +351,7 @@ func (z *zsim) SetProps(_ context.Context, target string, props map[string]strin
 	}
 	for k, v := range props {
 		switch {
-		case strings.Contains(k, ":"):
+		case strings.Contains(k, ":"), k == "recordsize":
 			dst[k] = v
 		case k == "canmount" && snapName == "":
 			d.props["canmount"] = v

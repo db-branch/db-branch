@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
-	"github.com/db-branch/db-branch/internal/infrastructure/sqlquery"
 	"github.com/db-branch/db-branch/pkg/ext"
 )
 
@@ -22,11 +21,6 @@ type Tokens interface {
 	CreatePersonal(ctx context.Context, p ext.Principal, name string, ttl time.Duration) (string, domain.APIToken, error)
 	ListOwned(ctx context.Context, owner string) ([]domain.APIToken, error)
 	RevokeOwned(ctx context.Context, owner, id string) error
-}
-
-// Querier runs a statement on a branch.
-type Querier interface {
-	Run(ctx context.Context, t sqlquery.Target, q string, maxRows int) (sqlquery.Result, error)
 }
 
 type tokenJSON struct {
@@ -117,7 +111,7 @@ func (s *Server) queryBranch(w http.ResponseWriter, r *http.Request, svc Branche
 	if !decode(w, r, &in) {
 		return
 	}
-	if s.Query == nil {
+	if s.Providers == nil {
 		writeError(w, http.StatusServiceUnavailable, "not_initialized", "queries are not available on this node")
 		return
 	}
@@ -129,12 +123,32 @@ func (s *Server) queryBranch(w http.ResponseWriter, r *http.Request, svc Branche
 		fail(w, err)
 		return
 	}
-	res, err := s.Query.Run(r.Context(), sqlquery.Target{Engine: string(b.Runtime.Engine), Host: s.hostOf(b.Node), Port: b.Port, User: b.User, Password: b.Password}, in.SQL, in.MaxRows)
+	p, spec, err := s.providerWith(r.Context(), b.Runtime.Engine, "query")
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	res, err := p.Query(r.Context(), b.Instance(spec), domain.QueryRequest{Host: s.hostOf(b.Node), User: b.User, Password: b.Password, SQL: in.SQL, MaxRows: in.MaxRows})
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "query_failed", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// providerWith finds the runtime provider of an engine and checks the engine
+// declares the feature: a missing provider or a false capability is
+// ErrFeatureNotSupported (409), never a quiet fallback.
+func (s *Server) providerWith(ctx context.Context, e domain.Engine, feature string) (domain.RuntimeProvider, domain.EngineSpec, error) {
+	p, ok := s.Providers.Provider(e)
+	if !ok {
+		return nil, domain.EngineSpec{}, domain.FeatureNotSupported(feature)
+	}
+	spec, err := p.Describe(ctx)
+	if err != nil {
+		return nil, domain.EngineSpec{}, err
+	}
+	return p, spec, spec.Capabilities.Require(feature)
 }
 
 // Personal tokens (account page): each signed-in person makes tokens that

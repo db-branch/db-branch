@@ -35,8 +35,8 @@ func NewProvider(srv *Server, extra runtimeprovider.Hooks) *runtimeprovider.Prov
 }
 
 // prepareStart writes the env file and says how the unit launches postgres
-// (what db-branch-postgres@.service runs). The unit also sets KillMode=mixed
-// and NotifyAccess=main, which a LaunchPlan cannot yet express.
+// (what db-branch-postgres@.service runs, with its Type, KillSignal, KillMode
+// and NotifyAccess).
 func (p *Server) prepareStart(_ context.Context, s domain.Server) (domain.LaunchPlan, error) {
 	if p.CheckOwner != nil {
 		if err := p.CheckOwner(s.DataDir); err != nil {
@@ -50,7 +50,7 @@ func (p *Server) prepareStart(_ context.Context, s domain.Server) (domain.Launch
 		Command: filepath.Join(p.RuntimeDir(s.Runtime), "bin", "postgres"),
 		Args: []string{
 			"-D", s.DataDir, "-p", fmt.Sprint(s.Port),
-			"-c", "listen_addresses=" + p.Bind,
+			"-c", "listen_addresses=" + p.listen(s),
 			"-c", "unix_socket_directories=" + p.sockDir(s),
 			"-c", fmt.Sprintf("shared_buffers=%dMB", s.MemoryMB),
 			"-c", "jit=off",
@@ -59,18 +59,28 @@ func (p *Server) prepareStart(_ context.Context, s domain.Server) (domain.Launch
 		ServiceType: "notify",
 		// SIGINT is PostgreSQL's fast shutdown: it writes a shutdown checkpoint.
 		KillSignal:     "SIGINT",
+		KillMode:       "mixed",
+		NotifyAccess:   "main",
 		TimeoutStopSec: 900,
 	}, nil
 }
 
 func (p *Server) health(ctx context.Context, s domain.Server) (domain.HealthState, error) {
-	if ok, _ := p.Running(ctx, s); !ok {
+	out, err := p.Run.Run(ctx, "systemctl", "show", "--property=ActiveState", "--value", unit(s))
+	if err != nil {
+		return domain.HealthStopped, err
+	}
+	switch strings.TrimSpace(string(out)) {
+	case "active":
+		if !p.ready(ctx, s) {
+			return domain.HealthStarting, nil
+		}
+		return domain.HealthReady, nil
+	case "activating", "reloading":
+		return domain.HealthStarting, nil
+	default:
 		return domain.HealthStopped, nil
 	}
-	if !p.ready(ctx, s) {
-		return domain.HealthStarting, nil
-	}
-	return domain.HealthReady, nil
 }
 
 // verifyShutdown reads the control file: only "shut down" means the last stop

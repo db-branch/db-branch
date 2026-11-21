@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/sqlquery"
 )
 
@@ -114,5 +115,40 @@ func TestRun_失敗とエンジン違い(t *testing.T) {
 	}
 	if _, err := r.Run(ctx, sqlquery.Target{Engine: "mysql"}, "/* unclosed", 1); err != nil {
 		t.Errorf("odd comment: %v", err)
+	}
+}
+
+func TestQueryHook_RuntimeProviderのQueryとして従来と同じ結果を返す(t *testing.T) {
+	r, dsns := runner(2)
+	hook := r.QueryHook()
+	srv := domain.Server{ID: "branch-x", Runtime: domain.RuntimeRef{Engine: domain.MySQL, Version: "8.4.13"}, Port: 40001}
+
+	res, err := hook(context.Background(), srv, domain.QueryRequest{Host: "192.0.2.10", User: "u", Password: "pw", SQL: "SELECT id, name FROM t", MaxRows: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Rows) != 1 || !res.Truncated || res.Columns[0] != "id" {
+		t.Errorf("result = %+v", res)
+	}
+	if len(*dsns) != 1 || !strings.Contains((*dsns)[0], "192.0.2.10:40001") || !strings.Contains((*dsns)[0], "u:pw@") {
+		t.Errorf("dsn = %q", *dsns)
+	}
+	aff, err := hook(context.Background(), srv, domain.QueryRequest{Host: "h", User: "u", Password: "p", SQL: "DELETE FROM t"})
+	if err != nil || aff.Affected == nil || *aff.Affected != 3 {
+		t.Errorf("update = %+v, %v", aff, err)
+	}
+	if _, err := hook(context.Background(), srv, domain.QueryRequest{SQL: "fail"}); err == nil {
+		t.Error("a failing statement succeeded")
+	}
+}
+
+func TestQueryHook_ホストが空ならこのノードのループバックに繋ぐ(t *testing.T) {
+	r, dsns := runner(1)
+	srv := domain.Server{Runtime: domain.RuntimeRef{Engine: domain.Postgres, Version: "18.6"}, Port: 40002}
+	if _, err := r.QueryHook()(context.Background(), srv, domain.QueryRequest{User: "u", Password: "p", SQL: "SELECT 1"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains((*dsns)[0], "127.0.0.1:40002") {
+		t.Errorf("dsn = %q", *dsns)
 	}
 }

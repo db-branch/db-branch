@@ -67,13 +67,13 @@ func TestSetIDs_コマンドの失敗を返す(t *testing.T) {
 }
 
 func TestStopServices_エージェントとDBサーバーのユニットを止める(t *testing.T) {
-	r := &fakeRun{out: map[string]string{"systemctl list-units": "db-branch-mysqld@a.service loaded active running x\n\ndb-branch-postgres@b.service loaded failed failed y\n"}}
+	r := &fakeRun{out: map[string]string{"systemctl list-units": "db-branch-mysqld@a.service loaded active running x\n\ndb-branch-postgres@b.service loaded failed failed y\ndb-branch-rt@c.service loaded active running z\n"}}
 	if err := (&svcids.Host{Run: r, Systemd: true}).StopServices(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"systemctl stop db-branch.service",
-		"systemctl list-units --plain --no-legend --all --type=service db-branch-mysqld@*.service db-branch-postgres@*.service",
-		"systemctl stop db-branch-mysqld@a.service", "systemctl stop db-branch-postgres@b.service"}
+		"systemctl list-units --plain --no-legend --all --type=service db-branch-mysqld@*.service db-branch-postgres@*.service db-branch-rt@*.service",
+		"systemctl stop db-branch-mysqld@a.service", "systemctl stop db-branch-postgres@b.service", "systemctl stop db-branch-rt@c.service"}
 	if !reflect.DeepEqual(r.calls, want) {
 		t.Errorf("calls = %v", r.calls)
 	}

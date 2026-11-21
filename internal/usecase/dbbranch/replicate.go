@@ -113,6 +113,9 @@ func (s *Service) replicateBase(ctx context.Context, base domain.Base) error {
 			return err
 		}
 	}
+	if err := s.applyEngineProps(ctx, base.Runtime, ds); err != nil {
+		return err
+	}
 	var errs []error
 	for _, snap := range base.Snapshots {
 		if held[snap.Name] && !base.HasReplica(snap.Name, s.Node) {

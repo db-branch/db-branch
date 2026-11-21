@@ -6,10 +6,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/infrastructure/runtimeprovider"
 	"github.com/db-branch/db-branch/internal/infrastructure/srcdump"
 )
 
@@ -37,9 +40,21 @@ func job(engine domain.Engine, dbs ...string) domain.SourceDumpJob {
 	}
 }
 
+// providers wires the dump hooks of both engines into runtime providers, as the agent does.
+func providers(r *recorder) domain.ProviderSet {
+	set := domain.ProviderSet{}
+	for e, hook := range map[domain.Engine]func(srcdump.StreamFunc) func(context.Context, domain.SourceDumpJob, string) error{
+		domain.Postgres: srcdump.PostgresDump, domain.MySQL: srcdump.MySQLDump,
+	} {
+		spec, _ := domain.DefaultRuntimes.Spec(e)
+		set[e] = runtimeprovider.New(spec, nil, runtimeprovider.Hooks{DumpSource: hook(r.stream)})
+	}
+	return set
+}
+
 func newDumper(t *testing.T) (srcdump.Dumper, *recorder) {
 	r := &recorder{}
-	return srcdump.Dumper{WorkDir: filepath.Join(t.TempDir(), "work"), Stream: r.stream}, r
+	return srcdump.Dumper{WorkDir: filepath.Join(t.TempDir(), "work"), Providers: providers(r)}, r
 }
 
 func TestDump_PostgreSQLはデータベースごとにpg_dumpして一つの0600ファイルにまとめる(t *testing.T) {
@@ -88,6 +103,10 @@ func TestDump_MySQLはmysqldumpに一度で全データベースを渡す(t *tes
 		if !strings.Contains(args, want) {
 			t.Errorf("args %q lack %q", args, want)
 		}
+	}
+	// mysqldump (5.7, 8.0 and 8.4) refuses --connect-timeout: "unknown variable"
+	if strings.Contains(args, "connect-timeout") {
+		t.Errorf("args %q contain an option mysqldump does not know", args)
 	}
 	if got := strings.Join(r.calls[0].env, " "); !strings.Contains(got, "MYSQL_PWD=hunter2") {
 		t.Errorf("env = %q", got)
@@ -172,5 +191,127 @@ func TestDump_MySQLの失敗とファイルを作れない作業ディレクト�
 	d.WorkDir = ro
 	if _, err := d.Dump(context.Background(), job(domain.Postgres, "app")); err == nil {
 		t.Error("read-only work dir accepted")
+	}
+}
+
+func TestDump_ダンプを実装していないプロバイダにはErrFeatureNotSupportedで断る(t *testing.T) {
+	d, r := newDumper(t)
+	spec, _ := domain.DefaultRuntimes.Spec(domain.MySQL)
+	d.Providers = domain.ProviderSet{domain.MySQL: runtimeprovider.New(spec, nil, runtimeprovider.Hooks{})}
+
+	if _, err := d.Dump(context.Background(), job(domain.MySQL, "app")); !errors.Is(err, domain.ErrFeatureNotSupported) {
+		t.Errorf("Dump = %v, want ErrFeatureNotSupported", err)
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("a dump tool ran: %+v", r.calls)
+	}
+	if left, _ := os.ReadDir(d.WorkDir); len(left) != 0 {
+		t.Errorf("left behind: %v", left)
+	}
+}
+
+func TestDump_未登録のエンジンはErrUnsupportedEngine(t *testing.T) {
+	d, _ := newDumper(t)
+	if _, err := d.Dump(context.Background(), job(domain.Engine("sqlite"), "app")); !errors.Is(err, domain.ErrUnsupportedEngine) {
+		t.Errorf("Dump = %v, want ErrUnsupportedEngine", err)
+	}
+}
+
+func TestDump_プロバイダが宣言を返せなければ失敗する(t *testing.T) {
+	d, _ := newDumper(t)
+	d.Providers = domain.ProviderSet{domain.MySQL: brokenProvider{}}
+	if _, err := d.Dump(context.Background(), job(domain.MySQL, "app")); err == nil {
+		t.Error("a provider that cannot describe itself was used")
+	}
+}
+
+type brokenProvider struct{ domain.RuntimeProvider }
+
+func (brokenProvider) Describe(context.Context) (domain.EngineSpec, error) {
+	return domain.EngineSpec{}, errors.New("not ready")
+}
+
+func TestPostgresDumpとMySQLDump_指定のファイルに書き込み既存の内容は残さない(t *testing.T) {
+	r := &recorder{}
+	out := filepath.Join(t.TempDir(), "out.sql")
+	if err := os.WriteFile(out, []byte("stale content that is longer than the dump"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := srcdump.MySQLDump(r.stream)(context.Background(), job(domain.MySQL, "app"), out); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(out)
+	if string(b) != "-- dump app\n" {
+		t.Errorf("dump = %q", b)
+	}
+	if err := srcdump.PostgresDump(r.stream)(context.Background(), job(domain.Postgres, "app"), filepath.Join(t.TempDir(), "missing", "out.sql")); err == nil {
+		t.Error("an unwritable target was accepted")
+	}
+}
+
+func TestDump_プロバイダが未設定でもpanicせずErrUnsupportedEngine(t *testing.T) {
+	d := srcdump.Dumper{WorkDir: filepath.Join(t.TempDir(), "work")}
+	if _, err := d.Dump(context.Background(), job(domain.MySQL, "app")); !errors.Is(err, domain.ErrUnsupportedEngine) {
+		t.Errorf("Dump = %v, want ErrUnsupportedEngine", err)
+	}
+}
+
+func TestDump_固まったダンプは時間の上限で打ち切り書きかけのファイルを残さない(t *testing.T) {
+	spec, _ := domain.DefaultRuntimes.Spec(domain.MySQL)
+	hang := func(ctx context.Context, _ domain.SourceDumpJob, _ string) error {
+		<-ctx.Done() // a source that accepts the connection and never answers
+		return ctx.Err()
+	}
+	d := srcdump.Dumper{
+		WorkDir:   filepath.Join(t.TempDir(), "work"),
+		Providers: domain.ProviderSet{domain.MySQL: runtimeprovider.New(spec, nil, runtimeprovider.Hooks{DumpSource: hang})},
+		Timeout:   20 * time.Millisecond,
+	}
+	caller, cancel := context.WithTimeout(context.Background(), 3*time.Second) // only so a missing limit fails the test instead of hanging it
+	defer cancel()
+
+	start := time.Now()
+	path, err := d.Dump(caller, job(domain.MySQL, "app"))
+	if !errors.Is(err, context.DeadlineExceeded) || path != "" || time.Since(start) > time.Second {
+		t.Fatalf("Dump = %q, %v after %s, want the 20ms limit to end it", path, err, time.Since(start))
+	}
+	if left, _ := os.ReadDir(d.WorkDir); len(left) != 0 {
+		t.Errorf("left behind: %v", left)
+	}
+}
+
+func TestDump_MySQLの引数は期待どおりの並びと内容で完全に一致する(t *testing.T) {
+	d, r := newDumper(t)
+	path, err := d.Dump(context.Background(), job(domain.MySQL, "app", "billing"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Discard(path)
+
+	want := []string{"--protocol=tcp", "-h", "db.example.com", "-P", "5432", "-u", "dumper",
+		"--single-transaction", "--routines", "--triggers", "--events", "--no-tablespaces", "--set-gtid-purged=OFF",
+		"--add-drop-database", "--databases", "app", "billing"}
+	if !reflect.DeepEqual(r.calls[0].args, want) {
+		t.Errorf("args = %q\nwant   %q", r.calls[0].args, want)
+	}
+	if !reflect.DeepEqual(r.calls[0].env, []string{"LD_LIBRARY_PATH=/rt/lib", "MYSQL_PWD=hunter2"}) {
+		t.Errorf("env = %q", r.calls[0].env)
+	}
+}
+
+func TestDump_上限で打ち切られたときはツールのエラーに加えて時間切れだと分かる(t *testing.T) {
+	spec, _ := domain.DefaultRuntimes.Spec(domain.MySQL)
+	killed := func(ctx context.Context, _ domain.SourceDumpJob, _ string) error {
+		<-ctx.Done()
+		return errors.New("signal: killed") // what exec.CommandContext reports, without the context's error
+	}
+	d := srcdump.Dumper{
+		WorkDir:   filepath.Join(t.TempDir(), "work"),
+		Providers: domain.ProviderSet{domain.MySQL: runtimeprovider.New(spec, nil, runtimeprovider.Hooks{DumpSource: killed})},
+		Timeout:   20 * time.Millisecond,
+	}
+	_, err := d.Dump(context.Background(), job(domain.MySQL, "app"))
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "signal: killed") {
+		t.Errorf("Dump = %v, want the tool's error and the deadline", err)
 	}
 }

@@ -85,10 +85,13 @@ type ResourceLimits struct {
 }
 
 // InstanceSpec is the run specification of one instance, given by the core to
-// a provider. The built-in MySQL and PostgreSQL providers still take their
-// directories, bind address and limits other than MemoryMB from their own
-// configuration: of this spec they use ID, Runtime, DataDir, the primary port,
-// Limits.MemoryMB, Extra, LegacyAuth and Maintenance (Phase 2 hands over the rest).
+// a provider. The built-in MySQL and PostgreSQL providers use ID, Runtime,
+// DataDir, the primary port, Limits.MemoryMB, Extra, LegacyAuth and Maintenance
+// (no network: MySQL skip-networking, PostgreSQL an empty listen_addresses).
+// Their directories (StateDir, RunDir, RuntimeDir) and bind address come from
+// their own configuration, and the other limits (MaxConnections, NoFile,
+// CPUQuota) belong to the systemd unit, which only the db-branch-rt@ units of
+// external engines (Phase 3) take from the core.
 type InstanceSpec struct {
 	// ID is unique per node, e.g. "base-prod" or "branch-feature-x".
 	ID      string
@@ -144,6 +147,13 @@ type LaunchPlan struct {
 	KillSignal string
 	// TimeoutStopSec is how long a stop may take, in seconds.
 	TimeoutStopSec int
+	// KillMode is systemd's KillMode= (control-group, mixed, process or none);
+	// empty: the unit'"'"'s default. PostgreSQL asks for mixed: SIGINT to the
+	// postmaster, then SIGKILL to what is left.
+	KillMode string
+	// NotifyAccess is systemd's NotifyAccess= (none, main, exec or all) for
+	// ServiceType notify; empty: the unit'"'"'s default.
+	NotifyAccess string
 }
 
 // ErrInvalidLaunchPlan is returned for a LaunchPlan that could not be written
@@ -155,6 +165,8 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var (
 	serviceTypes = map[string]bool{"": true, "simple": true, "exec": true, "notify": true, "forking": true}
 	killSignals  = map[string]bool{"": true, "SIGTERM": true, "SIGINT": true, "SIGQUIT": true, "SIGHUP": true}
+	killModes    = map[string]bool{"": true, "control-group": true, "mixed": true, "process": true, "none": true}
+	notifyAccess = map[string]bool{"": true, "none": true, "main": true, "exec": true, "all": true}
 )
 
 // Validate refuses a plan a provider could use to inject systemd directives
@@ -192,6 +204,12 @@ func (p LaunchPlan) Validate() error {
 	if !killSignals[p.KillSignal] {
 		return bad("kill signal %q", p.KillSignal)
 	}
+	if !killModes[p.KillMode] {
+		return bad("kill mode %q", p.KillMode)
+	}
+	if !notifyAccess[p.NotifyAccess] {
+		return bad("notify access %q", p.NotifyAccess)
+	}
 	if p.TimeoutStopSec < 0 {
 		return bad("negative stop timeout")
 	}
@@ -216,6 +234,9 @@ type CatalogEntry struct {
 
 // QueryRequest is one statement to run on an instance as a login.
 type QueryRequest struct {
+	// Host is the address the instance is reached at (the node it runs on);
+	// empty: this node.
+	Host           string
 	User, Password string
 	SQL            string
 	MaxRows        int
@@ -223,13 +244,13 @@ type QueryRequest struct {
 
 // QueryResult is what a statement returned.
 type QueryResult struct {
-	Columns []string
+	Columns []string `json:"columns,omitempty"`
 	// Rows hold values as text (NULL is nil).
-	Rows      [][]*string
-	Truncated bool
+	Rows      [][]*string `json:"rows,omitempty"`
+	Truncated bool        `json:"truncated,omitempty"`
 	// Affected is set for statements that return no rows.
-	Affected *int64
-	Millis   int64
+	Affected *int64 `json:"affected,omitempty"`
+	Millis   int64  `json:"millis"`
 }
 
 // MetricSample is one instance metric.
@@ -322,4 +343,30 @@ func (UnsupportedFeatures) Load(context.Context, InstanceSpec, string) error {
 }
 func (UnsupportedFeatures) InstanceMetrics(context.Context, InstanceSpec) ([]MetricSample, error) {
 	return nil, FeatureNotSupported("instance_metrics")
+}
+
+// RuntimeProviders finds the provider of an engine.
+type RuntimeProviders interface {
+	Provider(e Engine) (RuntimeProvider, bool)
+}
+
+// ProviderSet is a RuntimeProviders over a map.
+type ProviderSet map[Engine]RuntimeProvider
+
+// Provider returns the provider registered for e.
+func (p ProviderSet) Provider(e Engine) (RuntimeProvider, bool) {
+	rp, ok := p[e]
+	return rp, ok
+}
+
+// Instance is the branch as a provider sees it. Only what a client needs is
+// known here: the port; directories and limits are the provider's own.
+func (b Branch) Instance(spec EngineSpec) InstanceSpec {
+	ports := map[string]int{}
+	for _, p := range spec.Protocols {
+		if p.Primary {
+			ports[p.Name] = b.Port
+		}
+	}
+	return InstanceSpec{ID: "branch-" + b.Name.String(), Runtime: b.Runtime, Ports: ports}
 }
