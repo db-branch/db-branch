@@ -357,6 +357,10 @@ const sessionCookie = "dbb_session"
 
 func (s *Server) requireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hasHeaderFold(r.Header, forwardedHeader, principalHeader) {
+			r = r.Clone(r.Context())
+			delHeadersFold(r.Header, forwardedHeader, principalHeader)
+		}
 		if r.URL.Path == "/v1/auth/login" {
 			next.ServeHTTP(w, r)
 			return

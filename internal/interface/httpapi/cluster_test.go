@@ -7,7 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -219,6 +223,7 @@ func Test転送されてきたのに担当が他ならもう転送しない(t *t
 	f, c := remoteFixture(t)
 	resp, body := send(t, f.srv.Handler(true), "POST", "/v1/branches/there/reset", nil, func(r *http.Request) {
 		r.Header.Set("X-Db-Branch-Forwarded", "n3")
+		r.Header.Set("X-Db-Branch-Principal", `{"id":"local","name":"local","roles":["admin"]}`)
 	})
 	if resp.StatusCode != 409 || errCode(body) != "other_node" || len(c.forwarded) != 0 {
 		t.Errorf("%d %v %v", resp.StatusCode, body, c.forwarded)
@@ -742,5 +747,178 @@ func TestStorage_ノードの使用量を返し_別のノードへは転送す�
 	g.do(t, "GET", "/v1/nodes/n2/storage", nil)
 	if len(c.forwarded) != 1 || !strings.HasPrefix(c.forwarded[0], "n2 GET /v1/nodes/n2/storage") {
 		t.Errorf("forwarded %v", c.forwarded)
+	}
+}
+
+func TestHTTPAPI_偽装Forwardedヘッダでノード転送とライセンスリーダー転送を妨害できない(t *testing.T) {
+	// 1. Spoofed X-Db-Branch-Forwarded on the public listener must not block node forwarding
+	//    or leak a forged principal, and forwardTo must not mutate the incoming request headers.
+	f, c := remoteFixture(t)
+	sink := &recordingSink{}
+	f.srv.Ext = ext.Module{AuditSink: sink}
+	cookie, csrf := login(t, f)
+	h := f.srv.Handler(false)
+
+	req := httptest.NewRequest("POST", "/v1/branches/there/reset", nil)
+	withSession(cookie, csrf)(req)
+	req.Header.Set("X-Db-Branch-Forwarded", "spoof")
+	req.Header.Set("X-Db-Branch-Principal", `{"id":"local","name":"local","roles":["admin"]}`)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 202 || len(c.forwarded) != 1 || !strings.HasPrefix(c.forwarded[0], "n2 POST /v1/branches/there/reset via=node1") {
+		t.Fatalf("spoofed node forward: %d %s forwarded=%v", rec.Code, rec.Body.String(), c.forwarded)
+	}
+	if len(c.principals) != 1 || !strings.Contains(c.principals[0], `"id":"admin"`) {
+		t.Errorf("forwarded principal = %v, want admin", c.principals)
+	}
+	if got := sink.actions(); len(got) != 2 || got[1] != "branch.reset:admin:branch/there:ok" {
+		t.Errorf("origin audit = %v", got)
+	}
+
+	// Normal (non-spoofed) forwarding must also keep the original request headers untouched.
+	plainReq := httptest.NewRequest("POST", "/v1/branches/there/reset", nil)
+	withSession(cookie, csrf)(plainReq)
+	plainRec := httptest.NewRecorder()
+	h.ServeHTTP(plainRec, plainReq)
+	if plainRec.Code != 202 {
+		t.Fatalf("plain forward: %d %s", plainRec.Code, plainRec.Body.String())
+	}
+	if plainReq.Header.Get("X-Db-Branch-Forwarded") != "" || plainReq.Header.Get("X-Db-Branch-Principal") != "" {
+		t.Errorf("forwardTo mutated incoming request headers: forwarded=%q principal=%q",
+			plainReq.Header.Get("X-Db-Branch-Forwarded"), plainReq.Header.Get("X-Db-Branch-Principal"))
+	}
+
+	// 2. Spoofed X-Db-Branch-Forwarded on the public listener must not block license leader forwarding.
+	lf := newFixture(t)
+	lf.srv.Licensing = &fakeLicensing{stored: "good"}
+	lf.srv.Renewal = &fakeRenewal{leading: false}
+	lc := &leaderCluster{replyCode: 200, reply: `{"enabled":true,"last_result":"not_yet"}`}
+	lc.status = httpapi.ClusterStatus{Mode: "cluster", Leader: "n2"}
+	lf.srv.Cluster = lc
+	lCookie, lCSRF := login(t, lf)
+	lh := lf.srv.Handler(false)
+	spoofSession := func(r *http.Request) {
+		withSession(lCookie, lCSRF)(r)
+		r.Header.Set("X-Db-Branch-Forwarded", "spoof")
+		r.Header.Set("X-Db-Branch-Principal", `{"id":"local","name":"local","roles":["admin"]}`)
+	}
+
+	resp, body := send(t, lh, "GET", "/v1/license", nil, spoofSession)
+	if resp.StatusCode != 200 || body["renewal"].(map[string]any)["last_result"] != "not_yet" {
+		t.Fatalf("GET /v1/license: %d %v", resp.StatusCode, body)
+	}
+	if len(lc.seen) != 1 || lc.seen[0] != "n2 GET /v1/license/renewal via=node1" {
+		t.Errorf("license seen = %v", lc.seen)
+	}
+	lc.seen = nil
+	resp, _ = send(t, lh, "GET", "/v1/license/renewal", nil, spoofSession)
+	if resp.StatusCode != 200 || len(lc.seen) != 1 || lc.seen[0] != "n2 GET /v1/license/renewal via=node1" {
+		t.Errorf("GET /v1/license/renewal: %d seen=%v", resp.StatusCode, lc.seen)
+	}
+	lc.seen = nil
+	resp, _ = send(t, lh, "POST", "/v1/license/renew", nil, spoofSession)
+	if resp.StatusCode != 200 || len(lc.seen) != 1 || lc.seen[0] != "n2 POST /v1/license/renew via=node1" {
+		t.Errorf("POST /v1/license/renew: %d seen=%v", resp.StatusCode, lc.seen)
+	}
+}
+
+type proxyCluster struct {
+	fakeCluster
+	target *url.URL
+}
+
+func (p *proxyCluster) Forward(string) (http.Handler, error) {
+	return &httputil.ReverseProxy{
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(p.target)
+			r.Out.Header.Del("Cookie")
+		},
+	}, nil
+}
+
+type captureExtHandler struct {
+	mu   sync.Mutex
+	seen []ext.Principal
+}
+
+func (h *captureExtHandler) Serve(_ context.Context, r ext.Request) (ext.Response, error) {
+	h.mu.Lock()
+	h.seen = append(h.seen, r.Principal)
+	h.mu.Unlock()
+	return ext.Response{Status: http.StatusOK, Body: []byte(`{"ok":true}`)}, nil
+}
+
+func (h *captureExtHandler) principals() []ext.Principal {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]ext.Principal(nil), h.seen...)
+}
+
+func (h *captureExtHandler) reset() {
+	h.mu.Lock()
+	h.seen = nil
+	h.mu.Unlock()
+}
+
+func TestHTTPAPI_Connectionヘッダ悪用でReverseProxy経由の転送先PrincipalをLocalPrincipalに昇格できない(t *testing.T) {
+	// Receiving node (n2) wired behind a real httputil.ReverseProxy -> Handler(true).
+	n2 := newFixture(t)
+	n2.srv.Node = "n2"
+	n2Sink := &recordingSink{}
+	n2Ext := &captureExtHandler{}
+	n2.srv.Ext = ext.Module{Authorizer: viewerReadsOnly{}, AuditSink: n2Sink}
+	n2.srv.ExtHandlers = map[string]ext.Handler{"sso": n2Ext}
+	n2.srv.ExtPublic = map[string][]string{"sso": {"/public"}}
+	n2.branches.branches["there"] = domain.Branch{Name: name("there"), Base: name("prod"), Node: "n2", Status: domain.BranchReady}
+	ts := httptest.NewServer(n2.srv.Handler(true))
+	defer ts.Close()
+	target, err := url.Parse(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Origin node (node1) serving the public listener (Handler(false)).
+	n1 := newFixture(t)
+	n1.srv.Node = "node1"
+	n1.srv.Cluster = &proxyCluster{target: target}
+	n1.srv.Ext = ext.Module{Authenticator: moduleAuth{}, Authorizer: viewerReadsOnly{}}
+	n1.srv.ExtHandlers = map[string]ext.Handler{"sso": &captureExtHandler{}}
+	n1.srv.ExtPublic = map[string][]string{"sso": {"/public"}}
+	n1.branches.branches["there"] = domain.Branch{Name: name("there"), Base: name("prod"), Node: "n2", Status: domain.BranchReady}
+	h := n1.srv.Handler(false)
+
+	// 1. Unauthenticated caller to ExtPublic ?node=n2 with Connection smuggling
+	//    (single, combined, multi-line, lowercase) must arrive at n2 as anonymous, never LocalPrincipal.
+	connVariants := [][]string{
+		{"X-Db-Branch-Principal"},
+		{"X-Db-Branch-Forwarded"},
+		{"X-Db-Branch-Forwarded, X-Db-Branch-Principal"},
+		{"keep-alive", "x-db-branch-principal", "x-db-branch-forwarded"},
+	}
+	for _, conns := range connVariants {
+		n2Ext.reset()
+		resp, _ := send(t, h, "GET", "/v1/ext/sso/public/info?node=n2", nil, func(r *http.Request) {
+			for _, c := range conns {
+				r.Header.Add("Connection", c)
+			}
+		})
+		if got := n2Ext.principals(); resp.StatusCode != 200 || len(got) != 1 || got[0].ID != httpapi.Anonymous.ID {
+			t.Fatalf("ExtPublic Connection=%q: status=%d seen=%+v, want anonymous", conns, resp.StatusCode, got)
+		}
+	}
+
+	// 2. Viewer calling a read-only ext route forwarded to n2 with Connection smuggling
+	//    must arrive at n2 as token:viewer (not local) and must not duplicate audit.
+	n2Ext.reset()
+	resp, _ := send(t, h, "GET", "/v1/ext/sso/private/info?node=n2", nil, func(r *http.Request) {
+		bearer("t-viewer")(r)
+		r.Header.Add("Connection", "keep-alive")
+		r.Header.Add("Connection", "x-db-branch-forwarded, x-db-branch-principal")
+	})
+	if got := n2Ext.principals(); resp.StatusCode != 200 || len(got) != 1 || got[0].ID != "token:viewer" {
+		t.Fatalf("viewer ext forward: status=%d seen=%+v, want token:viewer", resp.StatusCode, got)
+	}
+	if got := n2Sink.actions(); len(got) != 0 {
+		t.Errorf("receiving node duplicated audit: %v", got)
 	}
 }

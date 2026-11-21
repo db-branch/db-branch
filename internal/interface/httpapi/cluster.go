@@ -98,7 +98,7 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, node string) bo
 	if !s.remote(node) {
 		return false
 	}
-	if r.Header.Get(forwardedHeader) != "" {
+	if forwardedFromNode(r) {
 		fail(w, fmt.Errorf("%w: forwarded here, but this node sees it on %s", dbbranch.ErrOtherNode, node))
 		return true
 	}
@@ -127,16 +127,23 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, node string) bo
 
 // forwardTo runs r on node and returns the buffered response.
 func (s *Server) forwardTo(r *http.Request, node string) (*recorder, error) {
+	if s.Node == "" {
+		return nil, errors.New("cannot forward without a node name")
+	}
 	h, err := s.Cluster.Forward(node)
 	if err != nil {
 		return nil, err
 	}
-	r.Header.Set(forwardedHeader, s.Node)
+	out := r.Clone(r.Context())
+	// Drop hop-by-hop Connection (so ReverseProxy cannot be tricked into stripping
+	// our internal forwarding headers) and any non-canonical copies before setting them.
+	delHeadersFold(out.Header, "Connection", forwardedHeader, principalHeader)
+	out.Header.Set(forwardedHeader, s.Node)
 	if b, err := json.Marshal(principalOf(r)); err == nil {
-		r.Header.Set(principalHeader, string(b))
+		out.Header.Set(principalHeader, string(b))
 	}
 	rec := &recorder{header: http.Header{}, status: http.StatusOK}
-	h.ServeHTTP(rec, r)
+	h.ServeHTTP(rec, out)
 	return rec, nil
 }
 

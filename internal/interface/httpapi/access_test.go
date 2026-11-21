@@ -12,6 +12,7 @@ import (
 
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/interface/httpapi"
+	"github.com/db-branch/db-branch/internal/usecase/licensing"
 	"github.com/db-branch/db-branch/pkg/ext"
 )
 
@@ -26,6 +27,12 @@ func (s *recordingSink) Record(_ context.Context, e ext.Event) error {
 	defer s.mu.Unlock()
 	s.events = append(s.events, e)
 	return s.err
+}
+
+func (s *recordingSink) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = nil
 }
 
 func (s *recordingSink) actions() []string {
@@ -308,5 +315,255 @@ func TestLocalPrincipal_ブランチ一覧に出る名前は空白を含まな�
 	// "owner/name" in lists, so it must read as one word.
 	if n := httpapi.LocalPrincipal.Name; n != "local" {
 		t.Errorf("owner name = %q, want \"local\"", n)
+	}
+}
+
+func TestHTTPAPI_公開リスナーからのXDbBranchForwarded偽装ヘッダで監査ログとmodules_pendingを迂回できない(t *testing.T) {
+	f := newFixture(t)
+	sink := &recordingSink{}
+	f.srv.Ext = ext.Module{Authenticator: moduleAuth{}, Authorizer: viewerReadsOnly{}, AuditSink: sink}
+	h := f.srv.Handler(false)
+
+	spoof := func(token string) func(*http.Request) {
+		return func(r *http.Request) {
+			r.Header.Set("Authorization", "Bearer "+token)
+			r.Header.Set("X-Db-Branch-Forwarded", "n9")
+			r.Header.Set("X-Db-Branch-Principal", `{"id":"local","name":"local","roles":["admin"]}`)
+		}
+	}
+
+	// 1. modules_pending cannot be bypassed with a spoofed header.
+	f.srv.PendingModules = func() []string { return []string{"auth"} }
+	resp, body := send(t, h, "GET", "/v1/branches", nil, spoof("t-admin"))
+	if resp.StatusCode != 503 || errCode(body) != "modules_pending" {
+		t.Fatalf("pending bypass: %d %v, want 503 modules_pending", resp.StatusCode, body)
+	}
+
+	// 2. Audit logging (ok and denied) cannot be suppressed and principal cannot be spoofed.
+	f.srv.PendingModules = nil
+	if resp, _ := send(t, h, "POST", "/v1/bases/prod/stop", nil, spoof("t-admin")); resp.StatusCode != 204 {
+		t.Fatalf("admin stop: %d, want 204", resp.StatusCode)
+	}
+	if resp, body := send(t, h, "DELETE", "/v1/bases/prod", nil, spoof("t-viewer")); resp.StatusCode != 403 || errCode(body) != "forbidden" {
+		t.Fatalf("viewer delete: %d %v, want 403 forbidden", resp.StatusCode, body)
+	}
+	got := strings.Join(sink.actions(), " ")
+	want := "base.stop:token:admin:base/prod:ok base.delete:token:viewer:base/prod:denied"
+	if got != want {
+		t.Errorf("audit = %q, want %q", got, want)
+	}
+
+	// 3. Session-authenticated requests also ignore spoofed headers (including principal-only).
+	sink.reset()
+	cookie, csrf := login(t, f)
+	f.srv.PendingModules = func() []string { return []string{"auth"} }
+	resp, body = send(t, h, "GET", "/v1/branches", nil, func(r *http.Request) {
+		withSession(cookie, csrf)(r)
+		r.Header.Set("X-Db-Branch-Forwarded", "n9")
+		r.Header.Set("X-Db-Branch-Principal", `{"id":"local","name":"local","roles":["admin"]}`)
+	})
+	if resp.StatusCode != 503 || errCode(body) != "modules_pending" {
+		t.Fatalf("session pending bypass: %d %v, want 503 modules_pending", resp.StatusCode, body)
+	}
+	f.srv.PendingModules = nil
+	if resp, _ := send(t, h, "POST", "/v1/bases/prod/stop", nil, func(r *http.Request) {
+		withSession(cookie, csrf)(r)
+		r.Header.Set("X-Db-Branch-Principal", `{"id":"local","name":"local","roles":["admin"]}`)
+	}); resp.StatusCode != 204 {
+		t.Fatalf("session stop with principal header: %d, want 204", resp.StatusCode)
+	}
+	if got := strings.Join(sink.actions(), " "); !strings.Contains(got, "base.stop:admin:base/prod:ok") {
+		t.Errorf("session audit = %q, want base.stop:admin:base/prod:ok", got)
+	}
+}
+
+func TestHTTPAPI_正規の転送経路では重複監査抑止とmodules_pending通過と転送ループ防止が維持される(t *testing.T) {
+	f, c := remoteFixture(t)
+	sink := &recordingSink{}
+	f.srv.Ext = ext.Module{AuditSink: sink}
+	f.srv.PendingModules = func() []string { return []string{"auth"} }
+	f.branches.branches["here"] = domain.Branch{Name: name("here"), Status: domain.BranchReady}
+
+	trustedFwd := func(r *http.Request) {
+		r.Header.Set("X-Db-Branch-Forwarded", "n9")
+		r.Header.Set("X-Db-Branch-Principal", `{"id":"sso:alice","name":"Alice","roles":["admin"]}`)
+	}
+
+	// 1. Trusted mTLS forwarded request passes modules_pending and does not duplicate audit.
+	h := f.srv.Handler(true)
+	if resp, body := send(t, h, "POST", "/v1/branches/here/reset", nil, trustedFwd); resp.StatusCode != 202 {
+		t.Fatalf("trusted forwarded reset while modules pending: %d %v, want 202", resp.StatusCode, body)
+	}
+	if got := sink.actions(); len(got) != 0 {
+		t.Errorf("duplicate audit on receiving node: %v", got)
+	}
+
+	// 2. Trusted mTLS forwarded request still enforces Authorizer for the forwarded principal.
+	f.srv.Ext.Authorizer = viewerReadsOnly{}
+	viewerFwd := func(r *http.Request) {
+		r.Header.Set("X-Db-Branch-Forwarded", "n9")
+		r.Header.Set("X-Db-Branch-Principal", `{"id":"sso:bob","name":"Bob","roles":["viewer"]}`)
+	}
+	if resp, _ := send(t, h, "POST", "/v1/branches/here/reset", nil, viewerFwd); resp.StatusCode != 403 {
+		t.Errorf("trusted forwarded viewer must be denied: %d, want 403", resp.StatusCode)
+	}
+	if got := sink.actions(); len(got) != 0 {
+		t.Errorf("duplicate audit on forwarded denial: %v", got)
+	}
+	f.srv.Ext.Authorizer = nil
+
+	// 3. Trusted mTLS forwarded request targeting a branch seen on another node stops with 409 (no loop).
+	resp, body := send(t, h, "POST", "/v1/branches/there/reset", nil, trustedFwd)
+	if resp.StatusCode != 409 || errCode(body) != "other_node" || len(c.forwarded) != 0 {
+		t.Errorf("node forward loop guard: %d %v forwarded=%v", resp.StatusCode, body, c.forwarded)
+	}
+	if got := sink.actions(); len(got) != 0 {
+		t.Errorf("duplicate audit on 409 loop guard: %v", got)
+	}
+
+	// 4. Trusted mTLS forwarded license renewal on a non-leader does not re-forward to the leader.
+	lf := newFixture(t)
+	lf.srv.Licensing = &fakeLicensing{}
+	lf.srv.Renewal = &fakeRenewal{leading: false, err: licensing.ErrNotLeader}
+	lc := &leaderCluster{replyCode: 200, reply: `{}`}
+	lc.status = httpapi.ClusterStatus{Mode: "cluster", Leader: "n2"}
+	lf.srv.Cluster = lc
+	lh := lf.srv.Handler(true)
+	if resp, _ := send(t, lh, "POST", "/v1/license/renew", nil, trustedFwd); resp.StatusCode != 503 || len(lc.seen) != 0 {
+		t.Errorf("license renew loop guard: %d seen=%v", resp.StatusCode, lc.seen)
+	}
+	if resp, body := send(t, lh, "GET", "/v1/license/renewal", nil, trustedFwd); resp.StatusCode != 200 || body["last_result"] != "unknown" || len(lc.seen) != 0 {
+		t.Errorf("license renewal GET loop guard: %d %v seen=%v", resp.StatusCode, body, lc.seen)
+	}
+	if resp, body := send(t, lh, "GET", "/v1/license", nil, trustedFwd); resp.StatusCode != 200 || body["renewal"].(map[string]any)["last_result"] != "unknown" || len(lc.seen) != 0 {
+		t.Errorf("license status loop guard: %d %v seen=%v", resp.StatusCode, body, lc.seen)
+	}
+}
+
+func TestHTTPAPI_匿名レート制限とExtAPIとMCPでも偽装Forwardedヘッダを無視する(t *testing.T) {
+	spoofHeaders := func(r *http.Request) {
+		r.Header.Set("X-Db-Branch-Forwarded", "n9")
+		r.Header.Set("X-Db-Branch-Principal", `{"id":"local","name":"local","roles":["admin"]}`)
+	}
+
+	// 1. Anonymous rate limit cannot be bypassed with spoofed forwarding headers.
+	af := anonFixture(t)
+	af.srv.AnonymousRate = func() int { return 1 }
+	ah := af.srv.Handler(false)
+	if resp, body := anonCreate(t, ah, "a1", "prod", spoofHeaders); resp.StatusCode != 202 {
+		t.Fatalf("first anonymous create: %d %v", resp.StatusCode, body)
+	}
+	if resp, body := anonCreate(t, ah, "a2", "prod", spoofHeaders); resp.StatusCode != 429 || errCode(body) != "rate_limited" {
+		t.Fatalf("second anonymous create bypassed rate limit: %d %v, want 429 rate_limited", resp.StatusCode, body)
+	}
+
+	// 2. ExtPublic and private extAPI ignore spoofed headers and audit properly.
+	ef := newFixture(t)
+	sink := &recordingSink{}
+	extCap := &captureExtHandler{}
+	ef.srv.Ext = ext.Module{Authenticator: moduleAuth{}, Authorizer: viewerReadsOnly{}, AuditSink: sink}
+	ef.srv.ExtHandlers = map[string]ext.Handler{"sso": extCap}
+	ef.srv.ExtPublic = map[string][]string{"sso": {"/public"}}
+	eh := ef.srv.Handler(false)
+
+	if resp, _ := send(t, eh, "GET", "/v1/ext/sso/public/start", nil, spoofHeaders); resp.StatusCode != 200 || len(extCap.principals()) != 1 || extCap.principals()[0].ID != httpapi.Anonymous.ID {
+		t.Fatalf("ExtPublic spoof: status=%d seen=%+v, want anonymous", resp.StatusCode, extCap.principals())
+	}
+	extCap.reset()
+	if resp, _ := send(t, eh, "POST", "/v1/ext/sso/private/write", nil, func(r *http.Request) {
+		bearer("t-viewer")(r)
+		spoofHeaders(r)
+	}); resp.StatusCode != 403 {
+		t.Fatalf("private ext write as viewer with spoof: %d, want 403", resp.StatusCode)
+	}
+	if got := strings.Join(sink.actions(), " "); !strings.Contains(got, "ext.sso.write:token:viewer:ext/sso:denied") {
+		t.Errorf("ext audit = %q", got)
+	}
+
+	// 3. MCP cannot escalate principal or suppress audit via spoofed headers.
+	mf := newFixture(t)
+	mSink := &recordingSink{}
+	mf.srv.Ext = ext.Module{Authenticator: moduleAuth{}, Authorizer: viewerReadsOnly{}, AuditSink: mSink}
+	mf.branches.branches["x"] = domain.Branch{Name: name("x"), Base: name("prod"), Status: domain.BranchReady}
+	mh := mf.srv.Handler(false)
+	mcpBody := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "delete_branch",
+			"arguments": map[string]any{"name": "x"},
+		},
+	}
+	if resp, _ := send(t, mh, "POST", "/v1/mcp", mcpBody, func(r *http.Request) {
+		bearer("t-viewer")(r)
+		spoofHeaders(r)
+		r.Header.Set("Accept", "application/json, text/event-stream")
+	}); resp.StatusCode != 403 {
+		t.Fatalf("mcp viewer status = %d, want 403", resp.StatusCode)
+	}
+	if resp, _ := send(t, mh, "POST", "/v1/mcp", mcpBody, func(r *http.Request) {
+		bearer("t-admin")(r)
+		spoofHeaders(r)
+		r.Header.Set("Accept", "application/json, text/event-stream")
+	}); resp.StatusCode != 200 {
+		t.Fatalf("mcp admin status = %d, want 200", resp.StatusCode)
+	}
+	if got := strings.Join(mSink.actions(), " "); !strings.Contains(got, "branch.delete:token:admin:branch/x:ok") {
+		t.Errorf("mcp audit = %q, want branch.delete:token:admin:branch/x:ok", got)
+	}
+}
+
+func TestLocalPrincipal_転送ヘッダありでPrincipal欠落や不正ならLocalPrincipalへ昇格させない(t *testing.T) {
+	f := newFixture(t)
+	extSeen := &captureExtHandler{}
+	f.srv.ExtHandlers = map[string]ext.Handler{"sso": extSeen}
+	f.srv.ExtPublic = map[string][]string{"sso": {"/public"}}
+	h := f.srv.Handler(true)
+
+	badCases := []struct {
+		name string
+		set  func(http.Header)
+	}{
+		{"missing_principal", func(hdr http.Header) {
+			hdr.Set("X-Db-Branch-Forwarded", "n9")
+		}},
+		{"malformed_principal", func(hdr http.Header) {
+			hdr.Set("X-Db-Branch-Forwarded", "n9")
+			hdr.Set("X-Db-Branch-Principal", "{bad-json")
+		}},
+		{"empty_id", func(hdr http.Header) {
+			hdr.Set("X-Db-Branch-Forwarded", "n9")
+			hdr.Set("X-Db-Branch-Principal", `{"id":"","name":"x","roles":["admin"]}`)
+		}},
+		{"principal_only_without_forwarded", func(hdr http.Header) {
+			hdr.Set("X-Db-Branch-Principal", `{"id":"sso:alice","roles":["admin"]}`)
+		}},
+		{"empty_forwarded", func(hdr http.Header) {
+			hdr["X-Db-Branch-Forwarded"] = []string{""}
+			hdr.Set("X-Db-Branch-Principal", `{"id":"sso:alice","roles":["admin"]}`)
+		}},
+		{"multi_forwarded_leading_empty", func(hdr http.Header) {
+			hdr["X-Db-Branch-Forwarded"] = []string{"", "n9"}
+			hdr.Set("X-Db-Branch-Principal", `{"id":"sso:alice","roles":["admin"]}`)
+		}},
+		{"multi_principal", func(hdr http.Header) {
+			hdr.Set("X-Db-Branch-Forwarded", "n9")
+			hdr["X-Db-Branch-Principal"] = []string{`{"id":"sso:alice","roles":["admin"]}`, `{"id":"sso:bob","roles":["viewer"]}`}
+		}},
+	}
+	for _, tc := range badCases {
+		t.Run(tc.name, func(t *testing.T) {
+			hdr := func(r *http.Request) { tc.set(r.Header) }
+			// Guarded route must deny with 403 forbidden (fail-closed, never LocalPrincipal).
+			if resp, body := send(t, h, "GET", "/v1/branches", nil, hdr); resp.StatusCode != 403 || errCode(body) != "forbidden" {
+				t.Errorf("guarded route: %d %v, want 403 forbidden", resp.StatusCode, body)
+			}
+			// Even on ExtPublic, the principal passed to the module must be empty, never LocalPrincipal.
+			extSeen.reset()
+			if resp, _ := send(t, h, "GET", "/v1/ext/sso/public/info", nil, hdr); resp.StatusCode != 200 || len(extSeen.principals()) != 1 || extSeen.principals()[0].ID != "" {
+				t.Errorf("ExtPublic principal: status=%d seen=%+v, want empty ID", resp.StatusCode, extSeen.principals())
+			}
+		})
 	}
 }

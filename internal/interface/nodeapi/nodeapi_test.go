@@ -199,6 +199,8 @@ func TestProxy_他のノードのAPIへ証明書付きで中継しCookieは渡�
 
 	r := httptest.NewRequest("POST", "/v1/branches/x/reset", nil)
 	r.Header.Set("Cookie", "dbb_session=secret")
+	r.Header.Set("X-Db-Branch-Forwarded", "node-b")
+	r.Header.Set("X-Db-Branch-Principal", `{"id":"local","name":"local","roles":["admin"]}`)
 	w := httptest.NewRecorder()
 	nodeapi.NewClient(n.ClientTLS()).Proxy(a.api).ServeHTTP(w, r)
 	if w.Code != http.StatusAccepted || w.Body.String() != "POST /v1/branches/x/reset cookie=false" {
@@ -215,6 +217,54 @@ func TestProxy_他のノードのAPIへ証明書付きで中継しCookieは渡�
 	nodeapi.NewClient(n.ClientTLS()).Proxy(freeAddr(t)).ServeHTTP(w, httptest.NewRequest("GET", "/v1/branches", nil))
 	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "node_unreachable") {
 		t.Errorf("unreachable: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestProxy_Connectionヘッダで転送ヘッダを除去できず転送ヘッダ欠落要求は拒否される(t *testing.T) {
+	ca, _ := clusterpki.InitCA(t.TempDir())
+	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "fwd=%s prin=%s cookie=%v",
+			r.Header.Get("X-Db-Branch-Forwarded"),
+			r.Header.Get("X-Db-Branch-Principal"),
+			r.Header.Get("Cookie") != "")
+	})
+	a := startWithAPI(t, ca, "node-a", api)
+	n, _ := ca.IssueNode(t.TempDir(), "node-b", nil)
+	proxy := nodeapi.NewClient(n.ClientTLS()).Proxy(a.api)
+
+	// 1. Multi-line/lowercase Connection headers and non-canonical keys cannot drop forwarding headers.
+	r := httptest.NewRequest("POST", "/v1/branches/x/reset", nil)
+	r.Header.Add("Connection", "keep-alive")
+	r.Header.Add("Connection", "x-db-branch-forwarded, x-db-branch-principal")
+	r.Header["X-DB-BRANCH-FORWARDED"] = []string{"", "node-b"}
+	r.Header["x-db-branch-principal"] = []string{`{"id":"sso:alice","roles":["viewer"]}`}
+	r.Header["COOKIE"] = []string{"dbb_session=secret"}
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, r)
+	want := `fwd=node-b prin={"id":"sso:alice","roles":["viewer"]} cookie=false`
+	if w.Code != http.StatusOK || w.Body.String() != want {
+		t.Fatalf("proxied: %d %q, want 200 %q", w.Code, w.Body.String(), want)
+	}
+
+	// 2. Receiving /internal/v1/api/ rejects requests missing forwarding headers (e.g. stripped by an older node).
+	for _, tc := range []struct {
+		name string
+		set  func(http.Header)
+	}{
+		{"none", func(http.Header) {}},
+		{"forwarded_only", func(h http.Header) { h.Set("X-Db-Branch-Forwarded", "node-b") }},
+		{"principal_only", func(h http.Header) { h.Set("X-Db-Branch-Principal", `{"id":"sso:alice"}`) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/v1/branches", nil)
+			tc.set(req.Header)
+			rec := httptest.NewRecorder()
+			proxy.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("%s: status = %d %s, want 403", tc.name, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
