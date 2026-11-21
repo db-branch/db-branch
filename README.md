@@ -1,5 +1,10 @@
 # db-branch
 
+[![Release](https://img.shields.io/github/v/release/db-branch/db-branch)](https://github.com/db-branch/db-branch/releases)
+[![License](https://img.shields.io/github/license/db-branch/db-branch)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/db-branch/db-branch?style=flat)](https://github.com/db-branch/db-branch/stargazers)
+[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=githubsponsors)](https://github.com/sponsors/MaSuCcHI)
+
 Instant database branches for MySQL and PostgreSQL, on your own servers.
 
 Test a migration, let an AI agent loose, or give every pull request its own copy of the database. db-branch creates a copy-on-write branch of a large database in seconds, with nothing copied. Break it, reset it, throw it away. Built on ZFS clones, self-hosted, Apache-2.0.
