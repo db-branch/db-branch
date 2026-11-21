@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - `db-branch module forget <name>` (`POST /v1/modules/{name}/forget`, console **Forget** button): deletes the cluster record of a removed module so it is no longer listed (Raft Protocol 22).
 
+### Fixed
+
+- The console's Modules page no longer marks free modules (for example ProxySQL) as **Paid** when the licence covers every module. The badge now shows for modules the server reports as needing a licence, and, for a licence that names its modules, for the modules it names.
+
 ### Removed
 
 - Removed the `db-branch-anon`, `db-branch-greenmask`, and `db-branch-greenmask-mysql` masker modules from this repository; they are now maintained in separate repositories (not yet public). The `base mask` command and the `Masker` extension point (`pkg/ext`) remain in the core repository.
