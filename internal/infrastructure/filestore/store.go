@@ -613,3 +613,65 @@ func (s *Store) RecordRollout(_ context.Context, ev domain.RolloutEvent) error {
 		return nil
 	})
 }
+
+// Snapshot is a copy of everything recorded in the state file, used to carry
+// single-node state into Raft when initializing a cluster.
+type Snapshot struct {
+	Bases         []domain.Base
+	Branches      []domain.Branch
+	RouteUsers    []domain.RouteUser
+	Modules       []domain.ModuleSpec
+	Settings      map[string]map[string]string
+	Tokens        []domain.APIToken
+	ModuleData    map[string]map[string][]byte
+	BaseRefreshes []domain.BaseRefresh
+	Update        *domain.UpdateCheck
+	Rollout       *domain.Rollout
+	ClusterID     string
+}
+
+// Snapshot reads the full state file in one pass.
+func (s *Store) Snapshot() (Snapshot, error) {
+	st, err := s.read()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	out := Snapshot{
+		Bases:         make([]domain.Base, 0, len(st.Bases)),
+		Branches:      make([]domain.Branch, 0, len(st.Branches)),
+		RouteUsers:    make([]domain.RouteUser, 0, len(st.RouteUsers)),
+		Modules:       make([]domain.ModuleSpec, 0, len(st.Modules)),
+		Settings:      st.Settings,
+		Tokens:        make([]domain.APIToken, 0, len(st.Tokens)),
+		ModuleData:    st.ModuleData,
+		BaseRefreshes: make([]domain.BaseRefresh, 0, len(st.BaseRefreshes)),
+		Update:        st.Update,
+		Rollout:       st.Rollout,
+		ClusterID:     st.ClusterID,
+	}
+	for _, b := range st.Bases {
+		out.Bases = append(out.Bases, b)
+	}
+	sort.Slice(out.Bases, func(i, j int) bool { return out.Bases[i].Name.String() < out.Bases[j].Name.String() })
+	for _, b := range st.Branches {
+		out.Branches = append(out.Branches, b)
+	}
+	sort.Slice(out.Branches, func(i, j int) bool { return out.Branches[i].Name.String() < out.Branches[j].Name.String() })
+	for _, u := range st.RouteUsers {
+		out.RouteUsers = append(out.RouteUsers, u)
+	}
+	sort.Slice(out.RouteUsers, func(i, j int) bool { return out.RouteUsers[i].Name < out.RouteUsers[j].Name })
+	for _, m := range st.Modules {
+		out.Modules = append(out.Modules, m)
+	}
+	sort.Slice(out.Modules, func(i, j int) bool { return out.Modules[i].Name < out.Modules[j].Name })
+	for _, t := range st.Tokens {
+		out.Tokens = append(out.Tokens, t)
+	}
+	sort.Slice(out.Tokens, func(i, j int) bool { return out.Tokens[i].CreatedAt.Before(out.Tokens[j].CreatedAt) })
+	for _, r := range st.BaseRefreshes {
+		out.BaseRefreshes = append(out.BaseRefreshes, r)
+	}
+	sort.Slice(out.BaseRefreshes, func(i, j int) bool { return out.BaseRefreshes[i].Base.String() < out.BaseRefreshes[j].Base.String() })
+	return out, nil
+}

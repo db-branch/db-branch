@@ -392,3 +392,39 @@ func TestForward_走っているロールアウトがあればErrRolloutRunning�
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestJoin_既存ノード名一覧を返し同名別アドレスのAddMemberを拒否する(t *testing.T) {
+	ca, _ := clusterpki.InitCA(t.TempDir())
+	a := start(t, ca, "node-a")
+	if err := a.store.Bootstrap([]raft.Server{{ID: "node-a", Address: raft.ServerAddress(a.raft)}}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, a.store.IsLeader)
+	secret := clusterpki.NewSecret()
+	_ = a.store.SetJoinSecretHash(ctx, clusterpki.HashSecret(secret))
+
+	// Even before PutNode heartbeat, Raft servers must be included in JoinInfo.Nodes.
+	info, err := nodeapi.Join(ctx, a.api, clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Nodes) != 1 || info.Nodes[0] != "node-a" {
+		t.Errorf("JoinInfo.Nodes (before PutNode) = %v, want [node-a]", info.Nodes)
+	}
+
+	// PutNode adds another known node name; JoinInfo.Nodes returns sorted union.
+	_ = a.store.PutNode(ctx, domain.Node{Name: "node-b", Address: "127.0.0.1:7070"})
+	info, err = nodeapi.Join(ctx, a.api, clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Nodes) != 2 || info.Nodes[0] != "node-a" || info.Nodes[1] != "node-b" {
+		t.Errorf("JoinInfo.Nodes (union) = %v, want [node-a node-b]", info.Nodes)
+	}
+
+	n, _ := ca.IssueNode(t.TempDir(), "node-a", nil)
+	err = nodeapi.NewClient(n.ClientTLS()).AddMember(ctx, a.api, "node-a", "127.0.0.1:9999")
+	if !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Errorf("duplicate AddMember: err = %v, want ErrAlreadyExists", err)
+	}
+}

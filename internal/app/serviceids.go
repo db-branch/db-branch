@@ -17,12 +17,20 @@ import (
 )
 
 // serviceIDHost is this machine's db-branch account and files.
-func serviceIDHost(cfg config.Config) *svcids.Host {
-	_, err := os.Stat("/run/systemd/system")
-	return &svcids.Host{
-		Run: execx.Runner{}, Systemd: err == nil, Pool: cfg.Pool,
-		Dirs: []string{cfg.DataDir, "/etc/db-branch"}, Globs: []string{"/run/db-branch*"},
+func serviceIDHost(cfg config.Config) (*svcids.Host, error) {
+	nd, err := loadNode(cfg)
+	if err != nil {
+		return nil, err
 	}
+	pool := ""
+	if nd.Storage == "" {
+		pool = nd.Pool
+	}
+	_, sysErr := os.Stat("/run/systemd/system")
+	return &svcids.Host{
+		Run: execx.Runner{}, Systemd: sysErr == nil, Pool: pool,
+		Dirs: []string{cfg.DataDir, "/etc/db-branch"}, Globs: []string{"/run/db-branch*"},
+	}, nil
 }
 
 // localServiceIDs returns this node's db-branch uid/gid (zero when absent).
@@ -40,9 +48,9 @@ func serviceUID() (int, error) {
 	return strconv.Atoi(u.Uid)
 }
 
-// alignServiceIDs makes the node's db-branch ids the cluster's.
-func (n Node) alignServiceIDs(ctx context.Context, cfg config.Config, ids domain.ServiceIDs) (idalign.Result, error) {
-	res, err := idalign.Align(ctx, serviceIDHost(cfg), ids)
+// alignServiceIDsOn makes the node's db-branch ids the cluster's.
+func (n Node) alignServiceIDsOn(ctx context.Context, host idalign.Host, ids domain.ServiceIDs) (idalign.Result, error) {
+	res, err := idalign.Align(ctx, host, ids)
 	if err == nil && res.Changed {
 		fmt.Fprintf(n.Notes, "Changed the db-branch user and group from %s to %s (the cluster's) and re-owned their files.\n", res.From, res.To)
 	}
@@ -52,7 +60,11 @@ func (n Node) alignServiceIDs(ctx context.Context, cfg config.Config, ids domain
 // AlignIDs implements `db-branch cluster align-ids`: it aligns the ids and
 // starts the agent again (it was stopped while the ids changed).
 func (n Node) AlignIDs(ctx context.Context, cfg config.Config, ids domain.ServiceIDs) (idalign.Result, error) {
-	res, err := n.alignServiceIDs(ctx, cfg, ids)
+	host, err := serviceIDHost(cfg)
+	if err != nil {
+		return idalign.Result{}, err // nothing was stopped
+	}
+	res, err := n.alignServiceIDsOn(ctx, host, ids)
 	if err != nil && errors.Is(err, idalign.ErrIDTaken) {
 		return res, err // nothing was stopped
 	}

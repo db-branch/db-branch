@@ -2,6 +2,7 @@ package raftstore_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -151,5 +152,39 @@ func TestStore_6ノードは自動運転で5投票者に収束する(t *testing.
 	// writes still commit with the voters only
 	if err := c.stores[0].PutBase(ctx, domain.Base{Name: name("after")}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStore_AddNonvoter_同名別アドレスは拒否し同アドレスは冪等で降格しない(t *testing.T) {
+	c := growingCluster(t, 2)
+	if err := c.stores[0].AddNonvoter("", "node1"); err == nil {
+		t.Error("empty id: want error")
+	}
+	if err := c.stores[0].AddNonvoter("node1", ""); err == nil {
+		t.Error("empty addr: want error")
+	}
+	if err := c.stores[1].AddNonvoter("node1", "node1"); !errors.Is(err, domain.ErrNoLeader) {
+		t.Errorf("follower AddNonvoter: err = %v, want ErrNoLeader", err)
+	}
+	if err := c.stores[0].AddNonvoter("node1", "node1"); err != nil {
+		t.Fatal(err)
+	}
+	// Duplicate ID with a different address must be rejected.
+	if err := c.stores[0].AddNonvoter("node1", "other-host:7071"); !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Errorf("duplicate ID different addr: err = %v, want ErrAlreadyExists", err)
+	}
+	// Same address with a different ID must also be rejected.
+	if err := c.stores[0].AddNonvoter("node2", "node1"); !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Errorf("same addr different ID: err = %v, want ErrAlreadyExists", err)
+	}
+	// Promote node1 to voter, then retry AddNonvoter with the SAME address: must be idempotent and keep Voter suffrage.
+	if err := c.stores[0].Promote(ctx, "node1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.stores[0].AddNonvoter("node1", "node1"); err != nil {
+		t.Fatalf("idempotent retry: %v", err)
+	}
+	if v, n := voterIDs(c.stores[0]); v != 2 || n != 0 {
+		t.Errorf("after idempotent retry: voters=%d non=%d, want 2, 0", v, n)
 	}
 }

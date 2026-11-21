@@ -15,6 +15,7 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/clusterpki"
 	"github.com/db-branch/db-branch/internal/infrastructure/raftstore"
 	"github.com/db-branch/db-branch/internal/interface/nodeapi"
+	"github.com/db-branch/db-branch/internal/usecase/membership"
 )
 
 type fakeStore struct {
@@ -32,7 +33,10 @@ func (f *fakeStore) ApplyAt(context.Context, raftstore.Command) (uint64, error) 
 func (f *fakeStore) IsLeader() bool                   { return f.leader }
 func (f *fakeStore) Leader() (string, string)         { return f.leaderID, "" }
 func (f *fakeStore) AddNonvoter(string, string) error { return f.voterErr }
-func (f *fakeStore) JoinSecretHash() string           { return f.joinHash }
+func (f *fakeStore) Servers(context.Context) ([]membership.Server, error) {
+	return nil, nil
+}
+func (f *fakeStore) JoinSecretHash() string { return f.joinHash }
 func (f *fakeStore) State() raftstore.State           { return f.state }
 
 func asMember(r *http.Request) *http.Request {

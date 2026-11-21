@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -38,6 +39,11 @@ type clusterRuntime struct {
 	replicate chan struct{}
 	// syncRuntimes asks for a runtime check now.
 	syncRuntimes chan struct{}
+	// joinFailed is closed once when joinAsMember hits a permanent failure
+	// (e.g. duplicate node name), broadcasting joinErrVal to every waiter.
+	joinFailOnce sync.Once
+	joinFailed   chan struct{}
+	joinErrVal   error
 	// checkpoints is whether this node's storage supports checkpoints, for the heartbeat.
 	checkpoints bool
 	// modules are the modules this agent runs, for the heartbeat.

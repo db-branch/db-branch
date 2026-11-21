@@ -129,8 +129,35 @@ func (s *Store) AddVoter(id, addr string) error {
 
 // AddNonvoter adds a node that replicates the log but does not vote (leader
 // only). The membership loop promotes it when the cluster needs a voter.
+// Re-adding the same node at the same address is idempotent (and keeps its
+// current suffrage); a conflicting address or ID is rejected.
 func (s *Store) AddNonvoter(id, addr string) error {
-	return s.raft.AddNonvoter(raft.ServerID(id), raft.ServerAddress(addr), 0, 10*time.Second).Error()
+	if id == "" || addr == "" {
+		return fmt.Errorf("node id and raft address are required")
+	}
+	if !s.IsLeader() {
+		return domain.ErrNoLeader
+	}
+	f := s.raft.GetConfiguration()
+	if err := f.Error(); err != nil {
+		return err
+	}
+	for _, srv := range f.Configuration().Servers {
+		if string(srv.ID) == id {
+			if string(srv.Address) == addr {
+				return nil
+			}
+			return fmt.Errorf("node %s is already in the cluster at %s: %w", id, srv.Address, domain.ErrAlreadyExists)
+		}
+		if string(srv.Address) == addr {
+			return fmt.Errorf("raft address %s is already used by node %s: %w", addr, srv.ID, domain.ErrAlreadyExists)
+		}
+	}
+	err := s.raft.AddNonvoter(raft.ServerID(id), raft.ServerAddress(addr), f.Index(), 10*time.Second).Error()
+	if errors.Is(err, raft.ErrNotLeader) || errors.Is(err, raft.ErrLeadershipLost) {
+		return fmt.Errorf("%w: %v", domain.ErrNoLeader, err)
+	}
+	return err
 }
 
 // Servers lists the members of the Raft configuration.
