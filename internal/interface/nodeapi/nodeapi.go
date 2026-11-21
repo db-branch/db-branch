@@ -15,6 +15,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -56,6 +57,11 @@ type Server struct {
 // APIPrefix is where a member's /v1 API is mounted on the node API.
 const APIPrefix = "/internal/v1/api"
 
+const (
+	forwardedHeader = "X-Db-Branch-Forwarded"
+	principalHeader = "X-Db-Branch-Principal"
+)
+
 // Handler returns the routes. The TLS listener must use ServerTLS(false) so a
 // joining node without a certificate can reach /join; every other route
 // requires a verified member certificate.
@@ -71,9 +77,44 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /internal/v1/bases/{name}/stream", member(s.stream))
 	}
 	if s.API != nil {
-		mux.Handle(APIPrefix+"/", member(http.StripPrefix(APIPrefix, s.API).ServeHTTP))
+		mux.Handle(APIPrefix+"/", member(forwardedAPI(http.StripPrefix(APIPrefix, s.API)).ServeHTTP))
 	}
 	return mux
+}
+
+// forwardedAPI ensures requests reaching /internal/v1/api/ over mTLS carry both
+// forwarding headers so they can never be mistaken for local UNIX socket calls.
+func forwardedAPI(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fwd := r.Header.Values(forwardedHeader)
+		prin := r.Header.Values(principalHeader)
+		if len(fwd) != 1 || fwd[0] == "" || len(prin) != 1 || prin[0] == "" {
+			http.Error(w, "forwarded headers required", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func delHeaderFold(h http.Header, name string) {
+	for k := range h {
+		if strings.EqualFold(k, name) {
+			delete(h, k)
+		}
+	}
+}
+
+func firstHeaderFold(h http.Header, name string) string {
+	for k, vs := range h {
+		if strings.EqualFold(k, name) {
+			for _, v := range vs {
+				if v != "" {
+					return v
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func member(h http.HandlerFunc) http.HandlerFunc {
@@ -347,7 +388,16 @@ func (c *Client) Proxy(apiAddr string) http.Handler {
 	return &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(target)
-			r.Out.Header.Del("Cookie")
+			delHeaderFold(r.Out.Header, "Cookie")
+			// Keep internal forwarding headers even if a client sent a Connection
+			// hop-by-hop header naming them (ReverseProxy strips hop-by-hop headers
+			// before Rewrite runs).
+			for _, h := range []string{forwardedHeader, principalHeader} {
+				delHeaderFold(r.Out.Header, h)
+				if v := firstHeaderFold(r.In.Header, h); v != "" {
+					r.Out.Header.Set(h, v)
+				}
+			}
 		},
 		Transport: c.tr,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {

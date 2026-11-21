@@ -40,6 +40,28 @@ func forwardedFromNode(r *http.Request) bool {
 // another (over mutual TLS, into the trusted socket handler).
 const principalHeader = "X-Db-Branch-Principal"
 
+func hasHeaderFold(h http.Header, names ...string) bool {
+	for k := range h {
+		for _, n := range names {
+			if strings.EqualFold(k, n) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func delHeadersFold(h http.Header, names ...string) {
+	for k := range h {
+		for _, n := range names {
+			if strings.EqualFold(k, n) {
+				delete(h, k)
+				break
+			}
+		}
+	}
+}
+
 // LocalPrincipal acts for whoever can reach the agent's socket (root or the
 // db-branch group on the node).
 var LocalPrincipal = ext.Principal{ID: "local", Name: "local", Roles: []string{"admin"}}
@@ -47,10 +69,18 @@ var LocalPrincipal = ext.Principal{ID: "local", Name: "local", Roles: []string{"
 func (s *Server) localPrincipal(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ctx := LocalPrincipal, r.Context()
-		if r.Header.Get(forwardedHeader) != "" {
-			var fwd ext.Principal
-			if json.Unmarshal([]byte(r.Header.Get(principalHeader)), &fwd) == nil && fwd.ID != "" {
-				p = fwd
+		if hasHeaderFold(r.Header, forwardedHeader, principalHeader) {
+			// Fail closed: any request carrying a forwarding header without a
+			// single valid forwarded node and principal must never fall back to
+			// LocalPrincipal (admin).
+			p = ext.Principal{}
+			fwdVals := r.Header.Values(forwardedHeader)
+			prinVals := r.Header.Values(principalHeader)
+			if len(fwdVals) == 1 && fwdVals[0] != "" && len(prinVals) == 1 {
+				var fwd ext.Principal
+				if json.Unmarshal([]byte(prinVals[0]), &fwd) == nil && fwd.ID != "" {
+					p = fwd
+				}
 			}
 			ctx = context.WithValue(ctx, forwardedKey{}, true)
 		}
@@ -151,8 +181,8 @@ func track(w http.ResponseWriter) (http.ResponseWriter, *statusWriter) {
 func (s *Server) guard(action string, h http.HandlerFunc) http.HandlerFunc {
 	kind, _, _ := strings.Cut(action, ".")
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Decided on arrival: forwarding sets the header on this request.
-		forwardedIn := r.Header.Get(forwardedHeader) != ""
+		// Only requests that arrived over the trusted node channel carry forwardedKey.
+		forwardedIn := forwardedFromNode(r)
 		audit := func(outcome string, status int) {
 			if !forwardedIn {
 				s.audit(r, principalOf(r), action, ext.Resource{Kind: kind, Name: resourceName(r)}, outcome, status)
@@ -164,7 +194,7 @@ func (s *Server) guard(action string, h http.HandlerFunc) http.HandlerFunc {
 			res.Name = peekName(r)
 		}
 		r = r.WithContext(context.WithValue(r.Context(), resourceKey{}, res.Name))
-		if pending := s.pending(); len(pending) > 0 && !moduleExempt(action) && r.Header.Get(forwardedHeader) == "" && p.ID != LocalPrincipal.ID {
+		if pending := s.pending(); len(pending) > 0 && !moduleExempt(action) && !forwardedIn && p.ID != LocalPrincipal.ID {
 			writeError(w, http.StatusServiceUnavailable, "modules_pending",
 				"this node does not run every module the cluster requires yet ("+strings.Join(pending, ", ")+"); use another node or wait")
 			return

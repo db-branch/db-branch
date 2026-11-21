@@ -124,7 +124,7 @@ func (s *Server) currentLicense(w http.ResponseWriter, r *http.Request) {
 // leaderNode is the cluster's leader when it is another node ("" when this
 // node leads, there is no cluster, or the request was forwarded here).
 func (s *Server) leaderNode(r *http.Request) (string, error) {
-	if s.Cluster == nil || s.Renewal.Leading() || r.Header.Get(forwardedHeader) != "" {
+	if s.Cluster == nil || s.Renewal.Leading() || forwardedFromNode(r) {
 		return "", nil
 	}
 	st, err := s.Cluster.Status(r.Context())
