@@ -11,6 +11,7 @@ import (
 	"github.com/db-branch/db-branch/internal/app"
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/interface/cli"
+	"github.com/db-branch/db-branch/internal/usecase/rtmodule"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -33,6 +34,9 @@ func main() {
 		ClusterInit:           node.ClusterInit,
 		ClusterJoin:           node.ClusterJoin,
 		ClusterAlignIDs:       node.AlignIDs,
+		RuntimeModules: func(cfg config.Config, prompter rtmodule.TrustPrompter) cli.RuntimeModuleService {
+			return node.RuntimeModules(cfg, prompter)
+		},
 	}.Run(ctx, os.Args[1:])
 	stop()
 	os.Exit(code)

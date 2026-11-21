@@ -15,7 +15,17 @@ import (
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/usecase/idalign"
+	"github.com/db-branch/db-branch/internal/usecase/rtmodule"
 )
+
+// ExitError associates a specific process exit code with a CLI error.
+type ExitError struct {
+	Code int
+	Err  error
+}
+
+func (e *ExitError) Error() string { return e.Err.Error() }
+func (e *ExitError) Unwrap() error { return e.Err }
 
 // App is the db-branch command line application. The hooks are supplied by
 // the composition root so the CLI stays free of infrastructure.
@@ -43,6 +53,12 @@ type App struct {
 	// ClusterAlignIDs moves this node's db-branch user and group to the ids
 	// the cluster uses.
 	ClusterAlignIDs func(ctx context.Context, cfg config.Config, ids domain.ServiceIDs) (idalign.Result, error)
+	// RuntimeModules builds the local runtime module admin service for cfg.
+	RuntimeModules func(cfg config.Config, prompter rtmodule.TrustPrompter) RuntimeModuleService
+	// EffectiveUID returns the caller's effective UID (defaults to os.Geteuid).
+	EffectiveUID func() int
+	// IsTTY reports whether r is an interactive terminal (defaults to os.ModeCharDevice check).
+	IsTTY func(r io.Reader) bool
 	// Poll is how often operations are polled while waiting.
 	Poll time.Duration
 
@@ -56,6 +72,10 @@ func (a App) Run(ctx context.Context, args []string) int {
 	root.SetArgs(args)
 	if err := root.ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(a.Stderr, "Error:", err)
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) && exitErr.Code > 0 {
+			return exitErr.Code
+		}
 		return 1
 	}
 	return 0
