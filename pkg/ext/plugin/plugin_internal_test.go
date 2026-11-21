@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	goplugin "github.com/hashicorp/go-plugin"
 
@@ -455,5 +459,173 @@ func Test更新後のマスク実行を運ぶ(t *testing.T) {
 	_ = r.c.Close()
 	if _, err := r.AfterRefresh(ctx, "prod", "s1"); err == nil {
 		t.Error("closed")
+	}
+}
+
+type fakeFileInfo struct {
+	mode fs.FileMode
+}
+
+func (fakeFileInfo) Name() string        { return "x" }
+func (fakeFileInfo) Size() int64         { return 0 }
+func (f fakeFileInfo) Mode() fs.FileMode { return f.mode }
+func (fakeFileInfo) ModTime() time.Time  { return time.Time{} }
+func (f fakeFileInfo) IsDir() bool       { return f.mode.IsDir() }
+func (fakeFileInfo) Sys() any            { return nil }
+
+func TestFileOwner_実ファイルはUIDを返しStat情報がない場合は所有不明として拒否する(t *testing.T) {
+	fi, err := os.Stat(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, ok := fileOwner(fi)
+	if !ok || uid != uint32(os.Geteuid()) {
+		t.Errorf("fileOwner(real dir) = (%d, %v), want (%d, true)", uid, ok, os.Geteuid())
+	}
+	if _, ok := fileOwner(fakeFileInfo{mode: 0o755}); ok {
+		t.Error("fileOwner with nil Sys(): want ok=false")
+	}
+}
+
+func TestClassifyOpenErr_各システムエラーを適切に分類する(t *testing.T) {
+	for name, err := range map[string]error{
+		"ELOOP":      syscall.ELOOP,
+		"EMLINK":     syscall.EMLINK,
+		"ENOTDIR":    syscall.ENOTDIR,
+		"ENXIO":      syscall.ENXIO,
+		"EOPNOTSUPP": syscall.EOPNOTSUPP,
+	} {
+		got := classifyOpenErr("/p", err)
+		if !errors.Is(got, ErrUntrusted) || !errors.Is(got, err) {
+			t.Errorf("%s: got %v, want ErrUntrusted wrapping %v", name, got, err)
+		}
+	}
+	other := &os.PathError{Op: "open", Path: "/p", Err: syscall.EACCES}
+	if got := classifyOpenErr("/p", other); got != other {
+		t.Errorf("EACCES: got %v, want raw %v", got, other)
+	}
+}
+
+func TestCheckTrustInfo_ファイル種別と特殊ビットをFS非依存で検証する(t *testing.T) {
+	l := loader{ownerOf: func(fs.FileInfo) (uint32, bool) { return 0, true }}
+	if err := l.checkTrustInfo("/p", fakeFileInfo{mode: 0o755}, true); !errors.Is(err, ErrUntrusted) {
+		t.Errorf("non-dir with wantDir=true: got %v, want ErrUntrusted", err)
+	}
+	for name, mode := range map[string]fs.FileMode{
+		"dir setuid": fs.ModeDir | fs.ModeSetuid | 0o755,
+		"dir sticky": fs.ModeDir | fs.ModeSticky | 0o755,
+	} {
+		if err := l.checkTrustInfo("/d", fakeFileInfo{mode: mode}, true); !errors.Is(err, ErrUntrusted) {
+			t.Errorf("%s: got %v, want ErrUntrusted", name, err)
+		}
+	}
+	if err := l.checkTrustInfo("/d", fakeFileInfo{mode: fs.ModeDir | fs.ModeSetgid | 0o755}, true); err != nil {
+		t.Errorf("dir setgid: got %v, want nil", err)
+	}
+	for name, mode := range map[string]fs.FileMode{
+		"file setuid": fs.ModeSetuid | 0o755,
+		"file setgid": fs.ModeSetgid | 0o755,
+		"file sticky": fs.ModeSticky | 0o755,
+	} {
+		if err := l.checkTrustInfo("/f", fakeFileInfo{mode: mode}, false); !errors.Is(err, ErrUntrusted) {
+			t.Errorf("%s: got %v, want ErrUntrusted", name, err)
+		}
+	}
+}
+
+type fakeAuth struct{}
+
+func (fakeAuth) Authenticate(_ context.Context, c ext.Credentials) (ext.Principal, error) {
+	if c.Token == "ok" {
+		return ext.Principal{ID: "u1", Name: "alice"}, nil
+	}
+	return ext.Principal{}, ext.ErrUnauthenticated
+}
+func (fakeAuth) ChangePassword(_ context.Context, _ ext.Principal, cur, next string) error {
+	if cur != "old" {
+		return ext.ErrUnauthenticated
+	}
+	if next == "" {
+		return errors.New("empty")
+	}
+	return nil
+}
+
+type fakeAuthz struct{}
+
+func (fakeAuthz) Authorize(_ context.Context, _ ext.Principal, action string, _ ext.Resource) error {
+	if action == "deny" {
+		return ext.ErrForbidden
+	}
+	return nil
+}
+
+type fakeSink struct{ got []string }
+
+func (s *fakeSink) Record(_ context.Context, e ext.Event) error {
+	s.got = append(s.got, e.Action)
+	return nil
+}
+
+type fakePolicy struct{}
+
+func (fakePolicy) CheckBranch(_ context.Context, _ ext.Principal, req ext.BranchRequest) error {
+	if req.Base != "prod" {
+		return ext.ErrForbidden
+	}
+	return nil
+}
+func (fakePolicy) SharesBranches(_ context.Context, _ ext.Principal, owner string) bool {
+	return owner == "team:a"
+}
+
+func Test認証と認可と監査とブランチ方針をRPC越しに運ぶ(t *testing.T) {
+	sink := &fakeSink{}
+	r := remoteFor(t, ext.Module{
+		Name:          "sec",
+		Authenticator: fakeAuth{},
+		Authorizer:    fakeAuthz{},
+		AuditSink:     sink,
+		BranchPolicy:  fakePolicy{},
+	})
+	ctx := context.Background()
+	p, err := r.Authenticate(ctx, ext.Credentials{Token: "ok"})
+	if err != nil || p.ID != "u1" {
+		t.Fatalf("Authenticate = %+v %v", p, err)
+	}
+	if _, err := r.Authenticate(ctx, ext.Credentials{Token: "no"}); !errors.Is(err, ext.ErrUnauthenticated) {
+		t.Errorf("bad token: %v", err)
+	}
+	pc := passwordRemote{r}
+	if err := pc.ChangePassword(ctx, p, "old", "new"); err != nil {
+		t.Errorf("ChangePassword ok: %v", err)
+	}
+	if err := pc.ChangePassword(ctx, p, "bad", "new"); !errors.Is(err, ext.ErrUnauthenticated) {
+		t.Errorf("ChangePassword bad: %v", err)
+	}
+	if err := r.Authorize(ctx, p, "allow", ext.Resource{}); err != nil {
+		t.Errorf("Authorize allow: %v", err)
+	}
+	if err := r.Authorize(ctx, p, "deny", ext.Resource{}); !errors.Is(err, ext.ErrForbidden) {
+		t.Errorf("Authorize deny: %v", err)
+	}
+	if err := r.Record(ctx, ext.Event{Action: "branch.create"}); err != nil || len(sink.got) != 1 {
+		t.Errorf("Record: %v %v", err, sink.got)
+	}
+	if err := r.CheckBranch(ctx, p, ext.BranchRequest{Base: "prod"}); err != nil {
+		t.Errorf("CheckBranch ok: %v", err)
+	}
+	if err := r.CheckBranch(ctx, p, ext.BranchRequest{Base: "other"}); !errors.Is(err, ext.ErrForbidden) {
+		t.Errorf("CheckBranch deny: %v", err)
+	}
+	if !r.SharesBranches(ctx, p, "team:a") || r.SharesBranches(ctx, p, "solo") {
+		t.Error("SharesBranches mismatch")
+	}
+	_ = r.c.Close()
+	if err := pc.ChangePassword(ctx, p, "old", "new"); err == nil {
+		t.Error("closed ChangePassword: want error")
+	}
+	if err := r.CheckBranch(ctx, p, ext.BranchRequest{Base: "prod"}); err == nil {
+		t.Error("closed CheckBranch: want error")
 	}
 }
