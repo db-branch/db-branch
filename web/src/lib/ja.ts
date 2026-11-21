@@ -262,4 +262,8 @@ export const ja: Record<string, string> = {
   "Upgraded: the Base runs {runtime}": "上げた Branch です（Base は {runtime}）",
   "The Base runs {runtime}": "Base は {runtime} です",
   "The runtime the Branch ran when this Checkpoint was taken": "この Checkpoint を取ったときに Branch が動かしていたランタイム",
+  // Modules
+  "Forget {name}?": "{name} の記録を削除しますか？",
+  "Remove the cluster record of this module so it is no longer listed. You can install it again later.":
+    "このモジュールのクラスタ記録を削除し、一覧に表示されないようにします。あとから入れ直すことができます。",
 };

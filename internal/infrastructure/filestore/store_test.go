@@ -509,3 +509,27 @@ func TestPutBranch_記録の有無は作成時に決まり後から書き換え�
 		t.Error("a new branch should keep record")
 	}
 }
+
+func TestDeleteModule_記録を消せ存在しない名前でも冪等に成功する(t *testing.T) {
+	s, path := newStore(t)
+	_ = s.PutModule(ctx, domain.ModuleSpec{Name: "audit", Version: "1.0", Wanted: false})
+	_ = s.PutModule(ctx, domain.ModuleSpec{Name: "proxysql", Version: "1.0", Wanted: true})
+
+	if err := s.DeleteModule(ctx, "audit"); err != nil {
+		t.Fatal(err)
+	}
+	list, err := (&filestore.Store{Path: path}).ListModules(ctx)
+	if err != nil || len(list) != 1 || list[0].Name != "proxysql" {
+		t.Fatalf("after delete = %+v, %v", list, err)
+	}
+	// Idempotent: deleting a missing module succeeds and keeps remaining records.
+	if err := s.DeleteModule(ctx, "audit"); err != nil {
+		t.Errorf("delete missing: %v", err)
+	}
+	if err := s.DeleteModule(ctx, "never-existed"); err != nil {
+		t.Errorf("delete unknown: %v", err)
+	}
+	if list, _ := s.ListModules(ctx); len(list) != 1 || list[0].Name != "proxysql" {
+		t.Errorf("after idempotent delete = %+v", list)
+	}
+}

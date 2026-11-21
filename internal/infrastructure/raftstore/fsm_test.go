@@ -142,7 +142,7 @@ func TestFSM_オペレーションのない古いスナップショットも復�
 
 func TestFSM_中身の欠けたコマンドは落ちずにエラーにする(t *testing.T) {
 	f := raftstore.NewFSM()
-	for _, op := range []string{"insert_base", "put_base", "insert_branch", "put_branch", "put_node", "put_operation", "set_admin", "add_replica", "put_route_user", "put_module", "put_token", "set_base_refresh", "record_base_refresh_run"} {
+	for _, op := range []string{"insert_base", "put_base", "insert_branch", "put_branch", "put_node", "put_operation", "set_admin", "add_replica", "put_route_user", "put_module", "delete_module", "put_token", "set_base_refresh", "record_base_refresh_run"} {
 		res := f.Apply(&raft.Log{Data: []byte(`{"op":"` + op + `"}`)})
 		if _, ok := res.(error); !ok {
 			t.Errorf("%s without data: got %v", op, res)
@@ -191,7 +191,7 @@ func mustEncode(c raftstore.Command) []byte { b, _ := c.Encode(); return b }
 func TestProtocol_すべてのコマンドに必要な版があり最新の版を超えない(t *testing.T) {
 	for _, op := range []string{"put_base", "delete_base", "put_branch", "delete_branch", "put_node", "delete_node",
 		"set_join_secret", "insert_base", "insert_branch", "put_operation", "set_admin", "init_admin", "add_replica",
-		"add_runtime", "remove_runtime", "put_route_user", "delete_route_user", "put_module", "put_settings", "put_token", "delete_token",
+		"add_runtime", "remove_runtime", "put_route_user", "delete_route_user", "put_module", "delete_module", "put_settings", "put_token", "delete_token",
 		"put_module_data", "delete_module_data", "start_trial", "set_base_refresh", "record_base_refresh_run", "clear_base_refresh", "set_base_replica_nodes", "remove_replica", "set_base_anonymous", "init_service_ids", "init_cluster_id"} {
 		n := raftstore.Command{Op: op}.Needs()
 		if n < 1 || n > raftstore.Protocol {
@@ -530,5 +530,47 @@ func TestFSM_ランタイムモジュールの種類と配布元はスナップ�
 	}
 	if m := g.State().Modules["rt-clickhouse"]; m.Kind != domain.ModuleKindRuntime || m.Source != domain.SourceLocal {
 		t.Errorf("runtime module after restore = %+v", m)
+	}
+}
+
+func TestFSM_delete_moduleで記録を消し冪等でスナップショット往復後も復元されない(t *testing.T) {
+	if got := raftstore.DeleteModule("audit").Needs(); got != 22 {
+		t.Fatalf("DeleteModule.Needs() = %d, want 22", got)
+	}
+	f := raftstore.NewFSM()
+	// Deleting on empty state is idempotent.
+	apply(t, f, raftstore.DeleteModule("missing"))
+	apply(t, f, raftstore.PutModule(domain.ModuleSpec{Name: "audit", Version: "1.0", Wanted: false}))
+	apply(t, f, raftstore.PutModule(domain.ModuleSpec{Name: "proxysql", Version: "1.0", Wanted: true}))
+
+	apply(t, f, raftstore.DeleteModule("audit"))
+	if _, ok := f.State().Modules["audit"]; ok {
+		t.Fatalf("audit still present: %+v", f.State().Modules)
+	}
+	if _, ok := f.State().Modules["proxysql"]; !ok {
+		t.Fatalf("proxysql disappeared: %+v", f.State().Modules)
+	}
+	// Applying twice is idempotent.
+	apply(t, f, raftstore.DeleteModule("audit"))
+
+	snap, err := f.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := snap.Persist(&sink{Buffer: &buf}); err != nil {
+		t.Fatal(err)
+	}
+	snap.Release()
+
+	g := raftstore.NewFSM()
+	if err := g.Restore(io.NopCloser(&buf)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := g.State().Modules["audit"]; ok {
+		t.Errorf("deleted module came back after snapshot restore: %+v", g.State().Modules)
+	}
+	if _, ok := g.State().Modules["proxysql"]; !ok {
+		t.Errorf("kept module missing after snapshot restore: %+v", g.State().Modules)
 	}
 }

@@ -34,7 +34,11 @@ const (
 	// node that does not know them would wait for a "plugin" that never comes
 	// and refuse the API. 19 and 20 are reserved for branch fork and merge.
 	ProtocolRuntimeModules = 21
-	runtimeModulePrefix    = "rt-"
+	// ProtocolModuleForget is the cluster protocol from which removed module
+	// records may be deleted (delete_module). Older nodes do not know the
+	// command, so it waits until every node speaks 22.
+	ProtocolModuleForget = 22
+	runtimeModulePrefix  = "rt-"
 	// maxRuntimeEngine keeps "db-branch-rt-<engine>" a valid login name (32 characters).
 	maxRuntimeEngine = 19
 )
@@ -86,6 +90,7 @@ func ValidModuleName(name string) error {
 type ModuleStore interface {
 	ListModules(ctx context.Context) ([]ModuleSpec, error)
 	PutModule(ctx context.Context, m ModuleSpec) error
+	DeleteModule(ctx context.Context, name string) error
 }
 
 // PendingModules returns the wanted modules that loaded (module names that

@@ -371,6 +371,17 @@ describe("cluster, engines, modules, settings, tokens", () => {
     expect(get("/v1/modules").items.find((m: any) => m.name === "audit").nodes.every((n: any) => n.current)).toBe(true);
     expect(call("POST", "/v1/modules", { name: "nope" }).status).toBe(404);
   });
+  it("削除済みモジュールだけ forget でき、有効または未記録は拒否し、後から再インストールできる", () => {
+    expect(call("POST", "/v1/modules/audit/forget")).toMatchObject({ status: 409, body: { error: { code: "conflict" } } });
+    expect(call("DELETE", "/v1/modules/audit").status).toBe(204);
+    expect(call("POST", "/v1/modules/audit/forget").status).toBe(204);
+    expect(get("/v1/modules").items.map((m: any) => m.name)).not.toContain("audit");
+    expect(get("/v1/capabilities").pages.map((p: any) => p.module)).toEqual(["auth"]);
+    expect(get("/v1/settings").items.map((sc: any) => sc.scope)).not.toContain("audit");
+    expect(call("POST", "/v1/modules/audit/forget").status).toBe(404);
+    expect(call("POST", "/v1/modules", { name: "audit" }).status).toBe(201);
+    expect(get("/v1/modules").items.find((m: any) => m.name === "audit")).toMatchObject({ wanted: true });
+  });
   it("cannot verify licence keys in the demo", () => {
     expect(call("PUT", "/v1/license", { key: "dbbl1.fake" })).toMatchObject({ status: 422, body: { error: { code: "invalid_license" } } });
     expect(call("POST", "/v1/license/verify", { key: " " }).status).toBe(400);

@@ -374,6 +374,7 @@ export const api = {
   modules: () => call<{ items: ModuleState[]; available: Record<string, string> }>("GET", "/v1/modules"),
   installModule: (name: string) => call<ModuleState>("POST", "/v1/modules", { name }),
   removeModule: (name: string) => call<void>("DELETE", `/v1/modules/${name}`),
+  forgetModule: (name: string) => call<void>("POST", `/v1/modules/${encodeURIComponent(name)}/forget`),
   capabilities: () => call<Capabilities>("GET", "/v1/capabilities"),
   branch: (name: string) => call<Branch>("GET", `/v1/branches/${name}`),
   operation: (id: string) => call<Operation>("GET", `/v1/operations/${id}`),

@@ -117,7 +117,11 @@ type Command struct {
 // API (503 modules_pending), so the feature waits for protocol 21 everywhere
 // (domain.ProtocolRuntimeModules, checked by the use case). 19 and 20 are
 // reserved for branch fork and branch merge.
-const Protocol = 21
+//
+// 22: delete_module removes a recorded module (module forget) once it is no
+// longer wanted. Older nodes do not know delete_module, so the command waits
+// for protocol 22 everywhere (domain.ProtocolModuleForget).
+const Protocol = 22
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a
@@ -140,6 +144,7 @@ var opProtocol = map[string]int{
 	"set_base_anonymous": 14,
 	"init_service_ids":   15,
 	"init_cluster_id":    17,
+	"delete_module":      22,
 }
 
 // Needs returns the protocol the command requires (0 for unknown commands).
@@ -262,6 +267,7 @@ func DeleteModuleData(module, key string) Command {
 }
 
 func PutModule(m domain.ModuleSpec) Command { return Command{Op: "put_module", Module: &m} }
+func DeleteModule(name string) Command      { return Command{Op: "delete_module", Name: name} }
 
 func PutRouteUser(u domain.RouteUser) Command { return Command{Op: "put_route_user", RouteUser: &u} }
 func DeleteRouteUser(name string) Command     { return Command{Op: "delete_route_user", Name: name} }
@@ -341,6 +347,8 @@ func (c Command) complete() bool {
 		return c.RouteUser != nil
 	case "put_module":
 		return c.Module != nil
+	case "delete_module":
+		return c.Name != ""
 	case "put_token":
 		return c.Token != nil
 	case "put_module_data", "delete_module_data":
@@ -455,6 +463,8 @@ func (f *FSM) apply(c Command) error {
 			s.Modules = map[string]domain.ModuleSpec{}
 		}
 		s.Modules[c.Module.Name] = *c.Module
+	case "delete_module":
+		delete(s.Modules, c.Name)
 	case "add_runtime":
 		if s.Runtimes == nil {
 			s.Runtimes = map[string]bool{}

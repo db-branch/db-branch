@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- `db-branch module forget <name>` (`POST /v1/modules/{name}/forget`, console **Forget** button): deletes the cluster record of a removed module so it is no longer listed (Raft Protocol 22).
+
 ## [0.2.7] - 2026-11-18
 
 This is the security fix first tagged v0.2.6. That release run stopped at a test-coverage check before anything was published, and the tag cannot be moved, so the release is 0.2.7. There is no 0.2.6 package.

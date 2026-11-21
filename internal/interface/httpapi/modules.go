@@ -14,6 +14,7 @@ import (
 type Modules interface {
 	Install(ctx context.Context, name, version string) (domain.ModuleSpec, error)
 	Remove(ctx context.Context, name string) error
+	Forget(ctx context.Context, name string) error
 	List(ctx context.Context) ([]domain.ModuleSpec, error)
 	// Available lists modules the APT repositories offer, with descriptions.
 	Available(ctx context.Context) (map[string]string, error)
@@ -149,6 +150,18 @@ func (s *Server) removeModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.ModuleAdmin.Remove(r.Context(), r.PathValue("name")); err != nil {
+		fail(w, err)
+		return
+	}
+	s.Bus.Publish("module.updated", map[string]string{"name": r.PathValue("name")})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) forgetModule(w http.ResponseWriter, r *http.Request) {
+	if !s.withModules(w) {
+		return
+	}
+	if err := s.ModuleAdmin.Forget(r.Context(), r.PathValue("name")); err != nil {
 		fail(w, err)
 		return
 	}

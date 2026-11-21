@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -27,4 +28,13 @@ func TestPendingModules_欲しいのに読み込まれていないものだけ(t
 	if len(got) != 1 || got[0] != "auth" {
 		t.Errorf("pending = %v", got)
 	}
+}
+
+func TestProtocolModuleForget_プロトコル22が予約されている(t *testing.T) {
+	if domain.ProtocolModuleForget != 22 {
+		t.Errorf("ProtocolModuleForget = %d, want 22", domain.ProtocolModuleForget)
+	}
+	var _ interface {
+		DeleteModule(context.Context, string) error
+	} = (domain.ModuleStore)(nil)
 }

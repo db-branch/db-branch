@@ -57,6 +57,7 @@ type Store struct {
 var (
 	_ domain.Store       = (*Store)(nil)
 	_ domain.NodeStore   = (*Store)(nil)
+	_ domain.ModuleStore = (*Store)(nil)
 	_ operation.Store    = (*Store)(nil)
 	_ domain.UpdateStore = (*Store)(nil)
 	_ membership.Members = (*Store)(nil)
@@ -465,6 +466,10 @@ func (s *Store) ListModules(context.Context) ([]domain.ModuleSpec, error) {
 
 func (s *Store) PutModule(ctx context.Context, m domain.ModuleSpec) error {
 	return s.Apply(ctx, PutModule(m))
+}
+
+func (s *Store) DeleteModule(ctx context.Context, name string) error {
+	return s.Apply(ctx, DeleteModule(name))
 }
 
 func (s *Store) GetSettings(_ context.Context, scope string) (map[string]string, error) {

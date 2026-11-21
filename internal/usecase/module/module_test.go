@@ -309,3 +309,80 @@ func TestRemove_ランタイムモジュールも名前で消せる(t *testing.T
 		t.Errorf("sync after remove: %v %v %v", changed, err, apt.ran)
 	}
 }
+
+func TestForget_削除済みの記録だけを消し_有効や未記録やパッケージ残存は拒否する(t *testing.T) {
+	s, _ := newService(t)
+	if err := s.Forget(ctx, "proxysql"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing: %v, want ErrNotFound", err)
+	}
+	_, _ = s.Install(ctx, "proxysql", "")
+	_, _ = s.Sync(ctx)
+	if err := s.Forget(ctx, "proxysql"); !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "remove") {
+		t.Fatalf("wanted: %v, want ErrConflict mentioning remove", err)
+	}
+	if err := s.Remove(ctx, "proxysql"); err != nil {
+		t.Fatal(err)
+	}
+	// Package is still installed on this node before Sync finishes.
+	if err := s.Forget(ctx, "proxysql"); !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "another node") {
+		t.Fatalf("still installed on this node: %v, want ErrConflict warning about other nodes", err)
+	}
+	if list, _ := s.List(ctx); len(list) != 1 {
+		t.Fatalf("record was deleted while package remained: %+v", list)
+	}
+	// Once uninstalled on this node, Forget removes the cluster record.
+	if _, err := s.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Forget(ctx, "proxysql"); err != nil {
+		t.Fatalf("forget removed: %v", err)
+	}
+	if list, _ := s.List(ctx); len(list) != 0 {
+		t.Errorf("still listed after forget: %+v", list)
+	}
+	if err := s.Forget(ctx, "proxysql"); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("forget twice: %v, want ErrNotFound", err)
+	}
+}
+
+func TestForget_全ノードがプロトコル22になるまで記録を消さない(t *testing.T) {
+	s, _ := newService(t)
+	_, _ = s.Install(ctx, "proxysql", "1.0")
+	_ = s.Remove(ctx, "proxysql")
+
+	nodes := []domain.Node{{Name: "a", Protocol: 22}, {Name: "b", Protocol: 21}}
+	s.Nodes = func(context.Context) ([]domain.Node, error) { return nodes, nil }
+	if err := s.Forget(ctx, "proxysql"); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("with a node at protocol 21: %v, want ErrClusterUpgrading", err)
+	}
+	if list, _ := s.List(ctx); len(list) != 1 {
+		t.Fatalf("deleted while upgrading: %+v", list)
+	}
+
+	nodes[1].Protocol = 22
+	if err := s.Forget(ctx, "proxysql"); err != nil {
+		t.Fatalf("every node at 22: %v", err)
+	}
+	if list, _ := s.List(ctx); len(list) != 0 {
+		t.Errorf("list after forget = %+v", list)
+	}
+
+	s.Nodes = func(context.Context) ([]domain.Node, error) { return nil, errors.New("down") }
+	if err := s.Forget(ctx, "proxysql"); err == nil {
+		t.Error("unreadable node list must fail")
+	}
+}
+
+func TestForget_ストアやパッケージ取得の失敗をそのまま返す(t *testing.T) {
+	s := &module.Service{Store: brokenStore{}, Packages: &fakeApt{installed: map[string]string{}}}
+	if err := s.Forget(ctx, "x"); err == nil {
+		t.Error("broken store: want error")
+	}
+	s2, apt := newService(t)
+	_, _ = s2.Install(ctx, "proxysql", "1.0")
+	_ = s2.Remove(ctx, "proxysql")
+	apt.failOn = "installed"
+	if err := s2.Forget(ctx, "proxysql"); err == nil {
+		t.Error("installed failure: want error")
+	}
+}

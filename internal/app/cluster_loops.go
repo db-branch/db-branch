@@ -186,6 +186,8 @@ func (c *clusterRuntime) publish(ctx context.Context, srv *httpapi.Server, bus *
 				if c.moduleChanged != nil {
 					c.moduleChanged()
 				}
+			case "delete_module":
+				bus.Publish("module.updated", map[string]string{"name": cmd.Name})
 			case "put_settings":
 				bus.Publish("setting.updated", map[string]string{"scope": cmd.Name})
 			case "put_update_check", "start_rollout", "record_rollout":

@@ -315,6 +315,7 @@ func (s *Server) routes(mux router, local bool) {
 	r("GET /v1/modules", "module.read", s.listModules)
 	r("POST /v1/modules", "module.install", s.installModule)
 	r("DELETE /v1/modules/{name}", "module.remove", s.removeModule)
+	r("POST /v1/modules/{name}/forget", "module.forget", s.forgetModule)
 
 	r("GET /v1/updates", "update.read", s.withUpdates(s.getUpdates))
 	r("POST /v1/updates/check", "update.check", s.withUpdates(s.checkUpdates))

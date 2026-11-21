@@ -42,6 +42,7 @@ func main() {
 - `db-branch module install <名前>`（またはコンソールの Settings → Modules → Enable）で、パッケージ `db-branch-<名前>` を全ノードに入れる。版は実行したノードで apt が入れられる最新版（`--version` で指定可）を Raft に記録し、全ノードがその版に揃える。後から参加したノードにも入る
 - 各ノードの agent は記録と手元を 30 秒ごと（記録が変わったときはすぐ）に照合し、`apt-get install/remove` を `systemd-run` の一時ユニットで実行する（パッケージの postinst が agent を再起動するため、apt を agent の子プロセスにしない）
 - `db-branch module remove <名前>`（Disable）で全ノードから削除する
+- 削除済みの記録を一覧から消すには `db-branch module forget <名前>`（API: `POST /v1/modules/{name}/forget`、アクション名 `module.forget`、Raft プロトコル 22）
 - 記録されたモジュールを読み込めていないノードは、コンソールと API の操作を `503 modules_pending` で断る（認証・認可のモジュールが一部のノードにだけない状態を作らないため）。状態の確認・ログイン・モジュールと設定の操作・ローカルソケットからの操作は通す
 - 以前から手で入れていたモジュールのパッケージは、起動時にクラスタのものとして記録する
 - 各ノードに db-branch の APT リポジトリが設定されていること（docs/distribution.md）

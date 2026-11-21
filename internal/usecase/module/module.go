@@ -125,6 +125,56 @@ func (s *Service) Remove(ctx context.Context, name string) error {
 	return fmt.Errorf("module %s: %w", name, domain.ErrNotFound)
 }
 
+// Forget deletes the cluster's record of a removed module (Wanted == false)
+// so it no longer appears in lists or the console. It refuses while the
+// module is still wanted (remove it first), when no record exists, when the
+// cluster has not yet reached domain.ProtocolModuleForget, or when the package
+// (db-branch-<name>) is still installed on this node.
+//
+// Only this node's installed packages can be inspected; if the package remains
+// installed on another node, that node will adopt it again as a manually
+// installed module.
+func (s *Service) Forget(ctx context.Context, name string) error {
+	if s.Nodes != nil {
+		nodes, err := s.Nodes(ctx)
+		if err != nil {
+			return err
+		}
+		if have := domain.ClusterProtocol(nodes, domain.ProtocolModuleForget); have < domain.ProtocolModuleForget {
+			return fmt.Errorf("%w: the cluster is upgrading (protocol %d, need %d)", domain.ErrClusterUpgrading, have, domain.ProtocolModuleForget)
+		}
+	}
+	list, err := s.Store.ListModules(ctx)
+	if err != nil {
+		return err
+	}
+	var (
+		found bool
+		spec  domain.ModuleSpec
+	)
+	for _, m := range list {
+		if m.Name == name {
+			found = true
+			spec = m
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("module %s: %w", name, domain.ErrNotFound)
+	}
+	if spec.Wanted {
+		return fmt.Errorf("%w: module %s is still enabled; remove it first", domain.ErrConflict, name)
+	}
+	installed, err := s.Packages.Installed(ctx, prefix)
+	if err != nil {
+		return err
+	}
+	if _, ok := installed[spec.Package()]; ok {
+		return fmt.Errorf("%w: package %s is still installed on this node; wait for removal to finish before forgetting (note: if the package remains on another node, that node will adopt it again as manually installed)", domain.ErrConflict, spec.Package())
+	}
+	return s.Store.DeleteModule(ctx, name)
+}
+
 // Available lists the modules the configured APT repositories offer (by
 // name, with a short description): what the console can enable.
 func (s *Service) Available(ctx context.Context) (map[string]string, error) {

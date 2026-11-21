@@ -86,3 +86,29 @@ func TestRestore_壊れたファイルや別形式は断る(t *testing.T) {
 		t.Error("truncated JSON")
 	}
 }
+
+func TestBackup_忘却したモジュールの記録はバックアップに含まれず復元されない(t *testing.T) {
+	src := newCluster(t, 1).leader(t)
+	_ = src.PutModule(ctx, domain.ModuleSpec{Name: "auth", Version: "1.0", Wanted: true})
+	_ = src.PutModule(ctx, domain.ModuleSpec{Name: "audit", Version: "1.0", Wanted: false})
+	if err := src.DeleteModule(ctx, "audit"); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := src.WriteBackup(&buf, "node1", taken); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := newCluster(t, 1).leader(t)
+	if _, err := dst.RestoreBackup(ctx, bytes.NewReader(buf.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+	st := dst.State()
+	if _, ok := st.Modules["audit"]; ok {
+		t.Errorf("forgotten module restored from backup: %+v", st.Modules)
+	}
+	if !st.Modules["auth"].Wanted {
+		t.Errorf("wanted module missing after restore: %+v", st.Modules)
+	}
+}
