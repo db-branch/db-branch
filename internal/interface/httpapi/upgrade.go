@@ -38,8 +38,8 @@ func (s *Server) poolFree() uint64 {
 }
 
 // acceptedResult is accepted for a task that returns a result.
-func (s *Server) acceptedResult(w http.ResponseWriter, kind string, target operation.Target, f operation.ResultFunc) {
-	op, err := s.Ops.StartResult(kind, target, f)
+func (s *Server) acceptedResult(w http.ResponseWriter, r *http.Request, kind string, target operation.Target, f operation.ResultFunc) {
+	op, err := s.Ops.StartResultAs(principalOf(r).ID, kind, target, f)
 	if err != nil {
 		fail(w, err)
 		return
@@ -72,7 +72,7 @@ func (s *Server) upgradeBranch(w http.ResponseWriter, r *http.Request, svc Branc
 		return
 	}
 	req := dbbranch.UpgradeRequest{Name: n, To: to, CheckOnly: in.CheckOnly, NoRollback: in.NoRollback, Force: in.Force, PoolFree: s.poolFree()}
-	s.acceptedResult(w, "branch.upgrade", operation.Target{Resource: "branch", Name: n.String()},
+	s.acceptedResult(w, r, "branch.upgrade", operation.Target{Resource: "branch", Name: n.String()},
 		func(ctx context.Context, report func(string)) (any, error) {
 			res, err := svc.UpgradeBranch(ctx, req, report)
 			s.publishBranch(ctx, svc, n)

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"github.com/db-branch/db-branch/internal/usecase/operation"
 	"net/http"
 	"slices"
 	"sort"
@@ -141,7 +142,7 @@ func (s *Server) installModule(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.Bus.Publish("module.updated", m)
+	s.Bus.PublishTo(operation.Audience{Action: "module.read"}, "module.updated", m)
 	writeJSON(w, http.StatusOK, m)
 }
 
@@ -153,7 +154,7 @@ func (s *Server) removeModule(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.Bus.Publish("module.updated", map[string]string{"name": r.PathValue("name")})
+	s.Bus.PublishTo(operation.Audience{Action: "module.read"}, "module.updated", map[string]string{"name": r.PathValue("name")})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -165,6 +166,6 @@ func (s *Server) forgetModule(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.Bus.Publish("module.updated", map[string]string{"name": r.PathValue("name")})
+	s.Bus.PublishTo(operation.Audience{Action: "module.read"}, "module.updated", map[string]string{"name": r.PathValue("name")})
 	w.WriteHeader(http.StatusNoContent)
 }

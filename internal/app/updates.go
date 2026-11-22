@@ -44,7 +44,9 @@ func wireUpdates(ctx context.Context, store any, cl *clusterRuntime, node string
 		s.Nodes = cl.store.ListNodes
 	} else {
 		// Without Raft nobody else shows the change: tell the console here.
-		s.Changed = func() { bus.Publish("update.updated", map[string]string{"what": "rollout"}) }
+		s.Changed = func() {
+			bus.PublishTo(operation.Audience{Action: "update.read"}, "update.updated", map[string]string{"what": "rollout"})
+		}
 	}
 	go func() {
 		last := ""

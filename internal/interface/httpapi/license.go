@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/db-branch/db-branch/internal/usecase/operation"
 	"net/http"
 	"strconv"
 	"strings"
@@ -97,7 +98,7 @@ func (s *Server) applyLicense(w http.ResponseWriter, r *http.Request) {
 		licenseFail(w, err)
 		return
 	}
-	s.Bus.Publish("module.updated", map[string]string{})
+	s.Bus.PublishTo(operation.Audience{Action: "module.read"}, "module.updated", map[string]string{})
 	writeJSON(w, http.StatusOK, rep)
 }
 
@@ -206,7 +207,7 @@ func (s *Server) renewLicense(w http.ResponseWriter, r *http.Request) {
 		licenseFail(w, err)
 	default:
 		if st.LastResult == licensing.ResultRenewed {
-			s.Bus.Publish("module.updated", map[string]string{})
+			s.Bus.PublishTo(operation.Audience{Action: "module.read"}, "module.updated", map[string]string{})
 		}
 		writeJSON(w, http.StatusOK, st)
 	}

@@ -241,10 +241,10 @@ func (s *Server) publishBase(ctx context.Context, svc Branches, n domain.Name) {
 func (s *Server) publishBaseNow(ctx context.Context, svc Branches, n domain.Name) {
 	b, err := svc.GetBase(ctx, n)
 	if err != nil {
-		s.Bus.Publish("base.deleted", map[string]string{"name": n.String()})
+		s.Bus.PublishTo(operation.Audience{Action: "base.read"}, "base.deleted", map[string]string{"name": n.String()})
 		return
 	}
-	s.Bus.Publish("base.updated", s.baseView(ctx, b))
+	s.Bus.PublishTo(operation.Audience{Action: "base.read"}, "base.updated", s.baseView(ctx, b))
 }
 
 func (s *Server) createBase(w http.ResponseWriter, r *http.Request, svc Branches) {
@@ -289,7 +289,7 @@ func (s *Server) createBase(w http.ResponseWriter, r *http.Request, svc Branches
 		return
 	}
 	req := dbbranch.CreateBaseRequest{Name: n, Runtime: rt, Dump: dump, Description: in.Description, ReplicaNodes: in.ReplicaNodes}
-	s.accepted(w, "base.create", operation.Target{Resource: "base", Name: n.String()},
+	s.accepted(w, r, "base.create", operation.Target{Resource: "base", Name: n.String()},
 		func(ctx context.Context, report func(string)) error {
 			defer done()
 			_, err := svc.CreateBase(ctx, req, report)
@@ -313,7 +313,7 @@ func (s *Server) snapshotBase(w http.ResponseWriter, r *http.Request, svc Branch
 	if s.forwardBase(w, r, svc, n) {
 		return
 	}
-	s.accepted(w, "base.snapshot", operation.Target{Resource: "base", Name: n.String()},
+	s.accepted(w, r, "base.snapshot", operation.Target{Resource: "base", Name: n.String()},
 		func(ctx context.Context, report func(string)) error {
 			_, err := svc.SnapshotBase(ctx, n, report)
 			s.publishBase(ctx, svc, n)
@@ -346,7 +346,7 @@ func (s *Server) maskBase(w http.ResponseWriter, r *http.Request, svc Branches, 
 		return
 	}
 	req := dbbranch.MaskRequest{Target: n, Source: source, Snapshot: in.Snapshot, Masker: in.Masker, Rules: in.Rules, By: ownerDisplayName(principalOf(r))}
-	s.accepted(w, "base.mask", operation.Target{Resource: "base", Name: n.String()},
+	s.accepted(w, r, "base.mask", operation.Target{Resource: "base", Name: n.String()},
 		func(ctx context.Context, report func(string)) error {
 			_, err := svc.MaskBase(ctx, req, report)
 			s.publishBase(ctx, svc, n)

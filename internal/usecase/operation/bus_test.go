@@ -1,6 +1,7 @@
 package operation_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -98,5 +99,58 @@ func TestClose_購読をやめたら届かない(t *testing.T) {
 	bus.Publish("x", 1)
 	if _, ok := <-s.Events(); ok {
 		t.Error("channel should be closed")
+	}
+}
+
+func TestPublishTo_宛先を付けて届け再送でも保つ(t *testing.T) {
+	bus := operation.NewBus(10)
+	bus.Publish("setting.updated", "x") // no audience: admins only
+	bus.PublishTo(operation.Audience{Owner: "token:a", Open: true, Action: "base.read"}, "branch.updated", "y")
+
+	s := bus.Subscribe(1)
+	defer s.Close()
+	ev := next(t, s)
+	if ev.Audience != (operation.Audience{Owner: "token:a", Open: true, Action: "base.read"}) {
+		t.Errorf("audience = %+v", ev.Audience)
+	}
+}
+
+func TestStart_操作の更新は開始した人宛てに届く(t *testing.T) {
+	m, bus := newManager()
+	s := bus.Subscribe(0)
+	defer s.Close()
+	op, err := m.StartAs("token:a", "branch.create", operation.Target{Resource: "branch", Name: "x"},
+		func(context.Context, func(string)) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := next(t, s)
+	if ev.Audience.Owner != "token:a" || op.Owner != "token:a" {
+		t.Errorf("event %+v op %+v", ev, op)
+	}
+}
+
+func TestSubscribe_再送が購読の余裕を超えてもバスを止めずResyncを知らせる(t *testing.T) {
+	bus := operation.NewBus(1000)
+	for i := 0; i < 500; i++ {
+		bus.Publish("x", i)
+	}
+	done := make(chan *operation.Subscription)
+	go func() { done <- bus.Subscribe(1) }()
+	select {
+	case s := <-done:
+		defer s.Close()
+		if !s.Resync {
+			t.Error("a replay too long to deliver must ask the client to reload")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Subscribe blocked on a replay larger than the subscriber's buffer")
+	}
+	published := make(chan struct{})
+	go func() { bus.Publish("y", 0); close(published) }()
+	select {
+	case <-published:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the bus is stuck")
 	}
 }

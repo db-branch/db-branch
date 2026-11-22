@@ -172,6 +172,7 @@ data: {"id":"op_...","state":"running","progress":{"done":2,"total":3,"unit":"no
 - `data`: `updated` は単体取得と同じ完全な表現。`deleted` は `{"name": ...}`（オペレーションは `{"id": ...}`）
 - `id`: Raft のインデックス。`Last-Event-ID` を付けて再接続すれば取りこぼした分から再送する。古すぎて再送できないときは `event: resync` を送るので、クライアントは一覧を取り直す
 - 15 秒ごとにコメント行（`: ping`）を送って接続を保つ
+- 受け取れるイベントは呼び出し元の権限で絞る。管理者は全部。それ以外は、自分（と SharesBranches で共有する相手）のブランチ・オペレーション、open なブランチ、`base.read` などのアクションが許された種類のイベントだけ。宛先を持たないイベントは管理者だけに送る（既定は閉じる）。絞った分の ID は飛ぶ
 - 絞り込み: `?types=branch,operation`
 
 ## 3. 認証
@@ -625,6 +626,8 @@ GET /v1/updates
 |---|---|---|---|
 | `GET` | `/v1/operations` | 200 一覧（新しい順） | `operation.list` |
 | `GET` | `/v1/operations/{id}` | 200 | `operation.get` |
+
+見えるのは、自分が始めたオペレーション、SharesBranches で共有する相手のもの、管理者は全部。システムが始めたもの（ランタイムの導入、定期リフレッシュ）は管理者だけ。見えないオペレーションは存在しないときと同じ 404 を返す。
 
 絞り込み: `?state=running`、`?kind=branch.create`、`?target=branch/feature-x`。取り消しは当面提供しない。
 

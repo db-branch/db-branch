@@ -206,7 +206,7 @@ func (h *branchHost) StartOperation(ctx context.Context, kind, branch string) (s
 		return "", fmt.Errorf("%w: operation kind %q", domain.ErrInvalidName, kind)
 	}
 	mo := &moduleOp{ready: make(chan struct{}), done: make(chan string, 1)}
-	op, err := h.s.Ops.Start(kind, operation.Target{Resource: "branch", Name: b.Name.String()},
+	op, err := h.s.Ops.StartAs(b.Owner, kind, operation.Target{Resource: "branch", Name: b.Name.String()},
 		func(_ context.Context, report func(string)) error {
 			mo.report = report
 			close(mo.ready)
