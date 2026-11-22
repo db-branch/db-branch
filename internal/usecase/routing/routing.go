@@ -48,9 +48,10 @@ func routable(b domain.Branch) bool {
 	return b.Status == domain.BranchReady || b.Status == domain.BranchResetting || b.Status == domain.BranchRestoring
 }
 
-// entryRuleBase is where the per-user rules that send a comment to the branch
-// rules start. Hostgroup IDs stay below it and CatchAllRule above it.
-const entryRuleBase = 1_500_000_000
+// MaxRouteUsers is how many route users there can be: each has an entry rule
+// whose ID (1..MaxRouteUsers) must be below every branch rule, because the
+// proxy walks rules once in ID order and hostgroup IDs start at 1000.
+const MaxRouteUsers = 999
 
 // Comment syntax: only a real /* ... */ comment naming the branch matches, so
 // a string literal that merely contains the words is left alone.
@@ -127,7 +128,10 @@ func Plan(branches []domain.Branch, hosts map[string]string, users []domain.Rout
 			continue
 		}
 		t.Users = append(t.Users, User{Name: u.Name, Password: u.Password, Hostgroup: id})
-		t.Rules = append(t.Rules, Rule{ID: entryRuleBase + entries[t], Username: u.Name, Pattern: commentStart, FlagOut: commentFlag})
+		if entries[t] >= MaxRouteUsers {
+			continue
+		}
+		t.Rules = append(t.Rules, Rule{ID: entries[t] + 1, Username: u.Name, Pattern: commentStart, FlagOut: commentFlag})
 		entries[t]++
 	}
 	for _, t := range []*Tables{&c.MySQL, &c.Postgres} {
@@ -212,6 +216,17 @@ func (s *Service) AddUser(ctx context.Context, u domain.RouteUser) error {
 		return fmt.Errorf("default branch: %w", err)
 	}
 	u.Engine = def.Runtime.Engine
+	existing, err := s.Users.ListRouteUsers(ctx)
+	if err != nil {
+		return err
+	}
+	replacing := false
+	for _, e := range existing {
+		replacing = replacing || e.Name == u.Name
+	}
+	if !replacing && len(existing) >= MaxRouteUsers {
+		return errors.Join(domain.ErrInvalidRouteUser, fmt.Errorf("at most %d route users", MaxRouteUsers))
+	}
 	return s.Users.PutRouteUser(ctx, u)
 }
 

@@ -3,6 +3,7 @@ package routing_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -261,5 +262,37 @@ func TestAddUser_既定ブランチのエンジンを覚える(t *testing.T) {
 	list, _ := s.ListUsers(ctx)
 	if len(list) != 1 || list[0].Engine != domain.Postgres {
 		t.Errorf("users = %+v", list)
+	}
+}
+
+func TestPlan_コメントの入口ルールはブランチ別ルールより先に評価される(t *testing.T) {
+	branches := []domain.Branch{branch("a-1", "n1", 40001, domain.BranchReady)}
+	users := []domain.RouteUser{{Name: "app", Password: "p", DefaultBranch: name("a-1")}}
+	c := routing.Plan(branches, map[string]string{"n1": "192.0.2.10"}, users).MySQL
+	// The proxy walks rules once in ID order, so a rule waiting on the flag
+	// must come after the one that sets it.
+	setAt := -1
+	for _, r := range c.Rules {
+		if r.FlagOut != 0 {
+			setAt = r.ID
+		} else if r.FlagIn != 0 && (setAt < 0 || r.ID < setAt) {
+			t.Errorf("rule %d (%q) is checked before the entry rule %d", r.ID, r.Pattern, setAt)
+		}
+	}
+}
+
+func TestAddUser_ルートユーザーの数には上限がある(t *testing.T) {
+	s, st, _ := newService(t)
+	_ = st.PutBranch(ctx, branch("feature-x", "n1", 40001, domain.BranchReady))
+	for i := 0; i < routing.MaxRouteUsers; i++ {
+		if err := s.AddUser(ctx, domain.RouteUser{Name: fmt.Sprintf("u%d", i), Password: "p", DefaultBranch: name("feature-x")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.AddUser(ctx, domain.RouteUser{Name: "one-too-many", Password: "p", DefaultBranch: name("feature-x")}); !errors.Is(err, domain.ErrInvalidRouteUser) {
+		t.Errorf("over the limit: %v", err)
+	}
+	if err := s.AddUser(ctx, domain.RouteUser{Name: "u0", Password: "new", DefaultBranch: name("feature-x")}); err != nil {
+		t.Errorf("replacing one is fine: %v", err)
 	}
 }
