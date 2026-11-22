@@ -602,7 +602,7 @@ func (f *FSM) apply(c Command) error {
 		s.Branches[c.BranchOwner.Name] = b
 	case "revoke_session":
 		for id, exp := range s.RevokedSessions {
-			if exp <= c.At {
+			if exp+revokedGrace <= c.At {
 				delete(s.RevokedSessions, id)
 			}
 		}
@@ -736,6 +736,10 @@ func (f *FSM) State() State {
 	}
 	return out
 }
+
+// revokedGrace keeps a revocation record this many seconds past the session's
+// expiry, so a node whose clock runs ahead cannot drop a record early.
+const revokedGrace = 300
 
 // SessionRevoked reports whether console session id was logged out.
 func (f *FSM) SessionRevoked(id string) bool {

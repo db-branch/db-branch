@@ -423,12 +423,14 @@ func (s *Service) Session(token string) (Session, error) {
 }
 
 // Logout ends a session. It is recorded in Revocations so that every node
-// refuses the cookie; if that cannot be written (a cluster still upgrading)
-// the session still ends on this node.
-func (s *Service) Logout(token string) {
+// refuses the cookie. The session always ends on this node; the error says
+// the shared record could not be written (domain.ErrClusterUpgrading while a
+// node is below protocol 24, or a failed write), so the caller can tell the
+// user that other nodes may still accept the cookie.
+func (s *Service) Logout(token string) error {
 	sess, err := s.Session(token)
 	if err != nil {
-		return
+		return nil
 	}
 	now := s.Clock()
 	s.mu.Lock()
@@ -443,8 +445,9 @@ func (s *Service) Logout(token string) {
 	s.revoked[sess.id] = sess.ExpiresAt
 	s.mu.Unlock()
 	if s.Revocations != nil { // outside the lock: this may wait for the cluster
-		_ = s.Revocations.Revoke(sess.id, sess.ExpiresAt, now)
+		return s.Revocations.Revoke(sess.id, sess.ExpiresAt, now)
 	}
+	return nil
 }
 
 // ChangePassword sets a new password, which ends every session; the caller

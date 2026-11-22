@@ -654,6 +654,10 @@ func TestFSM_revoke_sessionはログアウト済みセッションを記録し�
 	}
 	f := raftstore.NewFSM()
 	apply(t, f, raftstore.RevokeSession("old", time.Unix(1500, 0), time.Unix(1000, 0)))
+	apply(t, f, raftstore.RevokeSession("s1", time.Unix(5000, 0), time.Unix(1700, 0))) // within the grace: "old" stays
+	if !f.SessionRevoked("old") {
+		t.Error("record dropped inside the clock-skew grace")
+	}
 	apply(t, f, raftstore.RevokeSession("s1", time.Unix(5000, 0), time.Unix(2000, 0))) // prunes "old"
 	if f.SessionRevoked("old") {
 		t.Error("expired record kept")

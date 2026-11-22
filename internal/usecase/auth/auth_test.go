@@ -583,7 +583,9 @@ func TestLogout_失効を共有の記録に残し別のノードでも使えな�
 	if _, err := b.Session(sess.Token); err != nil {
 		t.Fatalf("before logout: %v", err)
 	}
-	a.Logout(sess.Token)
+	if err := a.Logout(sess.Token); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := b.Session(sess.Token); !errors.Is(err, auth.ErrNoSession) {
 		t.Errorf("other node after logout: %v", err)
 	}
@@ -591,9 +593,12 @@ func TestLogout_失効を共有の記録に残し別のノードでも使えな�
 
 func TestLogout_共有の記録に書けなくてもこのノードでは失効させる(t *testing.T) {
 	s, _, _ := newService(t)
-	s.Revocations = &memRevocations{failErr: errors.New("cluster upgrading")}
+	boom := errors.New("no leader")
+	s.Revocations = &memRevocations{failErr: boom}
 	sess, _ := s.Login("admin", "correct horse battery")
-	s.Logout(sess.Token)
+	if err := s.Logout(sess.Token); !errors.Is(err, boom) {
+		t.Errorf("Logout error = %v, want the failure reported", err)
+	}
 	if _, err := s.Session(sess.Token); !errors.Is(err, auth.ErrNoSession) {
 		t.Errorf("after failed shared revoke: %v", err)
 	}
