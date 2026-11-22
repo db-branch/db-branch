@@ -3,12 +3,15 @@ package httpapi_test
 import (
 	"bufio"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/interface/httpapi"
 	"github.com/db-branch/db-branch/internal/usecase/operation"
 	"github.com/db-branch/db-branch/pkg/ext"
 )
@@ -16,6 +19,11 @@ import (
 // sseTypes opens /v1/events as tok and returns a function that reads event
 // types until the one named stop arrives (or time runs out).
 func sseTypes(t *testing.T, srv *httptest.Server, tok, lastID string) func(stop string) []string {
+	t.Helper()
+	return sseStream(t, srv, tok, lastID)
+}
+
+func sseStream(t *testing.T, srv *httptest.Server, tok, lastID string) func(stop string) []string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	t.Cleanup(cancel)
@@ -127,5 +135,82 @@ func TestHTTPAPI_SSEはチームの人へ互いのイベントを流しログイ
 	resp.Body.Close()
 	if resp.StatusCode != 401 {
 		t.Errorf("anonymous: %d", resp.StatusCode)
+	}
+}
+
+func TestHTTPAPI_再起動後でも削除イベントは所有者とopenの閲覧者に届く(t *testing.T) {
+	f := ownedFixture(t) // alices (private) and opened (open) exist; nothing was published since "boot"
+	srv := httptest.NewServer(f.srv.Handler(false))
+	defer srv.Close()
+	bob, alice := sseStream(t, srv, "t-bob", ""), sseStream(t, srv, "t-alice", "")
+
+	ctx := context.Background()
+	f.branches.mu.Lock()
+	delete(f.branches.branches, "alices")
+	delete(f.branches.branches, "opened")
+	f.branches.mu.Unlock()
+	f.srv.PublishBranch(ctx, name("alices"))
+	f.srv.PublishBranch(ctx, name("opened"))
+	f.srv.Bus.PublishTo(operation.Audience{Open: true}, "stop", nil)
+
+	if got := strings.Join(bob("stop"), ","); got != "branch.deleted" { // only opened
+		t.Errorf("bob receives %q", got)
+	}
+	if got := strings.Join(alice("stop"), ","); got != "branch.deleted,branch.deleted" {
+		t.Errorf("alice receives %q", got)
+	}
+}
+
+func TestHTTPAPI_openから非公開にしたブランチは閲覧者の一覧から消える(t *testing.T) {
+	f := ownedFixture(t)
+	srv := httptest.NewServer(f.srv.Handler(false))
+	defer srv.Close()
+	bob := sseStream(t, srv, "t-bob", "")
+
+	f.branches.mu.Lock()
+	b := f.branches.branches["opened"]
+	b.Access = domain.AccessPrivate
+	f.branches.branches["opened"] = b
+	f.branches.mu.Unlock()
+	f.srv.PublishBranch(context.Background(), name("opened"))
+	f.srv.Bus.PublishTo(operation.Audience{Open: true}, "stop", nil)
+
+	if got := strings.Join(bob("stop"), ","); got != "branch.deleted" {
+		t.Errorf("bob receives %q, want the branch dropped from his view", got)
+	}
+}
+
+func TestHTTPAPI_初期化前のストリームは次の接続で宛先を覚え直す(t *testing.T) {
+	f := ownedFixture(t)
+	ready := f.srv.Branches
+	f.srv.Branches = func() (httpapi.Branches, error) { return nil, errors.New("not initialized") }
+	srv := httptest.NewServer(f.srv.Handler(false))
+	defer srv.Close()
+	first := sseStream(t, srv, "t-full", "")
+	f.srv.Bus.PublishTo(operation.Audience{Open: true}, "stop", nil)
+	first("stop")
+
+	f.srv.Branches = ready
+	alice := sseStream(t, srv, "t-alice", "")
+	f.branches.mu.Lock()
+	delete(f.branches.branches, "alices")
+	f.branches.mu.Unlock()
+	f.srv.PublishBranch(context.Background(), name("alices"))
+	f.srv.Bus.PublishTo(operation.Audience{Open: true}, "stop", nil)
+	if got := strings.Join(alice("stop"), ","); got != "branch.deleted" {
+		t.Errorf("alice receives %q", got)
+	}
+}
+
+func TestHTTPAPI_宛先にアクションを持つイベントはそのアクションが許された人にだけ届く(t *testing.T) {
+	f := ownedFixture(t)
+	f.srv.Bus.Publish("first", nil)
+	f.srv.Bus.PublishTo(operation.Audience{Action: "setting.read"}, "setting.updated", "x") // not for branches tokens
+	f.srv.Bus.PublishTo(operation.Audience{Action: "runtime.read"}, "runtime.updated", "x")
+	f.srv.Bus.PublishTo(operation.Audience{Open: true}, "stop", nil)
+	srv := httptest.NewServer(f.srv.Handler(false))
+	defer srv.Close()
+	if got := strings.Join(sseTypes(t, srv, "t-bob", "1")("stop"), ","); got != "runtime.updated" {
+		t.Errorf("bob receives %q", got)
 	}
 }

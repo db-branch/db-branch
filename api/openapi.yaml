@@ -1740,7 +1740,7 @@ paths:
       x-dbb-action: operation.read
       x-dbb-token-scopes: [full, branches]
       description: |-
-        Lists operations, newest first. The newest 200 finished operations are kept. Admins (a `full` token, the admin password, the local socket) see all of them; everyone else sees only the operations they started and those of people who share their branches (a module's team policy). Operations the system started (installing a runtime, a scheduled refresh) are for admins only.
+        Lists operations, newest first. The newest 200 finished operations are kept. Admins (a `full` token, the admin password, the local socket) see all of them; everyone else sees only the operations they started and those of people who share their branches (a module's team policy). Operations the system started (installing a runtime, a scheduled refresh) are for admins only. An operation belongs to whoever sent the request: when an admin makes a branch for someone else, the admin owns the operation, not the branch owner.
 
         **Action:** `operation.read`. Allowed for `full` and `branches` tokens.
       responses:

@@ -326,14 +326,40 @@ func (s *Server) publishBranch(ctx context.Context, svc Branches, n domain.Name)
 func (s *Server) publishBranchNow(ctx context.Context, svc Branches, n domain.Name) {
 	b, err := svc.GetBranch(ctx, n)
 	if err != nil {
-		// The branch is gone, so who owned it comes from the last event about it.
-		owner, _ := s.branchOwners.LoadAndDelete(n.String())
-		id, _ := owner.(string)
-		s.Bus.PublishTo(operation.Audience{Owner: id}, "branch.deleted", map[string]string{"name": n.String()})
+		// The branch is gone, so who could see it comes from the last event about it.
+		prev, _ := s.branchAudiences.LoadAndDelete(n.String())
+		aud, _ := prev.(operation.Audience)
+		s.Bus.PublishTo(aud, "branch.deleted", map[string]string{"name": n.String()})
 		return
 	}
-	s.branchOwners.Store(n.String(), b.Owner)
-	s.Bus.PublishTo(operation.Audience{Owner: b.Owner, Open: b.Open()}, "branch.updated", s.branchView(ctx, svc, b))
+	aud := operation.Audience{Owner: b.Owner, Open: b.Open()}
+	if prev, ok := s.branchAudiences.Swap(n.String(), aud); ok && prev.(operation.Audience).Open && !aud.Open {
+		// Made private: tell the people who saw it open to drop it.
+		s.Bus.PublishTo(operation.Audience{Open: true}, "branch.deleted", map[string]string{"name": n.String()})
+	}
+	s.Bus.PublishTo(aud, "branch.updated", s.branchView(ctx, svc, b))
+}
+
+// seedBranchAudiences learns who sees each branch, once, so that a branch
+// deleted before any event about it (after a restart) still reaches them.
+func (s *Server) seedBranchAudiences(ctx context.Context) {
+	s.seedMu.Lock()
+	defer s.seedMu.Unlock()
+	if s.seeded {
+		return
+	}
+	svc, err := s.Branches()
+	if err != nil {
+		return // not initialized yet: try again on the next stream
+	}
+	list, err := svc.ListBranches(ctx)
+	if err != nil {
+		return
+	}
+	s.seeded = true
+	for _, b := range list {
+		s.branchAudiences.LoadOrStore(b.Name.String(), operation.Audience{Owner: b.Owner, Open: b.Open()})
+	}
 }
 
 func (s *Server) patchBranch(w http.ResponseWriter, r *http.Request, svc Branches, n domain.Name) {

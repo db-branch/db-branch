@@ -88,9 +88,12 @@ type Runtimes interface {
 
 // Server holds the API's dependencies.
 type Server struct {
-	// branchOwners remembers each branch's owner ID (name -> owner) from its
-	// last event, to address the event that tells it was deleted.
-	branchOwners sync.Map
+	// branchAudiences remembers who sees each branch (name -> Audience) from
+	// its last event, to address the event that tells it was deleted or made
+	// private. branchSeed fills it from the branch list on the first stream.
+	branchAudiences sync.Map
+	seedMu          sync.Mutex
+	seeded          bool
 
 	// anonLimiter counts the branches each client address creates without a
 	// login (anonymousRate per hour), in memory.

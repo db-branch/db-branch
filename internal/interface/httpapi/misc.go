@@ -213,6 +213,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 	lastID, _ := strconv.ParseUint(r.Header.Get("Last-Event-ID"), 10, 64)
 	p := principalOf(r)
+	s.seedBranchAudiences(r.Context())
 	sub := s.Bus.Subscribe(lastID)
 	defer sub.Close()
 
