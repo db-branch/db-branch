@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -58,17 +59,28 @@ func TestPlan_ブランチごとにホストグループとユーザーとコメ
 	if _, ok := byUser["legacy"]; ok {
 		t.Error("a branch without its own user cannot be reached by user name yet")
 	}
-	first, last := c.Rules[0], c.Rules[len(c.Rules)-1]
-	if first.ID != 1 || first.FlagOut == 0 || first.Apply || last.ID != routing.CatchAllRule || last.Error != routing.UnknownBranch || last.FlagIn != first.FlagOut {
+	last := c.Rules[len(c.Rules)-1]
+	entries := 0
+	var flag int
+	for _, r := range c.Rules {
+		if r.FlagOut != 0 {
+			entries++
+			flag = r.FlagOut
+			if r.Apply || r.Username == "" {
+				t.Errorf("entry rule = %+v", r)
+			}
+		}
+	}
+	if entries != 2 || last.ID != routing.CatchAllRule || last.Error != routing.UnknownBranch || last.FlagIn != flag {
 		t.Errorf("rules = %+v", c.Rules)
 	}
 	found := false
 	for _, r := range c.Rules {
-		if r.Pattern == "db_branch='feature-x'" {
-			found = r.Hostgroup == hg[name("feature-x")] && r.Apply && r.FlagIn == first.FlagOut
+		if r.Hostgroup == hg[name("feature-x")] && r.FlagIn == flag {
+			found = r.Apply && r.Pattern == `/\*\s*db_branch\s*=\s*'feature-x'\s*\*/`
 		}
 	}
-	if !found || len(c.Rules) != 5 {
+	if !found || len(c.Rules) != 6 {
 		t.Errorf("rules = %+v", c.Rules)
 	}
 }
@@ -176,7 +188,7 @@ func TestPlan_PostgreSQLのブランチはPostgreSQL側に置く(t *testing.T) {
 	if len(c.Postgres.Users) != 2 || len(c.MySQL.Users) != 1 {
 		t.Errorf("users: mysql %+v pg %+v", c.MySQL.Users, c.Postgres.Users)
 	}
-	if len(c.Postgres.Rules) != 3 || len(c.MySQL.Rules) != 3 {
+	if len(c.Postgres.Rules) != 3 || len(c.MySQL.Rules) != 2 {
 		t.Errorf("rules: mysql %+v pg %+v", c.MySQL.Rules, c.Postgres.Rules)
 	}
 }
@@ -186,5 +198,68 @@ func TestPlan_復元中のブランチもルートを保つ(t *testing.T) {
 	c := routing.Plan([]domain.Branch{branch("pr-2", "n1", 40001, domain.BranchRestoring), branch("gone", "n1", 40002, domain.BranchDeleting)}, hosts, nil).MySQL
 	if len(c.Servers) != 1 || c.Servers[0].Port != 40001 {
 		t.Errorf("servers = %+v: a restore is brief, the route stays like it does for a reset", c.Servers)
+	}
+}
+
+func TestPlan_外部ランタイムのブランチはMySQLにもPostgreSQLにも入らない(t *testing.T) {
+	ext := branch("ext-x", "n1", 40020, domain.BranchReady)
+	ext.Runtime = domain.RuntimeRef{Engine: "mongo", Version: "7"}
+	hosts := map[string]string{"n1": "192.0.2.10"}
+	users := []domain.RouteUser{{Name: "extapp", Password: "p", DefaultBranch: name("ext-x")}}
+	c := routing.Plan([]domain.Branch{ext}, hosts, users)
+	if len(c.MySQL.Servers)+len(c.MySQL.Users)+len(c.Postgres.Servers)+len(c.Postgres.Users) != 0 {
+		t.Errorf("an external engine is not behind the proxy: %+v", c)
+	}
+}
+
+func TestPlan_デフォルトブランチ削除済みのPostgreSQLルートユーザーがMySQLへ移動しない(t *testing.T) {
+	users := []domain.RouteUser{{Name: "pgapp", Password: "p", DefaultBranch: name("deleted"), Engine: domain.Postgres}}
+	c := routing.Plan(nil, nil, users)
+	if len(c.MySQL.Users) != 0 || len(c.Postgres.Users) != 1 || c.Postgres.Users[0].Hostgroup != routing.NoHostgroup {
+		t.Errorf("mysql %+v pg %+v", c.MySQL.Users, c.Postgres.Users)
+	}
+}
+
+func TestPlan_コメントルーティングは共有ルートユーザーだけに許しブランチ専用ユーザーの越境を許さない(t *testing.T) {
+	branches := []domain.Branch{branch("a-1", "n1", 40001, domain.BranchReady), branch("b-1", "n1", 40002, domain.BranchReady)}
+	users := []domain.RouteUser{{Name: "app", Password: "p", DefaultBranch: name("a-1")}}
+	c := routing.Plan(branches, map[string]string{"n1": "192.0.2.10"}, users).MySQL
+	entry := map[string]bool{}
+	for _, r := range c.Rules {
+		if r.FlagOut != 0 && r.FlagIn == 0 {
+			entry[r.Username] = true
+			if r.Pattern != `/\*\s*db_branch\s*=` {
+				t.Errorf("the entry rule must anchor on comment syntax: %q", r.Pattern)
+			}
+		}
+		if r.FlagIn != 0 && r.Hostgroup != 0 && !strings.HasPrefix(r.Pattern, `/\*`) || !strings.HasSuffix(r.Pattern, `*/`) && r.Hostgroup != 0 {
+			t.Errorf("a branch rule must match a comment, not a bare string: %q", r.Pattern)
+		}
+	}
+	if len(entry) != 1 || !entry["app"] {
+		t.Errorf("only the route user may route by comment: %v", entry)
+	}
+}
+
+func TestPlan_RouteUserと同名のブランチユーザーは重複登録せずRouteUserを優先する(t *testing.T) {
+	branches := []domain.Branch{branch("app", "n1", 40001, domain.BranchReady)}
+	users := []domain.RouteUser{{Name: "app", Password: "shared", DefaultBranch: name("app")}}
+	c := routing.Plan(branches, map[string]string{"n1": "192.0.2.10"}, users).MySQL
+	if len(c.Users) != 1 || c.Users[0].Password != "shared" {
+		t.Errorf("users = %+v", c.Users)
+	}
+}
+
+func TestAddUser_既定ブランチのエンジンを覚える(t *testing.T) {
+	s, st, _ := newService(t)
+	pg := branch("pg-x", "n1", 40010, domain.BranchReady)
+	pg.Runtime = domain.RuntimeRef{Engine: domain.Postgres, Version: "18.6"}
+	_ = st.PutBranch(ctx, pg)
+	if err := s.AddUser(ctx, domain.RouteUser{Name: "pgapp", Password: "p", DefaultBranch: name("pg-x")}); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := s.ListUsers(ctx)
+	if len(list) != 1 || list[0].Engine != domain.Postgres {
+		t.Errorf("users = %+v", list)
 	}
 }

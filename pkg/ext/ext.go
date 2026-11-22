@@ -166,10 +166,12 @@ type RouteUser struct {
 // RouteRule is a query rule. Rules with FlagIn 0 are checked first; Pattern
 // is a regular expression on the query text, comments included.
 type RouteRule struct {
-	ID        int
-	FlagIn    int
-	FlagOut   int
-	Pattern   string
+	ID      int
+	FlagIn  int
+	FlagOut int
+	Pattern string
+	// Username limits the rule to one login; "" matches every login.
+	Username  string
 	Hostgroup int // destination; 0 keeps the user's
 	Error     string
 	Apply     bool

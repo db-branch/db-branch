@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"sync"
 
@@ -47,8 +48,26 @@ func routable(b domain.Branch) bool {
 	return b.Status == domain.BranchReady || b.Status == domain.BranchResetting || b.Status == domain.BranchRestoring
 }
 
+// entryRuleBase is where the per-user rules that send a comment to the branch
+// rules start. Hostgroup IDs stay below it and CatchAllRule above it.
+const entryRuleBase = 1_500_000_000
+
+// Comment syntax: only a real /* ... */ comment naming the branch matches, so
+// a string literal that merely contains the words is left alone.
+const (
+	commentStart = `/\*\s*db_branch\s*=`
+	commentEnd   = `\s*\*/`
+)
+
+func branchPattern(n domain.Name) string {
+	return commentStart + `\s*'` + regexp.QuoteMeta(n.String()) + `'` + commentEnd
+}
+
 // Plan computes the proxy config. hosts maps node names to the address the
-// proxy uses to reach that node's servers ("" is this node).
+// proxy uses to reach that node's servers ("" is this node). Only MySQL and
+// PostgreSQL go through the proxy; a branch of an external engine has no
+// table. Comment routing is for route users alone: a branch's own login
+// stays on its branch, so it cannot reach another branch by a comment.
 func Plan(branches []domain.Branch, hosts map[string]string, users []domain.RouteUser) Config {
 	var names []domain.Name
 	engine := map[domain.Name]domain.Engine{}
@@ -61,36 +80,59 @@ func Plan(branches []domain.Branch, hosts map[string]string, users []domain.Rout
 	hg := domain.Hostgroups(names)
 	c := Config{}
 	tables := func(e domain.Engine) *Tables {
-		if e == domain.Postgres {
+		switch e {
+		case domain.MySQL:
+			return &c.MySQL
+		case domain.Postgres:
 			return &c.Postgres
 		}
-		return &c.MySQL
+		return nil
+	}
+	shared := map[string]bool{}
+	for _, u := range users {
+		shared[u.Name] = true
 	}
 	for _, b := range branches {
 		id, ok := hg[b.Name]
 		host, known := hosts[b.Node]
-		if !ok || !known {
+		t := tables(b.Runtime.Engine)
+		if !ok || !known || t == nil {
 			continue
 		}
-		t := tables(b.Runtime.Engine)
 		t.Servers = append(t.Servers, Server{Hostgroup: id, Host: host, Port: b.Port})
-		if b.User == b.Name.String() {
+		// A route user of the same name keeps the name: the proxy takes one
+		// login per name.
+		if b.User == b.Name.String() && !shared[b.User] {
 			t.Users = append(t.Users, User{Name: b.User, Password: b.Password, Hostgroup: id})
 		}
-		t.Rules = append(t.Rules, Rule{ID: id, FlagIn: commentFlag, Pattern: "db_branch='" + b.Name.String() + "'", Hostgroup: id, Apply: true})
+		t.Rules = append(t.Rules, Rule{ID: id, FlagIn: commentFlag, Pattern: branchPattern(b.Name), Hostgroup: id, Apply: true})
 	}
+	users = append([]domain.RouteUser(nil), users...)
+	sort.Slice(users, func(i, j int) bool { return users[i].Name < users[j].Name })
+	entries := map[*Tables]int{}
 	for _, u := range users {
 		id, ok := hg[u.DefaultBranch]
 		if !ok {
 			id = NoHostgroup
 		}
-		t := tables(engine[u.DefaultBranch])
+		e := u.Engine
+		if be, live := engine[u.DefaultBranch]; live {
+			e = be
+		}
+		if e == "" {
+			e = domain.MySQL
+		}
+		t := tables(e)
+		if t == nil {
+			continue
+		}
 		t.Users = append(t.Users, User{Name: u.Name, Password: u.Password, Hostgroup: id})
+		t.Rules = append(t.Rules, Rule{ID: entryRuleBase + entries[t], Username: u.Name, Pattern: commentStart, FlagOut: commentFlag})
+		entries[t]++
 	}
 	for _, t := range []*Tables{&c.MySQL, &c.Postgres} {
 		t.Rules = append(t.Rules,
-			Rule{ID: 1, Pattern: "db_branch=", FlagOut: commentFlag},
-			Rule{ID: CatchAllRule, FlagIn: commentFlag, Pattern: "db_branch=", Error: UnknownBranch, Apply: true})
+			Rule{ID: CatchAllRule, FlagIn: commentFlag, Pattern: commentStart, Error: UnknownBranch, Apply: true})
 		sort.Slice(t.Servers, func(i, j int) bool { return t.Servers[i].Hostgroup < t.Servers[j].Hostgroup })
 		sort.Slice(t.Users, func(i, j int) bool { return t.Users[i].Name < t.Users[j].Name })
 		sort.Slice(t.Rules, func(i, j int) bool { return t.Rules[i].ID < t.Rules[j].ID })
@@ -165,9 +207,11 @@ func (s *Service) AddUser(ctx context.Context, u domain.RouteUser) error {
 	if err := u.Validate(branches); err != nil {
 		return err
 	}
-	if _, err := s.Store.GetBranch(ctx, u.DefaultBranch); err != nil {
+	def, err := s.Store.GetBranch(ctx, u.DefaultBranch)
+	if err != nil {
 		return fmt.Errorf("default branch: %w", err)
 	}
+	u.Engine = def.Runtime.Engine
 	return s.Users.PutRouteUser(ctx, u)
 }
 
