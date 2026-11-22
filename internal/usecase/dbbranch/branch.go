@@ -613,8 +613,11 @@ func (s *Service) ownUser(ctx context.Context, br domain.Branch) error {
 func (s *Service) saveBranch(ctx context.Context, br domain.Branch) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cur, err := s.Store.GetBranch(ctx, br.Name); err == nil {
-		br.ExpiresAt, br.Owner, br.OwnerName, br.Access = cur.ExpiresAt, cur.Owner, cur.OwnerName, cur.Access
+	cur, err := s.Store.GetBranch(ctx, br.Name)
+	if err != nil {
+		// Gone meanwhile (deleted elsewhere): do not bring it back.
+		return err
 	}
+	br.ExpiresAt, br.Owner, br.OwnerName, br.Access, br.User = cur.ExpiresAt, cur.Owner, cur.OwnerName, cur.Access, cur.User
 	return s.Store.PutBranch(ctx, br)
 }

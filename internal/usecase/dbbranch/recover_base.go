@@ -52,12 +52,23 @@ func (s *Service) settleInterruptedMaintenance(ctx context.Context, b domain.Bas
 	if err := s.removeMaskWork(ctx, srv, b); err != nil {
 		return err
 	}
-	if latest, ok := b.LatestSnapshot(); ok {
-		if err := s.Storage.Rollback(ctx, domain.Snapshot{Dataset: s.baseDataset(b.Name), Name: latest.Name}); err != nil {
-			return err
-		}
+	latest, ok := b.LatestSnapshot()
+	if !ok {
+		// Nothing to go back to: what the interrupted load left is not trustworthy.
+		return s.markBaseFailed(ctx, b, "interrupted by an agent restart before its first snapshot; delete and create it again")
+	}
+	if err := s.Storage.Rollback(ctx, domain.Snapshot{Dataset: s.baseDataset(b.Name), Name: latest.Name}); err != nil {
+		// E.g. a snapshot taken just before the crash is on disk but was never
+		// recorded. The recorded snapshots are intact, so branches still work;
+		// say so instead of failing every start.
+		return s.markBaseFailed(ctx, b, "interrupted by an agent restart and could not be rolled back to "+latest.Name+": "+err.Error())
 	}
 	b.Status = domain.BaseReady
+	return s.Store.PutBase(ctx, b)
+}
+
+func (s *Service) markBaseFailed(ctx context.Context, b domain.Base, why string) error {
+	b.Status, b.Error = domain.BaseFailed, why
 	return s.Store.PutBase(ctx, b)
 }
 

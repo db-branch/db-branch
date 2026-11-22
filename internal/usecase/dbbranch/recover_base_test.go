@@ -118,3 +118,34 @@ func TestDeleteBase_削除の最中はそのベースからブランチを作れ
 		t.Fatal(err)
 	}
 }
+
+func TestRecover_maintenanceで戻せないベースはfailedにして理由を残しエラーにしない(t *testing.T) {
+	e := newEnv(t)
+	e.withBase(t)
+	setBaseStatus(t, e, "prod", domain.BaseMaintenance)
+	e.storage.failOn = "rollback"
+
+	if err := e.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := e.store.GetBase(ctx, name("prod"))
+	if b.Status != domain.BaseFailed || b.Error == "" {
+		t.Errorf("base = %+v", b)
+	}
+}
+
+func TestRecover_スナップショットのないmaintenanceベースはfailedにする(t *testing.T) {
+	e := newEnv(t)
+	e.withBase(t)
+	b, _ := e.store.GetBase(ctx, name("prod"))
+	b.Status, b.Snapshots = domain.BaseMaintenance, nil
+	_ = e.store.PutBase(ctx, b)
+
+	if err := e.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = e.store.GetBase(ctx, name("prod"))
+	if b.Status != domain.BaseFailed {
+		t.Errorf("status = %s", b.Status)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/db-branch/db-branch/internal/domain"
 )
@@ -41,11 +42,15 @@ func (s *Service) MarkLost(ctx context.Context) ([]domain.Name, error) {
 		if !ok || b.Status == domain.BranchLost || b.Status == domain.BranchDeleting {
 			continue
 		}
+		prevErr := b.Error
 		if b.Status == domain.BranchPaused || b.Status == domain.BranchFailed {
 			b.LostFrom = b.Status
 		}
 		b.Status = domain.BranchLost
 		b.Error = fmt.Sprintf("node %s stopped answering at %s", n.Name, n.LastSeen.UTC().Format("2006-01-02T15:04:05Z"))
+		if b.LostFrom == domain.BranchFailed && prevErr != "" {
+			b.Error += failedMarker + prevErr
+		}
 		if err := s.Store.PutBranch(ctx, b); err != nil {
 			errs = append(errs, err)
 			continue
@@ -216,10 +221,13 @@ func (s *Service) resume(ctx context.Context, name domain.Name) error {
 	if err != nil || b.Status != domain.BranchLost || !s.owns(b.Node) {
 		return err
 	}
+	prevErr := b.Error
 	b.Status, b.Error = domain.BranchReady, ""
 	if b.LostFrom != "" {
 		b.Status = b.LostFrom
-		if b.Status == domain.BranchFailed {
+		if _, why, ok := strings.Cut(prevErr, failedMarker); ok && b.Status == domain.BranchFailed {
+			b.Error = why
+		} else if b.Status == domain.BranchFailed {
 			b.Error = "failed before its node stopped answering"
 		}
 		b.LostFrom = ""
@@ -277,3 +285,6 @@ func (s *Service) releaseMoved(ctx context.Context, byName map[string]domain.Bra
 	}
 	return errors.Join(errs...)
 }
+
+// failedMarker separates the lost message from the reason a failed branch had.
+const failedMarker = "; it had failed: "

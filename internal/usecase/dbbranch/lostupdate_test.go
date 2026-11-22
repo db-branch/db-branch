@@ -80,12 +80,26 @@ func TestMarkLostAndReconcile_一時停止中および失敗ブランチはノ�
 			if b.Status != status {
 				t.Errorf("status = %s, want %s", b.Status, status)
 			}
-			if b.Error == "" && status == domain.BranchFailed {
-				t.Error("failed branch lost its reason")
+			if status == domain.BranchFailed && b.Error != "boom" {
+				t.Errorf("failed branch lost its reason: %q", b.Error)
 			}
 			if p.origin.j.has("start branch-x") {
 				t.Errorf("branch was started: %q", p.origin.j.entries)
 			}
 		})
+	}
+}
+
+func TestResetBranch_実行中に消されたブランチを復活させない(t *testing.T) {
+	e := newEnv(t)
+	e.withBase(t)
+	e.withBranch(t, "x")
+	e.server.onStop = func() {
+		e.server.onStop = nil
+		_ = e.store.DeleteBranch(ctx, name("x"))
+	}
+	_, _ = e.svc.ResetBranch(ctx, name("x"), nil)
+	if _, err := e.store.GetBranch(ctx, name("x")); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("branch came back: %v", err)
 	}
 }
