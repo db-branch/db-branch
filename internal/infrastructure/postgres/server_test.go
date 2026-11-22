@@ -174,6 +174,47 @@ func TestInitialize_サービスユーザーでinitdbしネットワークから
 	}
 }
 
+func TestInitialize_envは設定ディレクトリごとrootの持ち物にする(t *testing.T) {
+	f := newFixture(t)
+	var config, service []string
+	f.srv.ChownConfig = func(p string) error { config = append(config, p); return nil }
+	f.srv.Chown = func(p string) error { service = append(service, p); return nil }
+
+	if err := f.srv.Initialize(ctx, f.spec); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(f.state, "base-prod")
+	if want := dir + "," + filepath.Join(dir, "env"); strings.Join(config, ",") != want {
+		t.Errorf("config chown %q, want %q", config, want)
+	}
+	if len(service) != 1 || service[0] != f.spec.DataDir {
+		t.Errorf("service chown %q, want only the data dir", service)
+	}
+}
+
+func TestInitialize_設定をrootの持ち物にできなければ失敗する(t *testing.T) {
+	f := newFixture(t)
+	f.srv.ChownConfig = func(string) error { return errors.New("chown failed") }
+	if err := f.srv.Initialize(ctx, f.spec); err == nil {
+		t.Error("want error")
+	}
+}
+
+func TestInitialize_envの場所にあるリンクは辿らない(t *testing.T) {
+	f := newFixture(t)
+	dir := filepath.Join(f.state, "base-prod")
+	_ = os.MkdirAll(dir, 0o750)
+	victim := filepath.Join(t.TempDir(), "victim")
+	_ = os.WriteFile(victim, []byte("keep"), 0o600)
+	_ = os.Symlink(victim, filepath.Join(dir, "env"))
+	if err := f.srv.Initialize(ctx, f.spec); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(victim); string(got) != "keep" {
+		t.Errorf("link target was written: %q", got)
+	}
+}
+
 func TestInitialize_失敗はそのまま返す(t *testing.T) {
 	f := newFixture(t)
 	f.sys.failOn = "initdb"

@@ -432,6 +432,7 @@ OSS 版のユーザーは `admin` の 1 人だけ。ユーザーの追加はで�
 - **保存**: パスワードは argon2id でハッシュ化して Raft に保存する（どのノードでも同じパスワードでログインできる）
 - **セッション**: Cookie（`HttpOnly`・`Secure`・`SameSite=Strict`）と CSRF トークン。ログインの試行回数には上限を設ける
 - **CLI**: ノード上の CLI は UNIX ソケット経由で agent に接続し、root か `db-branch-admin` グループのメンバーなら操作できる（パスワード不要）。DB サーバーは `db-branch` ユーザーで動くので、このグループには入れない。DB サーバーを乗っ取った者が agent の管理者になれないようにするためである（ソケットは `db-branch-admin` がなければ root だけ）。DB サーバーの unit は `/run/db-branch` と `/etc/db-branch` を見られない
+- **DB サーバーの設定と unit**: インスタンスのディレクトリ（`/var/lib/db-branch/instances/<id>`）と、その `env`・`my.cnf` は `root:db-branch`（0750/0640）で、DB サーバーのユーザーは読めるが書き換えられない（乗っ取った者が再起動後も居座るために `env` を書き換えるのを防ぐ）。MySQL のエラーログだけは、サービスユーザーの持ち物の `log/` に置く。DB サーバーの unit には `NoNewPrivileges`・`PrivateTmp`・`ProtectHome`・`ProtectSystem=full` などを付けてあるので、ブランチのデータ（ZFS のマウント先）を `/home`・`/usr`・`/etc` 以下に置くことはできない。稼働中のインスタンスは、次に再起動されるときに新しい所有者になる。
 - **ブランチのログインの権限**: クライアントが使うログインは、データとその中のオブジェクトを読み書きできるだけで、サーバーのファイルやプログラムの実行には触れない。PostgreSQL ではスーパーユーザーにしない（`COPY ... TO PROGRAM` で OS のコマンドが走る）。代わりにベースの全オブジェクトを `db_branch_owner` ロールの持ち物にし（ベースのスナップショットを取る前と、ブランチのログインを作るとき）、ログインをそのメンバーにする。MySQL は `FILE`・`SUPER`・`SHUTDOWN`・`RELOAD`・`PROCESS`・`CREATE USER`・レプリケーション・`GRANT OPTION` を与えず、`my.cnf` で `secure_file_priv=NULL`・`local_infile=OFF` にする。以前に作ったブランチは、agent の起動時と DB サーバーの起動のたびに、この権限に直す
 
 ## 12. 拡張モジュール（有償）

@@ -151,6 +151,7 @@ func New(cfg config.Config) (*App, error) {
 		RunRoot:      MySQLRunRoot,
 		Bind:         cfg.Bind,
 		Chown:        ChownTo(ServiceUser),
+		ChownConfig:  ChownRootGroup(ServiceUser),
 		CheckOwner:   svcids.OwnerCheck(serviceUID),
 		StartTimeout: 2 * time.Minute,
 		PollInterval: 200 * time.Millisecond,
@@ -163,6 +164,7 @@ func New(cfg config.Config) (*App, error) {
 		Bind:         cfg.Bind,
 		User:         ServiceUser,
 		Chown:        ChownTo(ServiceUser),
+		ChownConfig:  ChownRootGroup(ServiceUser),
 		CheckOwner:   svcids.OwnerCheck(serviceUID),
 		StartTimeout: 2 * time.Minute,
 		PollInterval: 200 * time.Millisecond,
@@ -250,5 +252,19 @@ func ChownTo(name string) func(string) error {
 		uid, _ := strconv.Atoi(u.Uid)
 		gid, _ := strconv.Atoi(u.Gid)
 		return os.Chown(path, uid, gid)
+	}
+}
+
+// ChownRootGroup returns a function that makes a path root's and gives it to
+// the named user's primary group (root:group), so that the group can read it
+// but not change it or replace it.
+func ChownRootGroup(name string) func(string) error {
+	return func(path string) error {
+		u, err := user.Lookup(name)
+		if err != nil {
+			return err
+		}
+		gid, _ := strconv.Atoi(u.Gid)
+		return os.Chown(path, 0, gid)
 	}
 }

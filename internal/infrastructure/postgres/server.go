@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/db-branch/db-branch/internal/infrastructure/fsutil"
 	"io"
 	"os"
 	"path/filepath"
@@ -38,6 +39,10 @@ type Server struct {
 	User string
 	// Chown hands a path to User. Optional.
 	Chown func(path string) error
+	// ChownConfig makes a path root's, readable by User's group
+	// (root:db-branch): the instance directory and env the unit starts from
+	// must not be rewritable by the database server's own user. Optional.
+	ChownConfig func(path string) error
 	// CheckOwner fails with domain.ErrOwnership when path does not belong to
 	// User. Optional.
 	CheckOwner func(path string) error
@@ -87,10 +92,22 @@ func (p *Server) writeConfig(s domain.Server) error {
 		"",
 	}, "\n")
 	envFile := filepath.Join(p.dir(s), "env")
-	if err := os.WriteFile(envFile, []byte(env), 0o640); err != nil {
+	// The directory first: from then on the service user cannot swap env for
+	// a link while root writes it.
+	if err := p.chownConfig(p.dir(s)); err != nil {
 		return err
 	}
-	return p.chown(p.dir(s), envFile)
+	if err := fsutil.WriteFresh(envFile, []byte(env), 0o640); err != nil {
+		return err
+	}
+	return p.chownConfig(envFile)
+}
+
+func (p *Server) chownConfig(path string) error {
+	if p.ChownConfig == nil {
+		return nil
+	}
+	return p.ChownConfig(path)
 }
 
 // listen is listen_addresses for the instance: none while it is in maintenance

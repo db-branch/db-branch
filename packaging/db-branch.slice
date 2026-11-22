@@ -1,0 +1,7 @@
+[Unit]
+Description=db-branch database servers
+Documentation=https://github.com/db-branch/db-branch
+Before=slices.target
+
+[Slice]
+# Resource limits are set per instance by the agent.

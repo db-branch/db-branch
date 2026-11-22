@@ -3,7 +3,6 @@ package mysql
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -87,7 +86,7 @@ func (m *Server) quiesce(ctx context.Context, s domain.Server, mode domain.StopM
 // line ("Initializing buffer pool", never logged while stopping) is also
 // checked to catch crashes before "ready for connections".
 func (m *Server) verifyShutdown(_ context.Context, s domain.Server) error {
-	b, _ := os.ReadFile(m.errLog(s))
+	b := m.readLogFrom(s, 0)
 	log := string(b)
 	up := max(
 		strings.LastIndex(log, "ready for connections"),
@@ -105,7 +104,7 @@ func (m *Server) tailLines(_ context.Context, s domain.Server, n int) (string, e
 	if n <= 0 {
 		return "", nil
 	}
-	b, _ := os.ReadFile(m.errLog(s))
+	b := m.readLogFrom(s, 0)
 	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
