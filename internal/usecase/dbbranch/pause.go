@@ -66,11 +66,36 @@ func (s *Service) keepRunning(ctx context.Context, br domain.Branch, cause error
 // ResumeBranch starts a paused branch's server again. When it cannot start, the
 // branch stays paused with the reason, so it can be tried again.
 func (s *Service) ResumeBranch(ctx context.Context, name domain.Name, report Reporter) (domain.Branch, error) {
-	br, err := s.transitionBranch(ctx, name, domain.Branch.CanResume, domain.BranchResuming)
+	br, err := s.transitionBranch(ctx, name, domain.Branch.CanResume, domain.BranchResuming, s.checkResumeRoom)
 	if err != nil {
 		return br, err
 	}
 	return s.doResume(ctx, br, report)
+}
+
+// checkResumeRoom refuses a resume the node's memory budget cannot hold: a
+// paused branch takes no budget, so the others may have used it. The branch
+// stays paused. Caller holds s.mu.
+func (s *Service) checkResumeRoom(ctx context.Context, br domain.Branch) error {
+	nodes, err := s.nodes(ctx)
+	if err != nil {
+		return err
+	}
+	all, err := s.Store.ListBranches(ctx)
+	if err != nil {
+		return err
+	}
+	var others []domain.Branch
+	for _, b := range all {
+		if b.Name != br.Name {
+			others = append(others, b)
+		}
+	}
+	p := domain.Placement{Nodes: nodes, Branches: others, BranchMB: s.memory() + ServerOverheadMB, Now: s.Clock(), DownAfter: s.DownAfter}
+	if !p.NodeFits(br.Node) {
+		return fmt.Errorf("%w: node %s has no memory left to resume branch %s; pause or delete another branch first", domain.ErrNoCapacity, br.Node, br.Name)
+	}
+	return nil
 }
 
 func (s *Service) doResume(ctx context.Context, br domain.Branch, report Reporter) (domain.Branch, error) {

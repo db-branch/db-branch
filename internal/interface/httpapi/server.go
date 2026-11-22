@@ -491,6 +491,10 @@ func fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "other_node", err.Error())
 	case errors.Is(err, domain.ErrNoCapacity):
 		writeError(w, http.StatusServiceUnavailable, "no_capacity", err.Error())
+	case errors.Is(err, domain.ErrNoSpace):
+		writeError(w, http.StatusInsufficientStorage, "no_space", err.Error())
+	case errors.Is(err, domain.ErrQuotaExceeded):
+		writeError(w, http.StatusTooManyRequests, "quota_exceeded", err.Error())
 	case errors.Is(err, domain.ErrRolloutRunning):
 		writeError(w, http.StatusConflict, "rollout_running", err.Error())
 	case errors.Is(err, domain.ErrCheckpointsUnavailable):

@@ -68,7 +68,11 @@ func replicaList(nodes []string) string {
 // budget on record).
 func (s *Service) nodes(ctx context.Context) ([]domain.Node, error) {
 	if s.Nodes == nil {
-		return []domain.Node{{Name: s.Node, LastSeen: s.Clock(), System: domain.NodeSystem{Distro: s.Distro}}}, nil
+		n := domain.Node{Name: s.Node, LastSeen: s.Clock(), System: domain.NodeSystem{Distro: s.Distro}}
+		if s.HostMemory != nil {
+			n.MemoryMB, n.ArcMaxMB = s.HostMemory()
+		}
+		return []domain.Node{n}, nil
 	}
 	return s.Nodes.ListNodes(ctx)
 }
@@ -132,6 +136,18 @@ func (s *Service) reserveBranch(ctx context.Context, req CreateBranchRequest) (d
 	if _, err := s.Store.GetBranch(ctx, req.Name); err == nil {
 		return domain.Branch{}, fmt.Errorf("branch %s: %w", req.Name, domain.ErrAlreadyExists)
 	}
+	lim := s.resourceLimits()
+	ttl, err := lim.checkTTL(req.TTL)
+	if err != nil {
+		return domain.Branch{}, err
+	}
+	req.TTL = ttl
+	if err := s.checkBranchCount(ctx, req.Owner, lim); err != nil {
+		return domain.Branch{}, err
+	}
+	if err := s.checkPoolRoom(ctx); err != nil {
+		return domain.Branch{}, err
+	}
 	node, err := s.PlaceBranch(ctx, req)
 	if err != nil {
 		return domain.Branch{}, err
@@ -185,6 +201,9 @@ func (s *Service) buildBranch(ctx context.Context, br *domain.Branch, initSQL st
 	}
 	// A clone takes the properties of its new parent, not of its origin.
 	if err := s.applyEngineProps(ctx, br.Runtime, ds); err != nil {
+		return err
+	}
+	if err := s.applyQuota(ctx, ds); err != nil {
 		return err
 	}
 	spec, err := s.branchSpec(ctx, *br, ds, false, true)
@@ -246,7 +265,7 @@ func (s *Service) markFailed(ctx context.Context, br domain.Branch, cause error)
 	return s.saveBranch(context.WithoutCancel(ctx), br)
 }
 
-func (s *Service) transitionBranch(ctx context.Context, name domain.Name, check func(domain.Branch) error, to domain.BranchStatus) (domain.Branch, error) {
+func (s *Service) transitionBranch(ctx context.Context, name domain.Name, check func(domain.Branch) error, to domain.BranchStatus, guards ...func(context.Context, domain.Branch) error) (domain.Branch, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	br, err := s.Store.GetBranch(ctx, name)
@@ -258,6 +277,11 @@ func (s *Service) transitionBranch(ctx context.Context, name domain.Name, check 
 	}
 	if err := check(br); err != nil {
 		return br, err
+	}
+	for _, g := range guards {
+		if err := g(ctx, br); err != nil {
+			return br, err
+		}
 	}
 	br.Status = to
 	return br, s.Store.PutBranch(ctx, br)
@@ -374,6 +398,11 @@ func (s *Service) ExtendBranch(ctx context.Context, name domain.Name, ttl time.D
 	if br.Status == domain.BranchDeleting {
 		return br, fmt.Errorf("%w: branch %s is %s", domain.ErrConflict, br.Name, br.Status)
 	}
+	if ttl > 0 {
+		if _, err := s.resourceLimits().checkTTL(ttl); err != nil {
+			return br, err
+		}
+	}
 	if err := br.Extend(s.Clock(), ttl); err != nil {
 		return br, err
 	}
@@ -401,11 +430,28 @@ func (s *Service) Expire(ctx context.Context) ([]domain.Name, error) {
 	return deleted, errors.Join(errs...)
 }
 
+// sweepDumps removes the source dumps a crash left behind (unmasked
+// production data). A refresh already running keeps its dump.
+func (s *Service) sweepDumps() {
+	if sw, ok := s.Dumper.(interface{ Sweep() int }); ok {
+		// The API is up before Recover runs: a refresh already dumping owns its files.
+		s.refreshMu.Lock()
+		defer s.refreshMu.Unlock()
+		if len(s.running) > 0 {
+			return
+		}
+		if n := sw.Sweep(); n > 0 && s.Logf != nil {
+			s.Logf("removed %d source dumps left in the refresh work directory", n)
+		}
+	}
+}
+
 // Recover brings branches back to a steady state after the agent restarts:
 // ready branches are started (paused ones are left stopped), interrupted
 // resets, deletes, pauses and resumes are finished,
 // and interrupted creates are marked failed.
 func (s *Service) Recover(ctx context.Context) error {
+	s.sweepDumps()
 	baseErr := s.recoverBases(ctx)
 	branches, err := s.Store.ListBranches(ctx)
 	if err != nil {

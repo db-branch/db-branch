@@ -985,3 +985,21 @@ func TestClusterRemoveNode_失敗の種類をエラーコードで返す(t *test
 		}
 	}
 }
+
+func TestCreateBranch_プール残量不足は507_ユーザー上限は429(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{domain.ErrNoSpace, 507, "no_space"},
+		{domain.ErrQuotaExceeded, 429, "quota_exceeded"},
+	} {
+		f, _ := remoteFixture(t)
+		f.branches.placeErr = tc.err
+		resp, body := f.do(t, "POST", "/v1/branches", map[string]any{"name": "x", "base": "far"})
+		if resp.StatusCode != tc.status || errCode(body) != tc.code {
+			t.Errorf("%v: %d %v", tc.err, resp.StatusCode, body)
+		}
+	}
+}

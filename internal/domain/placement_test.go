@@ -221,3 +221,39 @@ func TestOriginDistro_記録があればそれ_なければ担当ノードがい
 		}
 	}
 }
+
+func TestPlacement_BranchPausedはメモリ計上しない(t *testing.T) {
+	// 4096MB * 3/4 = 3072MB = 8 branches of 384MB.
+	paused := on("a", 8)
+	for i := range paused {
+		paused[i].Status = domain.BranchPaused
+	}
+	p := domain.Placement{
+		Nodes: []domain.Node{up("a", 4096)}, Candidates: []string{"a"}, Branches: paused,
+		BranchMB: 384, Now: now, DownAfter: 30 * time.Second,
+	}
+	if got := place(t, p); got != "a" {
+		t.Errorf("chose %s; paused branches hold no memory", got)
+	}
+	p.Branches = append(p.Branches, on("a", 8)...)
+	if _, err := p.Choose(); !errors.Is(err, domain.ErrNoCapacity) {
+		t.Errorf("err = %v, want ErrNoCapacity: 8 running branches fill the budget", err)
+	}
+}
+
+func TestPlacement_NodeFitsは指定ノードにもう1台入るかを返す(t *testing.T) {
+	p := domain.Placement{
+		Nodes: []domain.Node{up("a", 4096)}, Branches: on("a", 8),
+		BranchMB: 384, Now: now, DownAfter: 30 * time.Second,
+	}
+	if p.NodeFits("a") {
+		t.Error("a is full")
+	}
+	p.Branches = on("a", 7)
+	if !p.NodeFits("a") {
+		t.Error("a has room for one more")
+	}
+	if p.NodeFits("zzz") {
+		t.Error("unknown node cannot take a branch")
+	}
+}

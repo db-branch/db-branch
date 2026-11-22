@@ -53,6 +53,9 @@ func (s *Service) DescribeBase(ctx context.Context, name domain.Name, descriptio
 // CreateBase creates a base, loads the dump and takes the first consistent snapshot.
 // The base server is left stopped.
 func (s *Service) CreateBase(ctx context.Context, req CreateBaseRequest, report Reporter) (domain.Base, error) {
+	if err := s.checkPoolRoom(ctx); err != nil {
+		return domain.Base{}, err
+	}
 	srv, err := s.server(req.Runtime)
 	if err != nil {
 		return domain.Base{}, err

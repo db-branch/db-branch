@@ -584,3 +584,80 @@ func TestDump_外部モジュールで既定のユーザー検索とchownが動�
 		t.Fatal("unknown user must fail")
 	}
 }
+
+// growing is a DumpSource that writes n bytes, then waits to be cancelled.
+func growing(n int) func(context.Context, domain.SourceDumpJob, string) error {
+	return func(ctx context.Context, _ domain.SourceDumpJob, out string) error {
+		if err := os.WriteFile(out, make([]byte, n), 0o600); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return errors.New("signal: killed")
+	}
+}
+
+func growingDumper(t *testing.T, n int) srcdump.Dumper {
+	t.Helper()
+	spec, _ := domain.DefaultRuntimes.Spec(domain.MySQL)
+	return srcdump.Dumper{
+		WorkDir:   filepath.Join(t.TempDir(), "work"),
+		Providers: domain.ProviderSet{domain.MySQL: runtimeprovider.New(spec, nil, runtimeprovider.Hooks{DumpSource: growing(n)})},
+		Poll:      5 * time.Millisecond,
+	}
+}
+
+func TestDump_サイズ上限を超えたら打ち切りErrTooLargeを返して書きかけを残さない(t *testing.T) {
+	d := growingDumper(t, 100)
+	d.MaxBytes = func() int64 { return 50 }
+	_, err := d.Dump(context.Background(), job(domain.MySQL, "app"))
+	if !errors.Is(err, domain.ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(d.WorkDir, "refresh-*")); len(left) != 0 {
+		t.Errorf("left behind: %v", left)
+	}
+}
+
+func TestDump_ディスクの空きが予約を割ったら打ち切りErrNoSpaceを返す(t *testing.T) {
+	d := growingDumper(t, 100)
+	d.Reserve = 1000
+	d.Free = func(string) (uint64, error) { return 999, nil }
+	if _, err := d.Dump(context.Background(), job(domain.MySQL, "app")); !errors.Is(err, domain.ErrNoSpace) {
+		t.Fatalf("err = %v, want ErrNoSpace", err)
+	}
+}
+
+func TestDump_上限内なら打ち切らない(t *testing.T) {
+	d := growingDumper(t, 10)
+	d.MaxBytes = func() int64 { return 50 }
+	d.Free = func(string) (uint64, error) { return 1 << 40, nil }
+	d.Timeout = 80 * time.Millisecond
+	_, err := d.Dump(context.Background(), job(domain.MySQL, "app"))
+	if errors.Is(err, domain.ErrTooLarge) || errors.Is(err, domain.ErrNoSpace) {
+		t.Fatalf("err = %v: within the limits nothing is cut", err)
+	}
+}
+
+func TestSweep_作業ディレクトリに残ったrefreshダンプを全て消す(t *testing.T) {
+	d, _ := newDumper(t)
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(os.MkdirAll(filepath.Join(d.WorkDir, "refresh-123"), 0o700))
+	must(os.WriteFile(filepath.Join(d.WorkDir, "refresh-123", "dump.sql"), []byte("prod"), 0o600))
+	must(os.WriteFile(filepath.Join(d.WorkDir, "refresh-456.sql"), []byte("prod"), 0o600))
+	must(os.WriteFile(filepath.Join(d.WorkDir, "keep.txt"), []byte("x"), 0o600))
+	if n := d.Sweep(); n != 2 {
+		t.Errorf("swept %d, want 2", n)
+	}
+	left, _ := os.ReadDir(d.WorkDir)
+	if len(left) != 1 || left[0].Name() != "keep.txt" {
+		t.Errorf("left = %v", left)
+	}
+	if n := (srcdump.Dumper{}).Sweep(); n != 0 {
+		t.Errorf("no work dir: swept %d", n)
+	}
+}

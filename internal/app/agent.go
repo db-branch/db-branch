@@ -254,6 +254,19 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	srv.ModuleProblems = problems.all
 	arc := &arcNode{ctl: &arccap.Controller{Sys: zfsarc.System, Initial: func() (uint64, error) { return initialArc(cfg, zfsarc.System) }}}
 	nodes := func() int { return 1 }
+	if cl == nil {
+		// A single node has no heartbeat to report its memory: placement asks directly.
+		if svc, err := a.Branches(); err == nil {
+			svc.HostMemory = func() (uint64, uint64) {
+				total, err := zfsarc.System.MemTotal()
+				if err != nil {
+					return 0, 0
+				}
+				mb, _ := arc.report()
+				return total >> 20, mb
+			}
+		}
+	}
 	if cl != nil {
 		cl.problems = problems.all
 		cl.arc = arc.report

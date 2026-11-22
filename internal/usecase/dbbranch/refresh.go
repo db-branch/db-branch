@@ -143,6 +143,9 @@ func (s *Service) RefreshBase(ctx context.Context, name domain.Name, report Repo
 	if err := s.checkOwner("base", name, base.Node); err != nil {
 		return err
 	}
+	if err := s.checkPoolRoom(ctx); err != nil {
+		return err
+	}
 	if !s.beginRefresh(name) {
 		return fmt.Errorf("%w: base %s is already being refreshed", domain.ErrConflict, name)
 	}

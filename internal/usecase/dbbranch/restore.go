@@ -399,6 +399,12 @@ func (s *Service) setAside(ctx context.Context, br domain.Branch, in restoreInte
 			return err
 		}
 	}
+	// The clone does not keep the branch's quota. Best effort: ZFS refuses a
+	// quota below what the data already references (a limit lowered or set
+	// after the branch grew), and such a branch must still be restorable.
+	if err := s.applyQuota(ctx, pending); err != nil && s.Logf != nil {
+		s.Logf("branch %s: not setting the size limit on the restored data: %v", br.Name, err)
+	}
 	if liveExists {
 		if err := s.hideLive(ctx, br, in, srv, report); err != nil {
 			return err
