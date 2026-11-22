@@ -57,10 +57,11 @@ type Server struct {
 
 var _ domain.DBServer = (*Server)(nil)
 
-func (m *Server) dir(s domain.Server) string    { return filepath.Join(m.StateRoot, s.ID) }
-func (m *Server) cnf(s domain.Server) string    { return filepath.Join(m.dir(s), "my.cnf") }
-func (m *Server) logDir(s domain.Server) string { return filepath.Join(m.dir(s), "log") }
-func (m *Server) errLog(s domain.Server) string { return filepath.Join(m.logDir(s), "error.log") }
+func (m *Server) dir(s domain.Server) string          { return filepath.Join(m.StateRoot, s.ID) }
+func (m *Server) cnf(s domain.Server) string          { return filepath.Join(m.dir(s), "my.cnf") }
+func (m *Server) logDir(s domain.Server) string       { return filepath.Join(m.dir(s), "log") }
+func (m *Server) legacyErrLog(s domain.Server) string { return filepath.Join(m.dir(s), "error.log") }
+func (m *Server) errLog(s domain.Server) string       { return filepath.Join(m.logDir(s), "error.log") }
 func (m *Server) socket(s domain.Server) string {
 	return filepath.Join(m.RunRoot, s.ID, "mysqld.sock")
 }
@@ -98,10 +99,16 @@ func (m *Server) writeConfig(s domain.Server) error {
 		return err
 	}
 	// The server writes its error log here; the directory above is not its own.
+	if info, err := os.Lstat(m.logDir(s)); err == nil && !info.IsDir() {
+		_ = os.Remove(m.logDir(s)) // a link put there to be followed by a chown (MkdirAll fails if it stays)
+	}
 	if err := os.MkdirAll(m.logDir(s), 0o750); err != nil {
 		return err
 	}
-	old := filepath.Join(m.dir(s), "error.log")
+	if info, err := os.Lstat(m.errLog(s)); err == nil && !info.Mode().IsRegular() {
+		_ = os.Remove(m.errLog(s)) // a link: root's mysqld may open it
+	}
+	old := m.legacyErrLog(s)
 	if _, err := os.Stat(old); err == nil {
 		if _, err := os.Lstat(m.errLog(s)); err != nil {
 			_ = os.Rename(old, m.errLog(s)) // best effort: an earlier layout kept it beside my.cnf
@@ -201,7 +208,7 @@ func (m *Server) Initialize(ctx context.Context, s domain.Server) error {
 // verifyShutdown cannot mistake an older shutdown line for this dataset's state.
 func (m *Server) PrepareClone(_ context.Context, s domain.Server) error {
 	stale, _ := filepath.Glob(filepath.Join(s.DataDir, "*.pid"))
-	for _, p := range append(stale, filepath.Join(s.DataDir, "auto.cnf"), m.errLog(s)) {
+	for _, p := range append(stale, filepath.Join(s.DataDir, "auto.cnf"), m.errLog(s), m.legacyErrLog(s)) {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -226,7 +233,7 @@ func (m *Server) start(ctx context.Context, s domain.Server, timeout time.Durati
 	if err := m.writeConfig(s); err != nil {
 		return err
 	}
-	offset := int64(len(m.readLog(s)))
+	offset := m.logSize(s)
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if _, err := m.Run.Run(waitCtx, "systemctl", "start", unit(s)); err != nil {
@@ -353,7 +360,7 @@ func (m *Server) Stop(ctx context.Context, s domain.Server, mode domain.StopMode
 		}
 		return err
 	}
-	offset := int64(len(m.readLog(s)))
+	offset := m.logSize(s)
 	if _, err := m.Run.Run(ctx, "systemctl", "stop", unit(s)); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("stop %s: %w", s.ID, ctx.Err())
@@ -578,12 +585,7 @@ func (m *Server) tailLog(s domain.Server, offset int64) string { return m.tailLo
 
 // tailLogN is tailLog with a limit of max bytes.
 func (m *Server) tailLogN(s domain.Server, offset int64, max int) string {
-	b := m.readLog(s)
-	if offset < int64(len(b)) {
-		b = b[offset:]
-	} else {
-		b = nil
-	}
+	b := m.readLogFrom(s, offset)
 	if len(b) > max {
 		b = b[len(b)-max:]
 	}
@@ -596,32 +598,50 @@ func (m *Server) UpdateStats(ctx context.Context, s domain.Server) error {
 	return err
 }
 
-// readLog returns the error log. The service user owns the log directory, so
+// logReadLimit bounds what is read of the error log: the service user can grow
+// the file as it likes and the agent reads it in memory.
+const logReadLimit = 16 << 20
+
+// openLog opens the error log. The service user owns the log directory, so
 // the agent (root) must not follow a link it may have put in place of the
-// file: only a regular file is read. A log not yet moved from beside my.cnf
-// (an earlier layout) is read from there.
-func (m *Server) readLog(s domain.Server) []byte {
-	for _, path := range []string{m.errLog(s), filepath.Join(m.dir(s), "error.log")} {
+// file: only a regular file is opened. A log not yet moved from beside my.cnf
+// (an earlier layout) is opened from there. Nil if there is none.
+func (m *Server) openLog(s domain.Server) (*os.File, int64) {
+	for _, path := range []string{m.errLog(s), m.legacyErrLog(s)} {
 		f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 		if err != nil {
 			continue
 		}
-		b, err := readRegular(f)
-		_ = f.Close()
-		if err == nil {
-			return b
+		if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
+			return f, info.Size()
 		}
+		_ = f.Close()
 	}
-	return nil
+	return nil, 0
 }
 
-func readRegular(f *os.File) ([]byte, error) {
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
+// logSize is the size of the error log (0 if there is none).
+func (m *Server) logSize(s domain.Server) int64 {
+	f, size := m.openLog(s)
+	if f != nil {
+		_ = f.Close()
 	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
+	return size
+}
+
+// readLogFrom returns the error log from offset on, at most the last
+// logReadLimit bytes.
+func (m *Server) readLogFrom(s domain.Server, offset int64) []byte {
+	f, size := m.openLog(s)
+	if f == nil {
+		return nil
 	}
-	return io.ReadAll(f)
+	defer f.Close()
+	offset = max(offset, size-logReadLimit, 0)
+	if offset >= size {
+		return nil
+	}
+	b := make([]byte, size-offset)
+	n, _ := f.ReadAt(b, offset)
+	return b[:n]
 }

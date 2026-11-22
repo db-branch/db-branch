@@ -512,30 +512,66 @@ func TestInitialize_設定をrootの持ち物にできなければ失敗する(t
 	}
 }
 
-func TestInitialize_ログディレクトリを作れなければ失敗する(t *testing.T) {
+func TestInitialize_ログの場所にあるリンクは辿らず作り直す(t *testing.T) {
 	f := newFixture(t)
 	dir := filepath.Join(f.state, f.spec.ID)
 	_ = os.MkdirAll(dir, 0o750)
-	_ = os.WriteFile(filepath.Join(dir, "log"), nil, 0o640)
-	if err := f.srv.Initialize(ctx, f.spec); err == nil {
-		t.Error("log is a file: want error")
-	}
-}
+	elsewhere := t.TempDir()
+	_ = os.Symlink(elsewhere, filepath.Join(dir, "log"))
+	var owned []string
+	f.srv.Chown = func(p string) error { owned = append(owned, p); return nil }
 
-func TestInitialize_設定ファイルの場所にあるリンクは辿らない(t *testing.T) {
-	f := newFixture(t)
-	dir := filepath.Join(f.state, f.spec.ID)
-	_ = os.MkdirAll(dir, 0o750)
-	victim := filepath.Join(t.TempDir(), "victim")
-	_ = os.WriteFile(victim, []byte("keep"), 0o600)
-	for _, name := range []string{"my.cnf", "env"} {
-		_ = os.Symlink(victim, filepath.Join(dir, name))
-	}
 	if err := f.srv.Initialize(ctx, f.spec); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(victim); string(got) != "keep" {
-		t.Errorf("link target was written: %q", got)
+	if info, err := os.Lstat(filepath.Join(dir, "log")); err != nil || !info.IsDir() {
+		t.Errorf("log = %v, %v: want a directory", info, err)
+	}
+	for _, p := range owned {
+		if p == elsewhere {
+			t.Error("the link target was handed to the service user")
+		}
+	}
+}
+
+func TestInitialize_エラーログの場所にあるリンクは消す(t *testing.T) {
+	f := newFixture(t)
+	logDir := filepath.Join(f.state, f.spec.ID, "log")
+	_ = os.MkdirAll(logDir, 0o750)
+	_ = os.Symlink("/etc/shadow", filepath.Join(logDir, "error.log"))
+
+	if err := f.srv.Initialize(ctx, f.spec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(logDir, "error.log")); err == nil {
+		t.Error("error.log link remains")
+	}
+}
+
+func TestPrepareClone_旧い場所のログも消す(t *testing.T) {
+	f := newFixture(t)
+	dir := filepath.Join(f.state, f.spec.ID)
+	_ = os.MkdirAll(dir, 0o750)
+	_ = os.WriteFile(filepath.Join(dir, "error.log"), []byte("Shutdown complete\n"), 0o640)
+
+	if err := f.srv.PrepareClone(ctx, f.spec); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Join(dir, "error.log"), filepath.Join(dir, "log", "error.log")} {
+		if _, err := os.Lstat(p); err == nil {
+			t.Errorf("%s remains", p)
+		}
+	}
+}
+
+func TestVerifyCleanShutdown_巨大なログは末尾だけ読む(t *testing.T) {
+	f, p, inst := providerFixture(t)
+	_ = os.MkdirAll(filepath.Dir(f.sys.errorLog), 0o755)
+	big := strings.Repeat("x", 17<<20)
+	_ = os.WriteFile(f.sys.errorLog, []byte("ready for connections.\nShutdown complete\n"+big), 0o640)
+	// The lines are beyond the last 16 MiB: not seen, so not clean (and no OOM).
+	if err := p.VerifyCleanShutdown(ctx, inst); !errors.Is(err, domain.ErrUncleanShutdown) {
+		t.Errorf("= %v, want ErrUncleanShutdown", err)
 	}
 }
 

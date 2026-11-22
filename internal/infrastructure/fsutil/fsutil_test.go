@@ -51,3 +51,11 @@ func TestWriteFresh_書けなければ失敗する(t *testing.T) {
 		t.Error("non-empty directory in the way: want error")
 	}
 }
+
+func TestWriteFresh_残った一時ファイルは消せなければ失敗する(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "env")
+	_ = os.MkdirAll(filepath.Join(path+".new", "x"), 0o755)
+	if err := fsutil.WriteFresh(path, nil, 0o640); err == nil {
+		t.Error("want error")
+	}
+}
