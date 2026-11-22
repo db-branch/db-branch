@@ -36,6 +36,9 @@ type Service struct {
 	// A node that runs one is not put back to the older recorded version
 	// while the rollout is under way (or was stopped). Optional.
 	Rolled func(ctx context.Context) map[string]string
+	// Busy reports that an update rollout is running: Sync then leaves the
+	// packages to it, so apt and dpkg are not used by both. Optional.
+	Busy func(ctx context.Context) bool
 	// Nodes lists the cluster's nodes, for features that wait until every node
 	// speaks a protocol (runtime modules). Nil: a single node.
 	Nodes func(ctx context.Context) ([]domain.Node, error)
@@ -228,6 +231,9 @@ func (s *Service) Adopt(ctx context.Context) error {
 func (s *Service) Sync(ctx context.Context) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.Busy != nil && s.Busy(ctx) {
+		return false, nil
+	}
 	list, err := s.Store.ListModules(ctx)
 	if err != nil {
 		return false, err

@@ -447,7 +447,8 @@ func (s *Service) Apply(ctx context.Context, target, by string) (domain.Rollout,
 }
 
 // Cancel stops a running rollout: nodes that have not started will not. A node
-// that is updating finishes.
+// that is updating finishes; the leader still marks it done (or failed after
+// the node limit) so it does not stay "updating".
 func (s *Service) Cancel(ctx context.Context) error {
 	r, err := s.rollout(ctx)
 	if err != nil {
@@ -473,12 +474,24 @@ func (s *Service) Rolled(ctx context.Context) map[string]string {
 	return nil
 }
 
+// Running reports whether a rollout is under way. Module sync stays off the
+// packages meanwhile: the rollout installs the modules itself.
+func (s *Service) Running(ctx context.Context) bool {
+	r, err := s.rollout(ctx)
+	return err == nil && r != nil && r.Status == domain.RolloutRunning
+}
+
 // Tick does this node's part of a rollout: supervise (leader) and update itself
 // (when it is its turn). Call it every few seconds.
 func (s *Service) Tick(ctx context.Context) error {
 	r, err := s.rollout(ctx)
-	if err != nil || r == nil || r.Status != domain.RolloutRunning {
+	if err != nil || r == nil {
 		return err
+	}
+	// A canceled rollout is still watched while a node is updating, so that
+	// node ends up done or failed instead of "updating" for ever.
+	if r.Status != domain.RolloutRunning && !r.Updating() {
+		return nil
 	}
 	nodes, err := s.Nodes(ctx)
 	if err != nil {
@@ -491,6 +504,9 @@ func (s *Service) Tick(ctx context.Context) error {
 		if r, err = s.rollout(ctx); err != nil || r == nil {
 			return err
 		}
+	}
+	if r.Status != domain.RolloutRunning {
+		return nil
 	}
 	return s.execute(ctx, *r, nodes)
 }
@@ -520,15 +536,24 @@ func (s *Service) supervise(ctx context.Context, nodes []domain.Node) error {
 		n, ok := byName[name]
 		st := r.Nodes[name]
 		switch {
+		case !ok && r.Status != domain.RolloutRunning:
+			if st.State == domain.NodeUpdating {
+				if err := s.record(ctx, domain.RolloutEvent{Rollout: r.ID, Node: name, State: domain.NodeFailed, Error: "node left the cluster"}); err != nil {
+					return err
+				}
+			}
 		case !ok:
 			return s.record(ctx, domain.RolloutEvent{Rollout: r.ID, Status: domain.RolloutFailed, Error: fmt.Sprintf("node %s left the cluster", name)})
 		case st.State != domain.NodeUpdating:
-		case domain.CompareVersions(n.Version, r.Target) == 0 && !n.Down(now, s.DownAfter):
+		case rolledOut(r, n) && !n.Down(now, s.DownAfter):
 			if err := s.record(ctx, domain.RolloutEvent{Rollout: r.ID, Node: name, State: domain.NodeDone}); err != nil {
 				return err
 			}
 		case now.Sub(st.StartedAt) > s.timeout():
 			msg := fmt.Sprintf("node did not report version %s within %s", r.Target, s.timeout())
+			if domain.CompareVersions(n.Version, r.Target) == 0 {
+				msg = fmt.Sprintf("node did not report %s within %s", strings.Join(missingModules(r, n), ", "), s.timeout())
+			}
 			return s.record(ctx, domain.RolloutEvent{Rollout: r.ID, Node: name, State: domain.NodeFailed, Error: msg})
 		}
 	}
@@ -540,6 +565,36 @@ func (s *Service) supervise(ctx context.Context, nodes []domain.Node) error {
 		return s.failIfStalled(ctx, *cur, byName)
 	}
 	return s.finish(ctx, *cur)
+}
+
+// missingModules lists the rollout's modules ("package version") that node n
+// does not report at the rolled-out version, in package order.
+func missingModules(r *domain.Rollout, n domain.Node) []string {
+	running := map[string]string{}
+	for _, m := range n.Modules {
+		name, ver, _ := strings.Cut(m, " ")
+		running[domain.ModulePackage(name)] = ver
+	}
+	var out []string
+	for pkg, want := range r.Modules {
+		// A runtime module (a database engine) is not a plugin the agent loads,
+		// so the node's module list never shows it.
+		if strings.HasPrefix(pkg, domain.ModulePackage(domain.RuntimeModuleName(""))) {
+			continue
+		}
+		if v, ok := running[pkg]; !ok || domain.CompareVersions(v, want) != 0 {
+			out = append(out, pkg+" "+want)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// rolledOut reports whether node n runs the rollout's core version and every
+// module version it installs: the core alone says nothing about a module whose
+// upgrade failed or did not come up.
+func rolledOut(r *domain.Rollout, n domain.Node) bool {
+	return domain.CompareVersions(n.Version, r.Target) == 0 && len(missingModules(r, n)) == 0
 }
 
 // failIfStalled fails a rollout whose next node has not started within the

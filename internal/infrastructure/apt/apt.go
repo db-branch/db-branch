@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -115,10 +116,21 @@ func (p Packages) update(ctx context.Context) error {
 	return err
 }
 
+// changing serializes package changes in this process: module sync and the
+// rolling update each hold their own Packages, and two dpkg runs at once fail
+// on dpkg's lock.
+var changing sync.Mutex
+
+// lockWait is how long apt-get waits for dpkg's lock held by something else
+// (unattended-upgrades, an operator's apt) instead of failing at once.
+const lockWait = "DPkg::Lock::Timeout=60"
+
 func (p Packages) change(ctx context.Context, args ...string) error {
+	changing.Lock()
+	defer changing.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, ChangeTimeout)
 	defer cancel()
-	apt := append([]string{"apt-get", "-y", "-q", "-o", "Dpkg::Options::=--force-confold"}, args...)
+	apt := append([]string{"apt-get", "-y", "-q", "-o", "Dpkg::Options::=--force-confold", "-o", lockWait}, args...)
 	if !p.systemd() {
 		_, err := p.Run.Run(ctx, "env", append([]string{"DEBIAN_FRONTEND=noninteractive"}, apt...)...)
 		return err

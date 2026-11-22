@@ -38,7 +38,7 @@ func TestWireModulesAndSettings_backupDirの危険なパスを拒否する(t *te
 	wire := func() {
 		wCtx, wCancel := context.WithCancel(ctx)
 		_ = wireModulesAndSettings(wCtx, cfg, svc, srv, nil, nil, nil, nil,
-			func() int { return 1 }, problems, arc, nil, func() bool { return true }, discardLog())
+			func() int { return 1 }, problems, arc, nil, nil, func() bool { return true }, discardLog())
 		wCancel()
 	}
 

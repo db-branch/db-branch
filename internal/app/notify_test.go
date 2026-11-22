@@ -39,7 +39,7 @@ func TestWireModulesAndSettings_通知URLのSSRF設定を拒否しAllowPrivateIP
 		problems := &moduleProblems{m: map[string]string{}}
 		wCtx, wCancel := context.WithCancel(ctx)
 		_ = wireModulesAndSettings(wCtx, cfg, svc, srv, nil, nil, nil, nil,
-			func() int { return 1 }, problems, arc, nil, func() bool { return true }, discardLog())
+			func() int { return 1 }, problems, arc, nil, nil, func() bool { return true }, discardLog())
 		wCancel()
 		return srv
 	}

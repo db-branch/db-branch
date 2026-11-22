@@ -386,3 +386,17 @@ func TestForget_ストアやパッケージ取得の失敗をそのまま返す(
 		t.Error("installed failure: want error")
 	}
 }
+
+func TestSync_ロールアウト中はaptに触れない(t *testing.T) {
+	s, apt := newService(t)
+	_, _ = s.Install(ctx, "proxysql", "1.0")
+	apt.ran = nil
+	s.Busy = func(context.Context) bool { return true }
+	if changed, err := s.Sync(ctx); changed || err != nil || len(apt.ran) != 0 {
+		t.Errorf("sync during a rollout: %v %v %v", changed, err, apt.ran)
+	}
+	s.Busy = func(context.Context) bool { return false }
+	if _, err := s.Sync(ctx); err != nil || len(apt.ran) != 1 {
+		t.Errorf("sync after it: %v %v", err, apt.ran)
+	}
+}

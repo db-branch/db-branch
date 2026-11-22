@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/apt"
@@ -85,8 +88,8 @@ func TestInstallとRemove_systemdの一時ユニットで走らせる(t *testing
 		t.Fatal(err)
 	}
 	want := []string{
-		"systemd-run --quiet --wait --collect --description=db-branch module change --setenv=DEBIAN_FRONTEND=noninteractive apt-get -y -q -o Dpkg::Options::=--force-confold install --allow-downgrades db-branch-proxysql=1.0",
-		"systemd-run --quiet --wait --collect --description=db-branch module change --setenv=DEBIAN_FRONTEND=noninteractive apt-get -y -q -o Dpkg::Options::=--force-confold remove db-branch-proxysql",
+		"systemd-run --quiet --wait --collect --description=db-branch module change --setenv=DEBIAN_FRONTEND=noninteractive apt-get -y -q -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=60 install --allow-downgrades db-branch-proxysql=1.0",
+		"systemd-run --quiet --wait --collect --description=db-branch module change --setenv=DEBIAN_FRONTEND=noninteractive apt-get -y -q -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=60 remove db-branch-proxysql",
 	}
 	if strings.Join(f.calls, "\n") != strings.Join(want, "\n") {
 		t.Errorf("calls:\n%s", strings.Join(f.calls, "\n"))
@@ -197,7 +200,7 @@ func TestUpgrade_入っている版より新しいものだけを入れる(t *te
 	if err := p.Upgrade(ctx, map[string]string{"db-branch-auth": "1.2.0", "db-branch": "1.2.0", "db-branch-audit": "1.1.0"}); err != nil {
 		t.Fatal(err)
 	}
-	want := "systemd-run --quiet --wait --collect --description=db-branch module change --setenv=DEBIAN_FRONTEND=noninteractive apt-get -y -q -o Dpkg::Options::=--force-confold install --only-upgrade db-branch=1.2.0 db-branch-audit=1.1.0 db-branch-auth=1.2.0"
+	want := "systemd-run --quiet --wait --collect --description=db-branch module change --setenv=DEBIAN_FRONTEND=noninteractive apt-get -y -q -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=60 install --only-upgrade db-branch=1.2.0 db-branch-audit=1.1.0 db-branch-auth=1.2.0"
 	if len(f.calls) != 1 || f.calls[0] != want {
 		t.Errorf("calls %v", f.calls)
 	}
@@ -209,5 +212,35 @@ func TestUpgrade_入っている版より新しいものだけを入れる(t *te
 	f = &fake{fail: map[string]int{"env": -1}}
 	if err := (apt.Packages{Run: f, Systemd: no()}).Upgrade(ctx, map[string]string{"db-branch": "1.2.0"}); err == nil {
 		t.Error("want error")
+	}
+}
+
+// overlap is a Runner that notes whether two commands ever ran at once.
+type overlap struct {
+	running, peak atomic.Int32
+}
+
+func (o *overlap) Run(context.Context, string, ...string) ([]byte, error) {
+	n := o.running.Add(1)
+	for p := o.peak.Load(); n > p && !o.peak.CompareAndSwap(p, n); p = o.peak.Load() {
+	}
+	time.Sleep(20 * time.Millisecond)
+	o.running.Add(-1)
+	return nil, nil
+}
+
+func TestAptLock_moduleSyncとupdateのdpkgを同時に実行しない(t *testing.T) {
+	o := &overlap{}
+	// Two Packages values, as module sync and the rolling update each hold one.
+	a, b := apt.Packages{Run: o, Systemd: no()}, apt.Packages{Run: o, Systemd: no()}
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Add(2)
+		go func() { defer wg.Done(); _ = a.Install(ctx, "db-branch-x", "1") }()
+		go func() { defer wg.Done(); _ = b.Upgrade(ctx, map[string]string{"db-branch": "1.2.0"}) }()
+	}
+	wg.Wait()
+	if o.peak.Load() != 1 {
+		t.Errorf("%d package changes ran at once", o.peak.Load())
 	}
 }
