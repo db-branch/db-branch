@@ -22,7 +22,7 @@ var (
 	ErrInvalidCredentials = errors.New("invalid username or password")
 	ErrNoSession          = errors.New("no valid session")
 	ErrNoCredentials      = errors.New("admin password not set")
-	ErrWeakPassword       = errors.New("password must be 12 to 256 characters")
+	ErrWeakPassword       = errors.New("password must be 12 to 256 bytes")
 )
 
 // RateLimitedError is returned while logins are locked out after repeated failures.
@@ -206,17 +206,14 @@ func (s *Service) TrackedClients() int {
 }
 
 // VerifyFrom checks the admin password, locking out the calling client (not
-// everyone) for a while after repeated failures. The password is hashed
-// outside the lock, a few at a time.
+// everyone) for a while after repeated failures. The attempt is counted
+// before the password is hashed (and forgiven on success), so concurrent
+// guesses cannot outrun the limit; the hash runs outside the lock, a few at
+// a time.
 func (s *Service) VerifyFrom(client, user, password string) error {
-	now := s.Clock()
-	s.mu.Lock()
-	if f := s.clients[client]; f != nil && now.Before(f.lockedUntil) {
-		retry := f.lockedUntil.Sub(now)
-		s.mu.Unlock()
+	if retry := s.reserve(client); retry > 0 {
 		return &RateLimitedError{RetryAfter: retry}
 	}
-	s.mu.Unlock()
 	c, err := s.Store.Load()
 	if errors.Is(err, ErrNoCredentials) {
 		return ErrInvalidCredentials
@@ -225,7 +222,6 @@ func (s *Service) VerifyFrom(client, user, password string) error {
 		return err
 	}
 	if user != AdminUser || !s.verify(c, password) {
-		s.recordFailure(client)
 		return ErrInvalidCredentials
 	}
 	s.mu.Lock()
@@ -234,7 +230,9 @@ func (s *Service) VerifyFrom(client, user, password string) error {
 	return nil
 }
 
-func (s *Service) recordFailure(client string) {
+// reserve counts one attempt for client. It returns how long the client is
+// locked out (0 if the attempt may go on).
+func (s *Service) reserve(client string) time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.Clock()
@@ -249,34 +247,40 @@ func (s *Service) recordFailure(client string) {
 		f = &failure{}
 		s.clients[client] = f
 	}
-	f.count++
 	f.last = now
+	if now.Before(f.lockedUntil) {
+		return f.lockedUntil.Sub(now)
+	}
 	if f.count >= maxFailures {
 		f.count, f.lockedUntil = 0, now.Add(lockout)
+		return lockout
 	}
+	f.count++
+	return 0
 }
 
 // pruneClients drops records that no longer matter; if that frees nothing it
-// drops the oldest quarter so the map stays bounded.
+// drops the oldest quarter that are not locked out, so the map stays bounded.
 func (s *Service) pruneClients(now time.Time) {
+	type kv struct {
+		k string
+		t time.Time
+	}
+	var open []kv
 	for k, f := range s.clients {
-		if !now.Before(f.lockedUntil) && now.Sub(f.last) > lockout {
+		switch {
+		case now.Before(f.lockedUntil):
+		case now.Sub(f.last) > lockout:
 			delete(s.clients, k)
+		default:
+			open = append(open, kv{k, f.last})
 		}
 	}
 	if len(s.clients) < MaxTrackedClients {
 		return
 	}
-	type kv struct {
-		k string
-		t time.Time
-	}
-	all := make([]kv, 0, len(s.clients))
-	for k, f := range s.clients {
-		all = append(all, kv{k, f.last})
-	}
-	sort.Slice(all, func(i, j int) bool { return all[i].t.Before(all[j].t) })
-	for _, e := range all[:len(all)/4] {
+	sort.Slice(open, func(i, j int) bool { return open[i].t.Before(open[j].t) })
+	for _, e := range open[:(len(open)+3)/4] {
 		delete(s.clients, e.k)
 	}
 }

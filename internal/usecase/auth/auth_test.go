@@ -513,3 +513,32 @@ func TestVerifyFrom_全員が新しい失敗でも記録は上限を超えず古
 		t.Errorf("tracked = %d", n)
 	}
 }
+
+func TestVerifyFrom_同一IPの並行試行でも5回を超えてハッシュしない(t *testing.T) {
+	s, _, _ := newService(t)
+	h := &countingHasher{}
+	s.Hasher = h
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = s.VerifyFrom("203.0.113.9", "admin", "wrong") }()
+	}
+	wg.Wait()
+	if n := h.calls.Load(); n != 5 {
+		t.Errorf("hashes = %d, want 5", n)
+	}
+}
+
+func TestVerifyFrom_記録が満杯でもロック中のクライアントは残る(t *testing.T) {
+	s, _, _ := newService(t)
+	for i := 0; i < 6; i++ {
+		_ = s.VerifyFrom("attacker", "admin", "wrong")
+	}
+	for i := 0; i < auth.MaxTrackedClients*2; i++ {
+		_ = s.VerifyFrom(fmt.Sprintf("c%d", i), "admin", "wrong")
+	}
+	var rl *auth.RateLimitedError
+	if err := s.VerifyFrom("attacker", "admin", "correct horse battery"); !errors.As(err, &rl) {
+		t.Errorf("lock lost: %v", err)
+	}
+}
