@@ -1,6 +1,7 @@
 package fsutil_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -57,5 +58,18 @@ func TestWriteFresh_残った一時ファイルは消せなければ失敗する
 	_ = os.MkdirAll(filepath.Join(path+".new", "x"), 0o755)
 	if err := fsutil.WriteFresh(path, nil, 0o640); err == nil {
 		t.Error("want error")
+	}
+}
+
+func TestWriteFresh_書き込みに失敗したら一時ファイルを残さない(t *testing.T) {
+	defer fsutil.SetWrite(func(*os.File, []byte) (int, error) { return 0, errors.New("disk full") })()
+	path := filepath.Join(t.TempDir(), "env")
+	if err := fsutil.WriteFresh(path, []byte("x"), 0o640); err == nil {
+		t.Fatal("want error")
+	}
+	for _, p := range []string{path, path + ".new"} {
+		if _, err := os.Lstat(p); err == nil {
+			t.Errorf("%s remains", p)
+		}
 	}
 }
