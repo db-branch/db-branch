@@ -522,6 +522,23 @@ func TestInitialize_ログディレクトリを作れなければ失敗する(t 
 	}
 }
 
+func TestInitialize_設定ファイルの場所にあるリンクは辿らない(t *testing.T) {
+	f := newFixture(t)
+	dir := filepath.Join(f.state, f.spec.ID)
+	_ = os.MkdirAll(dir, 0o750)
+	victim := filepath.Join(t.TempDir(), "victim")
+	_ = os.WriteFile(victim, []byte("keep"), 0o600)
+	for _, name := range []string{"my.cnf", "env"} {
+		_ = os.Symlink(victim, filepath.Join(dir, name))
+	}
+	if err := f.srv.Initialize(ctx, f.spec); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(victim); string(got) != "keep" {
+		t.Errorf("link target was written: %q", got)
+	}
+}
+
 func Test設定ファイルを書けなければ失敗する(t *testing.T) {
 	for _, name := range []string{"my.cnf", "env"} {
 		f := newFixture(t)

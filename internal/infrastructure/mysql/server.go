@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/db-branch/db-branch/internal/infrastructure/fsutil"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -78,15 +80,21 @@ func (m *Server) writeConfig(s domain.Server) error {
 	if err := os.MkdirAll(m.dir(s), 0o750); err != nil {
 		return err
 	}
+	// The directory first: from then on the service user cannot swap the files
+	// below for links while root writes them.
+	if err := m.chownConfig(m.dir(s)); err != nil {
+		return err
+	}
 	cnf, _ := m.config(s)
-	if err := os.WriteFile(m.cnf(s), []byte(cnf), 0o640); err != nil {
+	if err := fsutil.WriteFresh(m.cnf(s), []byte(cnf), 0o640); err != nil {
 		return err
 	}
 	env := "MYSQLD=" + m.bin(s, "mysqld") + "\n"
-	if err := os.WriteFile(filepath.Join(m.dir(s), "env"), []byte(env), 0o640); err != nil {
+	envFile := filepath.Join(m.dir(s), "env")
+	if err := fsutil.WriteFresh(envFile, []byte(env), 0o640); err != nil {
 		return err
 	}
-	if err := m.chownConfig(m.dir(s), m.cnf(s), filepath.Join(m.dir(s), "env")); err != nil {
+	if err := m.chownConfig(m.cnf(s), envFile); err != nil {
 		return err
 	}
 	// The server writes its error log here; the directory above is not its own.
@@ -95,10 +103,9 @@ func (m *Server) writeConfig(s domain.Server) error {
 	}
 	old := filepath.Join(m.dir(s), "error.log")
 	if _, err := os.Stat(old); err == nil {
-		if _, err := os.Stat(m.errLog(s)); err != nil {
+		if _, err := os.Lstat(m.errLog(s)); err != nil {
 			_ = os.Rename(old, m.errLog(s)) // best effort: an earlier layout kept it beside my.cnf
 		}
-		_ = os.Remove(old)
 	}
 	return m.chown(m.logDir(s))
 }
@@ -219,7 +226,7 @@ func (m *Server) start(ctx context.Context, s domain.Server, timeout time.Durati
 	if err := m.writeConfig(s); err != nil {
 		return err
 	}
-	offset := fileSize(m.errLog(s))
+	offset := int64(len(m.readLog(s)))
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if _, err := m.Run.Run(waitCtx, "systemctl", "start", unit(s)); err != nil {
@@ -346,7 +353,7 @@ func (m *Server) Stop(ctx context.Context, s domain.Server, mode domain.StopMode
 		}
 		return err
 	}
-	offset := fileSize(m.errLog(s))
+	offset := int64(len(m.readLog(s)))
 	if _, err := m.Run.Run(ctx, "systemctl", "stop", unit(s)); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("stop %s: %w", s.ID, ctx.Err())
@@ -571,7 +578,7 @@ func (m *Server) tailLog(s domain.Server, offset int64) string { return m.tailLo
 
 // tailLogN is tailLog with a limit of max bytes.
 func (m *Server) tailLogN(s domain.Server, offset int64, max int) string {
-	b, _ := os.ReadFile(m.errLog(s))
+	b := m.readLog(s)
 	if offset < int64(len(b)) {
 		b = b[offset:]
 	} else {
@@ -583,16 +590,38 @@ func (m *Server) tailLogN(s domain.Server, offset int64, max int) string {
 	return strings.TrimSpace(string(b))
 }
 
-func fileSize(path string) int64 {
-	info, err := os.Stat(path)
-	if err != nil {
-		return 0
-	}
-	return info.Size()
-}
-
 // UpdateStats runs ANALYZE TABLE on every table (mysqlcheck --analyze).
 func (m *Server) UpdateStats(ctx context.Context, s domain.Server) error {
 	_, err := m.Run.Run(ctx, m.bin(s, "mysqlcheck"), "--socket="+m.socket(s), "-uroot", "--analyze", "--all-databases", "--silent")
 	return err
+}
+
+// readLog returns the error log. The service user owns the log directory, so
+// the agent (root) must not follow a link it may have put in place of the
+// file: only a regular file is read. A log not yet moved from beside my.cnf
+// (an earlier layout) is read from there.
+func (m *Server) readLog(s domain.Server) []byte {
+	for _, path := range []string{m.errLog(s), filepath.Join(m.dir(s), "error.log")} {
+		f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			continue
+		}
+		b, err := readRegular(f)
+		_ = f.Close()
+		if err == nil {
+			return b
+		}
+	}
+	return nil
+}
+
+func readRegular(f *os.File) ([]byte, error) {
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("not a regular file")
+	}
+	return io.ReadAll(f)
 }

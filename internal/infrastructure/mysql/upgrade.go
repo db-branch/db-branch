@@ -304,7 +304,7 @@ func upgradeFindings(log string) []domain.Finding {
 // StartUpgraded starts the server on the new runtime, waits for the data
 // dictionary upgrade to finish and reports what the log said.
 func (m *Server) StartUpgraded(ctx context.Context, s domain.Server, own domain.Login) (domain.UpgradeLog, error) {
-	offset := fileSize(m.errLog(s))
+	offset := int64(len(m.readLog(s)))
 	timeout := m.UpgradeTimeout
 	if timeout <= 0 {
 		timeout = 15 * time.Minute

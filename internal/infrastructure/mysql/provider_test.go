@@ -144,6 +144,28 @@ func TestVerifyCleanShutdown_最後の起動より後にShutdown_completeがあ�
 	}
 }
 
+func TestVerifyCleanShutdown_ログがシンボリックリンクなら辿らない(t *testing.T) {
+	f, p, inst := providerFixture(t)
+	target := filepath.Join(t.TempDir(), "secret")
+	_ = os.WriteFile(target, []byte("ready for connections.\nShutdown complete\n"), 0o600)
+	_ = os.MkdirAll(filepath.Dir(f.sys.errorLog), 0o755)
+	if err := os.Symlink(target, f.sys.errorLog); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.VerifyCleanShutdown(ctx, inst); !errors.Is(err, domain.ErrUncleanShutdown) {
+		t.Errorf("symlinked log = %v, want ErrUncleanShutdown", err)
+	}
+}
+
+func TestVerifyCleanShutdown_まだ移されていない旧い場所のログも読む(t *testing.T) {
+	f, p, inst := providerFixture(t)
+	old := filepath.Join(filepath.Dir(filepath.Dir(f.sys.errorLog)), "error.log")
+	appendFile(old, "[Server] /mysqld: ready for connections.\n[Server] /mysqld: Shutdown complete (mysqld 8.4.13)\n")
+	if err := p.VerifyCleanShutdown(ctx, inst); err != nil {
+		t.Errorf("legacy log = %v", err)
+	}
+}
+
 func TestVerifyCleanShutdown_ログがない_Shutdown_completeがなければ未完了(t *testing.T) {
 	f, p, inst := providerFixture(t)
 	if err := p.VerifyCleanShutdown(ctx, inst); !errors.Is(err, domain.ErrUncleanShutdown) {

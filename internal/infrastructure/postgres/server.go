@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/db-branch/db-branch/internal/infrastructure/fsutil"
 	"io"
 	"os"
 	"path/filepath"
@@ -91,18 +92,22 @@ func (p *Server) writeConfig(s domain.Server) error {
 		"",
 	}, "\n")
 	envFile := filepath.Join(p.dir(s), "env")
-	if err := os.WriteFile(envFile, []byte(env), 0o640); err != nil {
+	// The directory first: from then on the service user cannot swap env for
+	// a link while root writes it.
+	if err := p.chownConfig(p.dir(s)); err != nil {
 		return err
 	}
+	if err := fsutil.WriteFresh(envFile, []byte(env), 0o640); err != nil {
+		return err
+	}
+	return p.chownConfig(envFile)
+}
+
+func (p *Server) chownConfig(path string) error {
 	if p.ChownConfig == nil {
 		return nil
 	}
-	for _, path := range []string{p.dir(s), envFile} {
-		if err := p.ChownConfig(path); err != nil {
-			return err
-		}
-	}
-	return nil
+	return p.ChownConfig(path)
 }
 
 // listen is listen_addresses for the instance: none while it is in maintenance

@@ -200,6 +200,21 @@ func TestInitialize_設定をrootの持ち物にできなければ失敗する(t
 	}
 }
 
+func TestInitialize_envの場所にあるリンクは辿らない(t *testing.T) {
+	f := newFixture(t)
+	dir := filepath.Join(f.state, "base-prod")
+	_ = os.MkdirAll(dir, 0o750)
+	victim := filepath.Join(t.TempDir(), "victim")
+	_ = os.WriteFile(victim, []byte("keep"), 0o600)
+	_ = os.Symlink(victim, filepath.Join(dir, "env"))
+	if err := f.srv.Initialize(ctx, f.spec); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(victim); string(got) != "keep" {
+		t.Errorf("link target was written: %q", got)
+	}
+}
+
 func TestInitialize_失敗はそのまま返す(t *testing.T) {
 	f := newFixture(t)
 	f.sys.failOn = "initdb"
