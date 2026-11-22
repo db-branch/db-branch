@@ -295,6 +295,11 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 		forwarded = true
 		if _, status := s.forwardStatus(w, r, node); status != http.StatusAccepted {
 			refund() // the other node refused: the allowance is not used
+		} else {
+			// The branch shows in the list once the other node has made it;
+			// until then this node keeps counting it.
+			time.AfterFunc(anonForwardHold, unreserve)
+			forwarded = false
 		}
 		return
 	}

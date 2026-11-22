@@ -247,12 +247,12 @@ func (s *Server) branchOwner(ctx context.Context, svc Branches, p ext.Principal,
 	for _, x := range list {
 		listed[x.Name.String()] = true
 	}
-	for n, b := range s.anonPending {
+	for n, res := range s.anonPending {
 		if listed[n] {
 			continue
 		}
 		total++
-		perBase[b]++
+		perBase[res.base]++
 	}
 	if total >= maxCount {
 		return unreserve, fmt.Errorf("%w: %d branches without a login exist already (the most allowed); try later or log in", domain.ErrConflict, total)
@@ -261,14 +261,17 @@ func (s *Server) branchOwner(ctx context.Context, svc Branches, p ext.Principal,
 		return unreserve, fmt.Errorf("%w: %d branches without a login exist from base %s already (the most it allows); try later or log in", domain.ErrConflict, perBase[base.String()], base)
 	}
 	if s.anonPending == nil {
-		s.anonPending = map[string]string{}
+		s.anonPending = map[string]*anonReservation{}
 	}
 	if n, err := domain.ParseName(in.Name); err == nil { // a bad name fails later, as before
-		s.anonPending[n.String()] = base.String()
+		res := &anonReservation{base: base.String()}
+		s.anonPending[n.String()] = res
 		unreserve = func() {
 			s.anonMu.Lock()
 			defer s.anonMu.Unlock()
-			delete(s.anonPending, n.String())
+			if s.anonPending[n.String()] == res { // not a later request's of the same name
+				delete(s.anonPending, n.String())
+			}
 		}
 	}
 	in.Owner, in.OwnerName, in.Access = Anonymous.ID, Anonymous.Name, domain.AccessOpen
@@ -277,6 +280,14 @@ func (s *Server) branchOwner(ctx context.Context, svc Branches, p ext.Principal,
 	}
 	return unreserve, nil
 }
+
+// anonReservation is a branch an anonymous caller asked for that the list
+// does not show yet.
+type anonReservation struct{ base string }
+
+// anonForwardHold is how long the node that forwarded a creation keeps
+// counting it: the node that makes it holds its own reservation only.
+var anonForwardHold = 2 * time.Minute
 
 // anonymousCounts counts the branches made without a login: all of them, and
 // by the base they were made from.

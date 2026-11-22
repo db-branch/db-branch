@@ -452,3 +452,17 @@ func TestAnonymous_転送先が202以外を返したらレート枠を返金す�
 		}
 	}
 }
+
+func TestAnonymous_他ノードへ転送中のブランチも転送元の上限に数える(t *testing.T) {
+	f := anonFixture(t)
+	f.srv.Cluster = &fakeCluster{replies: map[string]int{"n2": http.StatusAccepted}}
+	f.branches.place = "n2"
+	f.srv.Anonymous = func() (time.Duration, int) { return 2 * time.Hour, 1 }
+	h := f.srv.Handler(false)
+	if resp, body := anonCreate(t, h, "m1", "prod"); resp.StatusCode != 202 {
+		t.Fatalf("m1: %d %v", resp.StatusCode, body)
+	}
+	if resp, body := anonCreate(t, h, "m2", "prod"); resp.StatusCode != 409 {
+		t.Errorf("m1 is being made on n2, m2 is over the cap: %d %v", resp.StatusCode, body)
+	}
+}

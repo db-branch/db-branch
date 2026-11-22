@@ -102,7 +102,7 @@ type Server struct {
 	// anonPending are the branches (name -> base) anonymous callers asked
 	// for that the list does not show yet; they count against the caps.
 	anonMu      sync.Mutex
-	anonPending map[string]string
+	anonPending map[string]*anonReservation
 
 	// Branches returns the service, or an error before `db-branch init`.
 	Branches func() (Branches, error)
