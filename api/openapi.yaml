@@ -4434,8 +4434,9 @@ components:
         branches: {type: array, items: {type: string}, description: Branches whose records were forgotten (they lived on the node).}
         bases: {type: array, items: {type: string}, description: Bases whose records were forgotten (their origin was on the node).}
         replicas: {type: array, items: {type: string}, description: Bases that kept a copy on the node (the reference was forgotten).}
-      required: [branches, bases, replicas]
-      example: {branches: [], bases: [], replicas: []}
+        orphaned: {type: array, items: {type: string}, description: 'Forgotten bases that still have copies on other nodes (those datasets stay on disk there, unmanaged).'}
+      required: [branches, bases, replicas, orphaned]
+      example: {branches: [], bases: [], replicas: [], orphaned: []}
     Capabilities:
       type: object
       properties:

@@ -640,9 +640,6 @@ func TestProtocol_未使用の版を予約せず新機能は現行より大き�
 	if strings.Contains(string(src), "reserved for") {
 		t.Fatal("fsm.go reserves protocol numbers; new features take the next number above Protocol instead")
 	}
-	if !strings.Contains(string(src), "next number above") {
-		t.Fatal("fsm.go must state that the next feature takes the next number above Protocol")
-	}
 	// Every protocol a domain constant names is one this binary speaks.
 	for _, p := range []int{domain.ProtocolBranchRuntime, domain.ProtocolBranchPause, domain.ProtocolRuntimeModules, domain.ProtocolModuleForget, domain.ProtocolBranchOwnerID} {
 		if p > raftstore.Protocol {

@@ -71,6 +71,10 @@ func (f *fakeCatalog) RemoveReplica(_ context.Context, base domain.Name, node st
 	f.calls = append(f.calls, "forget replica "+base.String()+" on "+node)
 	return f.fail("forget replica")
 }
+func (f *fakeCatalog) SetReplicaNodes(_ context.Context, base domain.Name, nodes []string) error {
+	f.calls = append(f.calls, "replica nodes "+base.String()+" = "+strings.Join(nodes, ","))
+	return f.fail("replica nodes")
+}
 func (f *fakeCatalog) DeleteNode(_ context.Context, node string) error {
 	f.calls = append(f.calls, "delete node "+node)
 	return f.fail("delete node")
@@ -173,7 +177,7 @@ func TestRemover_forceならレプリカ参照とブランチとベースを掃�
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"delete branch b-on-dead", "delete base origin", "forget replica copied on n03", "delete node n03"}
+	want := []string{"forget replica copied on n03", "delete branch b-on-dead", "delete base origin", "delete node n03"}
 	if !slices.Equal(e.c.calls, want) || !slices.Equal(e.r.removed, []string{"n03"}) {
 		t.Fatalf("calls=%v removed=%v", e.c.calls, e.r.removed)
 	}
@@ -234,9 +238,11 @@ func nm(s string) domain.Name {
 }
 
 func TestRemover_どの段階の失敗もRaftから外す前なら構成を変えない(t *testing.T) {
-	for _, op := range []string{"nodes", "bases", "branches", "delete branch", "delete base", "forget replica", "delete node"} {
+	for _, op := range []string{"nodes", "bases", "branches", "delete branch", "delete base", "forget replica", "replica nodes", "delete node"} {
 		e := newRemoveEnv()
 		holdings(e)
+		listed := []string{"n03"}
+		e.c.bases = append(e.c.bases, domain.Base{Name: nm("listed"), Node: "n01", ReplicaNodes: &listed})
 		e.c.err, e.c.failOp = errors.New("store down"), op
 		if _, err := e.svc.Remove(context.Background(), "n03", true); err == nil {
 			t.Errorf("%s: want error", op)
@@ -252,5 +258,74 @@ func TestRemover_構成を読めなければ何も変えない(t *testing.T) {
 	e.r.listErr = errors.New("raft down")
 	if _, err := e.svc.Remove(context.Background(), "n03", true); err == nil || len(e.c.calls) != 0 {
 		t.Fatalf("err=%v calls=%v", err, e.c.calls)
+	}
+}
+
+func TestRemover_ReplicaNodesに載るだけのノードは記録を消して外す(t *testing.T) {
+	e := newRemoveEnv()
+	listed := []string{"n01", "n03"}
+	e.c.bases = []domain.Base{{Name: nm("listed"), Node: "n01", ReplicaNodes: &listed}}
+	if _, err := e.svc.Remove(context.Background(), "n03", false); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"replica nodes listed = n01", "delete node n03"}
+	if !slices.Equal(e.c.calls, want) {
+		t.Fatalf("calls = %v, want %v", e.c.calls, want)
+	}
+	if !slices.Equal(listed, []string{"n01", "n03"}) {
+		t.Fatalf("the base's own list was modified in place: %v", listed)
+	}
+}
+
+func TestRemover_他ノードにコピーが残る原本を忘れたら報告に出す(t *testing.T) {
+	e := newRemoveEnv()
+	e.c.bases = []domain.Base{
+		{Name: nm("origin"), Node: "n03", Replicas: map[string][]string{"s1": {"n01"}}},
+		{Name: nm("lonely"), Node: "n03"},
+	}
+	rep, err := e.svc.Remove(context.Background(), "n03", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rep.Orphaned, []string{"origin"}) {
+		t.Fatalf("orphaned = %v", rep.Orphaned)
+	}
+}
+
+func TestRemover_クォーラムの境界(t *testing.T) {
+	voters := func(n int) *removeEnv {
+		e := newRemoveEnv()
+		e.r.servers, e.c.nodes = nil, map[string]time.Time{}
+		for i := 0; i < n; i++ {
+			e.r.servers = append(e.r.servers, membership.Server{ID: name(i), Voter: true})
+			e.c.nodes[name(i)] = t0
+		}
+		return e
+	}
+	// 5 voters, one down: dropping the down one leaves 4 healthy of 4.
+	e := voters(5)
+	e.down("n04")
+	if _, err := e.svc.Remove(context.Background(), "n04", false); err != nil {
+		t.Fatalf("down voter: %v", err)
+	}
+	// 5 voters, two down: dropping a healthy one leaves 2 healthy of 4 (majority 3).
+	e = voters(5)
+	e.down("n03")
+	e.down("n04")
+	if _, err := e.svc.Remove(context.Background(), "n02", false); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("healthy voter: %v", err)
+	}
+	// 2 voters, one down: dropping the down one leaves the healthy one.
+	e = voters(3)
+	e.r.servers = e.r.servers[:2]
+	e.down("n01")
+	if _, err := e.svc.Remove(context.Background(), "n01", false); err != nil {
+		t.Fatalf("down voter of 2: %v", err)
+	}
+	// A voter without a node record counts as unhealthy.
+	e = voters(3)
+	delete(e.c.nodes, "n01")
+	if _, err := e.svc.Remove(context.Background(), "n02", false); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("voter without record: %v", err)
 	}
 }

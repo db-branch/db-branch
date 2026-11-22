@@ -2,13 +2,13 @@ package httpapi
 
 import (
 	"context"
-	"github.com/db-branch/db-branch/internal/usecase/membership"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/usecase/licensing"
+	"github.com/db-branch/db-branch/internal/usecase/membership"
 	"github.com/db-branch/db-branch/pkg/ext"
 )
 

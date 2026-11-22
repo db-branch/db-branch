@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"text/tabwriter"
 
@@ -128,6 +129,9 @@ func (a *App) clusterCommand() *cobra.Command {
 			if v.Mode != "cluster" {
 				return fmt.Errorf("this node is not in a cluster")
 			}
+			if v.Self == "" {
+				return fmt.Errorf("this node's agent does not report its name (an older version?); run `db-branch cluster remove <node>` on another node")
+			}
 			if v.Self == v.Leader {
 				return fmt.Errorf("%s leads the cluster; run `db-branch cluster remove %s` on another node", v.Self, v.Self)
 			}
@@ -242,7 +246,7 @@ func (a *App) clusterRemove(cmd *cobra.Command, node string, force bool) error {
 	if err != nil {
 		return err
 	}
-	path := "/v1/cluster/nodes/" + node
+	path := "/v1/cluster/nodes/" + url.PathEscape(node)
 	if force {
 		path += "?force=true"
 	}
@@ -250,6 +254,7 @@ func (a *App) clusterRemove(cmd *cobra.Command, node string, force bool) error {
 		Branches []string `json:"branches"`
 		Bases    []string `json:"bases"`
 		Replicas []string `json:"replicas"`
+		Orphaned []string `json:"orphaned"`
 	}
 	if err := c.Do(cmd.Context(), "DELETE", path, nil, &rep); err != nil {
 		return err
@@ -262,6 +267,9 @@ func (a *App) clusterRemove(cmd *cobra.Command, node string, force bool) error {
 		if len(l.names) > 0 {
 			fmt.Fprintf(a.Stdout, "Forgot %s: %s\n", l.what, strings.Join(l.names, ", "))
 		}
+	}
+	if len(rep.Orphaned) > 0 {
+		fmt.Fprintf(a.Stdout, "Copies of %s remain on other nodes, no longer managed by db-branch; delete them there when they are not needed.\n", strings.Join(rep.Orphaned, ", "))
 	}
 	return nil
 }

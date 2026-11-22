@@ -19,6 +19,7 @@ import (
 )
 
 type fakeStore struct {
+	servers  []membership.Server
 	leader   bool
 	leaderID string
 	state    raftstore.State
@@ -34,10 +35,10 @@ func (f *fakeStore) IsLeader() bool                   { return f.leader }
 func (f *fakeStore) Leader() (string, string)         { return f.leaderID, "" }
 func (f *fakeStore) AddNonvoter(string, string) error { return f.voterErr }
 func (f *fakeStore) Servers(context.Context) ([]membership.Server, error) {
-	return nil, nil
+	return f.servers, nil
 }
 func (f *fakeStore) JoinSecretHash() string { return f.joinHash }
-func (f *fakeStore) State() raftstore.State           { return f.state }
+func (f *fakeStore) State() raftstore.State { return f.state }
 
 func asMember(r *http.Request) *http.Request {
 	r.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}
@@ -165,5 +166,28 @@ func Test参加の応答にクラスタのユーザーidを載せる(t *testing.
 		if got != tc.want {
 			t.Errorf("%s: ids %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func Testリーダーは構成から外れたノードのハートビートを受け付けない(t *testing.T) {
+	ca, _ := clusterpki.InitCA(t.TempDir())
+	st := &fakeStore{leader: true, servers: []membership.Server{{ID: "n1", Voter: true}, {ID: "n2"}}}
+	s := &nodeapi.Server{Store: st, CA: ca}
+	put := func(name string) int {
+		return call(t, s, "/internal/v1/apply", `{"op":"put_node","node":{"name":"`+name+`"}}`, true)
+	}
+	if code := put("n2"); code != http.StatusNoContent && code != http.StatusOK {
+		t.Errorf("a member: %d", code)
+	}
+	if code := put("n3"); code != http.StatusNotFound {
+		t.Errorf("a node outside the configuration: %d", code)
+	}
+	// Other commands are not affected, and a follower leaves the check to the leader.
+	if code := call(t, s, "/internal/v1/apply", `{"op":"delete_node","name":"n3"}`, true); code != http.StatusOK {
+		t.Errorf("delete_node: %d", code)
+	}
+	st.leader = false
+	if code := put("n3"); code != http.StatusOK {
+		t.Errorf("on a follower: %d", code)
 	}
 }

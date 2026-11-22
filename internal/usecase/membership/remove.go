@@ -26,6 +26,9 @@ type Catalog interface {
 	DeleteBranch(ctx context.Context, name domain.Name) error
 	DeleteBase(ctx context.Context, name domain.Name) error
 	RemoveReplica(ctx context.Context, base domain.Name, node string) error
+	// SetReplicaNodes sets the nodes a base keeps copies on (the list excludes
+	// the base's own node); nil would mean every node, so callers pass a list.
+	SetReplicaNodes(ctx context.Context, base domain.Name, nodes []string) error
 	DeleteNode(ctx context.Context, name string) error
 }
 
@@ -47,6 +50,9 @@ type RemoveReport struct {
 	Bases []string `json:"bases"`
 	// Replicas are the bases that kept a copy on the node (the reference goes).
 	Replicas []string `json:"replicas"`
+	// Orphaned are the forgotten bases that still have copies on other nodes;
+	// those datasets stay on disk there, no longer managed.
+	Orphaned []string `json:"orphaned"`
 }
 
 // Remove takes node out of the Raft configuration and forgets it. It refuses
@@ -56,7 +62,7 @@ type RemoveReport struct {
 // whose origin was on the node while branches on other nodes still derive from
 // it. Every step is idempotent, so a failed removal can be run again.
 func (r *Remover) Remove(ctx context.Context, node string, force bool) (RemoveReport, error) {
-	rep := RemoveReport{Branches: []string{}, Bases: []string{}, Replicas: []string{}}
+	rep := RemoveReport{Branches: []string{}, Bases: []string{}, Replicas: []string{}, Orphaned: []string{}}
 	if !r.Roster.IsLeader() {
 		return rep, domain.ErrNoLeader
 	}
@@ -97,15 +103,23 @@ func (r *Remover) Remove(ctx context.Context, node string, force bool) (RemoveRe
 			rep.Branches = append(rep.Branches, b.Name.String())
 		}
 	}
-	var origins, copies []domain.Base
+	var origins, copies, listed []domain.Base
 	for _, b := range bases {
 		switch {
 		case b.Node == node:
 			origins = append(origins, b)
 			rep.Bases = append(rep.Bases, b.Name.String())
+			if hasOtherCopies(b, node) {
+				rep.Orphaned = append(rep.Orphaned, b.Name.String())
+			}
 		case b.HoldsAny(node):
 			copies = append(copies, b)
 			rep.Replicas = append(rep.Replicas, b.Name.String())
+		}
+		// Naming the node in the list of copy nodes is a setting, not data:
+		// it is dropped whether or not force is set.
+		if b.Node != node && b.ReplicaNodes != nil && slices.Contains(*b.ReplicaNodes, node) {
+			listed = append(listed, b)
 		}
 	}
 	if len(gone)+len(origins)+len(copies) > 0 && !force {
@@ -123,6 +137,19 @@ func (r *Remover) Remove(ctx context.Context, node string, force bool) (RemoveRe
 			return RemoveReport{}, fmt.Errorf("%w: base %s of node %s is the base of branches on other nodes (%s); delete them first", domain.ErrInUse, b.Name, node, strings.Join(dependents, ", "))
 		}
 	}
+	// Copies first: forgetting them needs the newest protocol of the three, so
+	// a cluster that is still upgrading refuses before anything else is gone.
+	for _, b := range copies {
+		if err := r.Catalog.RemoveReplica(ctx, b.Name, node); err != nil {
+			return RemoveReport{}, err
+		}
+	}
+	for _, b := range listed {
+		rest := slices.DeleteFunc(slices.Clone(*b.ReplicaNodes), func(n string) bool { return n == node })
+		if err := r.Catalog.SetReplicaNodes(ctx, b.Name, rest); err != nil {
+			return RemoveReport{}, err
+		}
+	}
 	for _, b := range gone {
 		if err := r.Catalog.DeleteBranch(ctx, b.Name); err != nil {
 			return RemoveReport{}, err
@@ -130,11 +157,6 @@ func (r *Remover) Remove(ctx context.Context, node string, force bool) (RemoveRe
 	}
 	for _, b := range origins {
 		if err := r.Catalog.DeleteBase(ctx, b.Name); err != nil {
-			return RemoveReport{}, err
-		}
-	}
-	for _, b := range copies {
-		if err := r.Catalog.RemoveReplica(ctx, b.Name, node); err != nil {
 			return RemoveReport{}, err
 		}
 	}
@@ -168,6 +190,17 @@ func (r *Remover) checkQuorum(servers []Server, seen map[string]time.Time, node 
 		return fmt.Errorf("%w: removing voter %s would leave %d healthy of %d voters, short of a majority", domain.ErrConflict, node, healthy, voters)
 	}
 	return nil
+}
+
+// hasOtherCopies reports whether a node other than the origin and node holds a
+// copy of b.
+func hasOtherCopies(b domain.Base, node string) bool {
+	for _, nodes := range b.Replicas {
+		if slices.ContainsFunc(nodes, func(n string) bool { return n != node && n != b.Node }) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r RemoveReport) describe() string {

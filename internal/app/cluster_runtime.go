@@ -178,8 +178,15 @@ func (c *clusterRuntime) Status(ctx context.Context) (httpapi.ClusterStatus, err
 
 // RemoveNode implements httpapi.Cluster.
 func (c *clusterRuntime) RemoveNode(ctx context.Context, node string, force bool) (membership.RemoveReport, error) {
-	r := membership.Remover{Roster: c.store, Catalog: c.store, Self: c.self.Node, Clock: time.Now, DownAfter: NodeDownAfter}
+	r := membership.Remover{Roster: c.store, Catalog: removalCatalog{c.store}, Self: c.self.Node, Clock: time.Now, DownAfter: NodeDownAfter}
 	return r.Remove(ctx, node, force)
+}
+
+// removalCatalog adapts the store to membership.Catalog.
+type removalCatalog struct{ *raftstore.Store }
+
+func (c removalCatalog) SetReplicaNodes(ctx context.Context, base domain.Name, nodes []string) error {
+	return c.SetBaseReplicaNodes(ctx, base, &nodes)
 }
 
 // NewToken implements httpapi.Cluster.
