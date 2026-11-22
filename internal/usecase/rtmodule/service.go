@@ -43,6 +43,9 @@ type InstallResult struct {
 	Warnings        []string
 }
 
+// ClusterWarning is attached to an install result when the node is a cluster member.
+const ClusterWarning = "external runtime modules are experimental and supported on a single node only; in a cluster the module exists only on this node, so other nodes cannot host its engine"
+
 // Service orchestrates local runtime module management through ports.
 type Service struct {
 	Releases  ReleaseSource
@@ -54,6 +57,10 @@ type Service struct {
 	Usage     UsageChecker
 	Prompter  TrustPrompter
 	Restarter AgentRestarter
+	// Clustered reports whether this node belongs to a cluster. External runtime
+	// modules are Experimental and single-node only in 1.0, so installing one on a
+	// cluster member warns (nil means not clustered).
+	Clustered func() bool
 
 	// Arch selects the target Linux architecture ("amd64" or "arm64"; defaults to runtime.GOARCH).
 	Arch string
@@ -225,6 +232,9 @@ func (s *Service) Install(ctx context.Context, req InstallRequest) (InstallResul
 		SourceMissing:   upgradeInfo.sourceMissing,
 		Installed:       true,
 		Warnings:        upgradeInfo.warnings,
+	}
+	if s.Clustered != nil && s.Clustered() {
+		res.Warnings = append(res.Warnings, ClusterWarning)
 	}
 
 	// 9. Restart agent unless suppressed.

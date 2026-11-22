@@ -29,6 +29,7 @@ type runtimeModuleWiring struct {
 	usage         rtmodule.UsageChecker
 	prompter      rtmodule.TrustPrompter
 	restarter     rtmodule.AgentRestarter
+	clustered     func() bool
 }
 
 func newRuntimeModuleService(w runtimeModuleWiring) *rtmodule.Service {
@@ -48,6 +49,7 @@ func newRuntimeModuleService(w runtimeModuleWiring) *rtmodule.Service {
 		Prompter:  w.prompter,
 		Restarter: w.restarter,
 		Arch:      goruntime.GOARCH,
+		Clustered: w.clustered,
 	}
 }
 
@@ -59,6 +61,10 @@ func (n Node) RuntimeModules(cfg config.Config, prompter rtmodule.TrustPrompter)
 		usage:         runtimeUsageChecker{cfg: cfg},
 		prompter:      prompter,
 		restarter:     nodeRestarter{fn: n.Restart},
+		clustered: func() bool {
+			cc, err := LoadClusterConfig(cfg)
+			return err == nil && cc != nil
+		},
 	})
 }
 

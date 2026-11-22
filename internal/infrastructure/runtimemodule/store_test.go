@@ -435,3 +435,45 @@ func TestModuleStore_フォールバック失敗時のロールバックと各�
 		t.Errorf("Remove 0777 root = %v, want ErrUntrusted", err)
 	}
 }
+
+func TestModuleStoreCommit_入れ替え後の旧ディレクトリ削除に失敗してもコミット成功として扱う(t *testing.T) {
+	cases := map[string]func(*runtimemodule.ModuleStore){
+		"RENAME_EXCHANGE": func(st *runtimemodule.ModuleStore) {
+			st.RenameExchange = func(a, b string) error {
+				tmp := a + ".swap"
+				if err := os.Rename(b, tmp); err != nil {
+					return err
+				}
+				if err := os.Rename(a, b); err != nil {
+					return err
+				}
+				return os.Rename(tmp, a)
+			}
+		},
+		"fallback": func(st *runtimemodule.ModuleStore) {
+			st.RenameExchange = func(a, b string) error { return runtimemodule.ErrExchangeUnsupported }
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := newStoreEnv(t)
+			mod0 := env.stageVersion(t, "clickhouse", "0.1.0")
+			defer mod0.Cleanup()
+			if err := env.store.Commit(mod0.StageDir, "clickhouse", false); err != nil {
+				t.Fatal(err)
+			}
+			st := env.store
+			setup(&st)
+			st.RemoveAll = func(string) error { return errors.New("device busy") }
+			mod1 := env.stageVersion(t, "clickhouse", "0.2.0")
+			defer mod1.Cleanup()
+			if err := st.Commit(mod1.StageDir, "clickhouse", true); err != nil {
+				t.Fatalf("入れ替えは成功済みなので Commit はエラーを返さない: %v", err)
+			}
+			got, err := env.loader.Load("clickhouse")
+			if err != nil || got.Manifest.ModuleVersion != "0.2.0" {
+				t.Fatalf("Load = %+v, %v", got, err)
+			}
+		})
+	}
+}

@@ -33,6 +33,8 @@ type ModuleStore struct {
 	Rename func(oldpath, newpath string) error
 	// Chown sets ownership on directories and the lock file (default: os.Chown).
 	Chown func(name string, uid, gid int) error
+	// RemoveAll deletes the old module directory after a successful swap (default: os.RemoveAll).
+	RemoveAll func(path string) error
 	// Rand supplies randomness for fallback backup directory names (default: crypto/rand.Reader).
 	Rand io.Reader
 }
@@ -40,6 +42,13 @@ type ModuleStore struct {
 // RootDir returns Loader.RootDir().
 func (s ModuleStore) RootDir() string {
 	return s.Loader.RootDir()
+}
+
+func (s ModuleStore) removeAllFn() func(path string) error {
+	if s.RemoveAll != nil {
+		return s.RemoveAll
+	}
+	return os.RemoveAll
 }
 
 func (s ModuleStore) renameFn() func(oldpath, newpath string) error {
@@ -226,11 +235,12 @@ func (s ModuleStore) Commit(stageDir, engine string, upgrade bool) error {
 	}
 	err := s.renameExchangeFn()(cleanStage, dest)
 	if err == nil {
-		// cleanStage now holds the old module directory; remove it.
-		if rmErr := os.RemoveAll(cleanStage); rmErr != nil {
-			return rmErr
-		}
-		return syncDir(root)
+		// cleanStage now holds the old module directory. The swap is already
+		// committed, so cleanup failures must not be reported as a failed
+		// commit (the caller would roll back the newly trusted key).
+		_ = s.removeAllFn()(cleanStage)
+		_ = syncDir(root)
+		return nil
 	}
 	if !errors.Is(err, ErrExchangeUnsupported) {
 		return err
@@ -252,10 +262,10 @@ func (s ModuleStore) commitUpgradeFallback(root, stageDir, dest string) error {
 		_ = rename(oldPath, dest)
 		return err
 	}
-	if err := os.RemoveAll(oldPath); err != nil {
-		return err
-	}
-	return syncDir(root)
+	// The swap is committed; failing to remove the backup is not a commit failure.
+	_ = s.removeAllFn()(oldPath)
+	_ = syncDir(root)
+	return nil
 }
 
 func prepareStageForCommit(stageDir string) error {

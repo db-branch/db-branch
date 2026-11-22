@@ -13,6 +13,7 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/runtimegrpc"
 	"github.com/db-branch/db-branch/internal/infrastructure/runtimemodule"
 	"github.com/db-branch/db-branch/internal/infrastructure/runtimestore"
+	"github.com/db-branch/db-branch/internal/usecase/rtmodule"
 )
 
 // attachRuntimeModules verifies the runtime modules installed on this node
@@ -36,6 +37,10 @@ func attachRuntimeModules(a *App, cfg config.Config, log *slog.Logger) (engines,
 	catalogs := map[domain.Engine]modcatalog.Source{}
 	offer = func() { offerModuleRuntimes(a, catalogs) }
 	loader := runtimemodule.Loader{AllowUnsigned: cfg.AllowUnsignedRuntimes}
+	clustered := false
+	if cc, err := LoadClusterConfig(cfg); err == nil && cc != nil {
+		clustered = true
+	}
 	for _, r := range loader.LoadAll() {
 		if r.Err != nil {
 			log.Error("runtime module not loaded", "engine", r.Engine, "err", r.Err)
@@ -64,6 +69,10 @@ func attachRuntimeModules(a *App, cfg config.Config, log *slog.Logger) (engines,
 			warnings = append(warnings, r.Loaded.Warning)
 		}
 		engines = append(engines, r.Engine)
+	}
+	if clustered && len(engines) > 0 {
+		log.Warn(rtmodule.ClusterWarning, "engines", engines)
+		warnings = append(warnings, rtmodule.ClusterWarning)
 	}
 	return engines, warnings, offer, stop
 }
