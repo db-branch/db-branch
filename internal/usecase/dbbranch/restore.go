@@ -391,9 +391,6 @@ func (s *Service) setAside(ctx context.Context, br domain.Branch, in restoreInte
 		for k, v := range engineProps(br.Runtime) { // the clone does not keep its origin's properties
 			props[k] = v
 		}
-		if q := s.resourceLimits().RefQuotaBytes; q > 0 { // nor does it keep the quota
-			props["refquota"] = strconv.FormatUint(q, 10)
-		}
 		props["canmount"] = "off"
 		props[domain.PropLine] = strconv.Itoa(in.NewLine)
 		props[domain.PropFrom] = in.Source
@@ -401,6 +398,12 @@ func (s *Service) setAside(ctx context.Context, br domain.Branch, in restoreInte
 		if err := s.Lineage.CloneWith(ctx, domain.Snapshot{Dataset: ds, Name: in.Source}, pending, props); err != nil {
 			return err
 		}
+	}
+	// The clone does not keep the branch's quota. Best effort: ZFS refuses a
+	// quota below what the data already references (a limit lowered or set
+	// after the branch grew), and such a branch must still be restorable.
+	if err := s.applyQuota(ctx, pending); err != nil && s.Logf != nil {
+		s.Logf("branch %s: not setting the size limit on the restored data: %v", br.Name, err)
 	}
 	if liveExists {
 		if err := s.hideLive(ctx, br, in, srv, report); err != nil {

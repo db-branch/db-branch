@@ -351,7 +351,7 @@ func (z *zsim) SetProps(_ context.Context, target string, props map[string]strin
 	}
 	for k, v := range props {
 		switch {
-		case strings.Contains(k, ":"), k == "recordsize":
+		case strings.Contains(k, ":"), k == "recordsize", k == "refquota":
 			dst[k] = v
 		case k == "canmount" && snapName == "":
 			d.props["canmount"] = v

@@ -445,3 +445,29 @@ func TestRestoreCheckpoint_復元後のデータセットにもrefquotaを設定
 		t.Errorf("refquota after restore = %q: the restored clone does not inherit it", got)
 	}
 }
+
+// refusesQuota is ZFS refusing a refquota below what the data references.
+type refusesQuota struct{ domain.CheckpointStorage }
+
+func (r refusesQuota) SetProps(ctx context.Context, target string, props map[string]string) error {
+	if _, ok := props["refquota"]; ok {
+		return errors.New("size is less than current used or reserved space")
+	}
+	return r.CheckpointStorage.SetProps(ctx, target, props)
+}
+
+func TestRestoreCheckpoint_refquotaが現在の使用量を下回って拒否されても復元は成功する(t *testing.T) {
+	z := newZEnv(t)
+	z.svc.ResourceLimits = func() dbbranch.Limits { return dbbranch.Limits{RefQuotaBytes: 1} }
+	var logged []string
+	z.svc.Logf = func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }
+	z.history(t)
+	z.svc.Lineage = refusesQuota{z.svc.Lineage}
+	z.restore(t, "c1")
+	if z.data() != "v1" {
+		t.Errorf("data = %q, want v1", z.data())
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "size limit") {
+		t.Errorf("logged = %q", logged)
+	}
+}
