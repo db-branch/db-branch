@@ -365,8 +365,8 @@ ZFS のスナップショット・クローン・ロールバック・`zfs send/
   - 対策として、`ModuleSpec` に `Kind`（`"module"` | `"runtime"`）および配布元（`"apt"` | `"local"`）を持たせる（または独立した `RuntimeModules` マップを Raft State に設ける）。`Kind == "runtime"` は `RuntimeRegistry` のロード済みリストと照合し、非 APT 配布（`"local"`）は `apt` 同期ループの対象外としてハートビートで全ノードの一致（バージョン・バイナリダイジェスト）を検証する。
 - **ノード障害・未導入時の安全網**:
   - ブランチ保持ノードで起動時に該当 runtime モジュールが未ロードの場合、ブランチを削除・再作成せず `status: "failed"`, `status_reason: "runtime module <engine> not loaded"` として保護する。
-- **Raft `Protocol` 予約**:
-  - 現行 `Protocol = 18`（[internal/infrastructure/raftstore/fsm.go](../internal/infrastructure/raftstore/fsm.go#L113)）に対し、並行策定中の `branch-fork`（`19`）および `branch-merge`（`20`、[docs/branch-merge.md](branch-merge.md#L28)）との衝突を避けるため、本仕様に伴う Raft コマンド・状態拡張は **`ProtocolRuntimeModules = 21` 以降** として予約し、`opProtocol` でゲートする。
+- **Raft `Protocol` の割り当て**:
+  - `Protocol` は単調増加で、先取りの予約はしない。新機能は、マージ時点の `Protocol` の次の番号を使う（19・20 はどのリリースにも使われていない欠番）。本仕様のランタイムモジュールは `ProtocolRuntimeModules = 21` で、`opProtocol` でゲートする。
 
 ### 5.5 適合性テストスイート（Conformance Test Suite）
 
@@ -427,7 +427,7 @@ ZFS のスナップショット・クローン・ロールバック・`zfs send/
 | サードパーティモジュールによる他 DB 侵入・ZFS 破壊 | データ漏洩・プール破壊 | エンジン別非特権ユーザー分離、`ReadWritePaths` 限定、ZFS のコア一元化、署名検証 |
 | `DataDir` 外へのファイル書き出し | クローン・復元破綻 | `db-branch-conformance` での独立性テスト義務化 |
 | `PreFreeze` 凍結後のエージェントクラッシュ | `STOP MERGES` 放置によるコンパクション停止 | `SYSTEM FLUSH LOGS` 中心の設計、ZFS `db-branch:freeze` 意図記録＋`Recover` 解除 |
-| `PendingModules` 誤判定や Raft 番号衝突 | 全ノード API `503` ロックアウト・ログ破損 | `ModuleSpec.Kind` 分離、`ProtocolRuntimeModules = 21` 予約 |
+| `PendingModules` 誤判定や Raft 番号衝突 | 全ノード API `503` ロックアウト・ログ破損 | `ModuleSpec.Kind` 分離、`ProtocolRuntimeModules = 21` のゲート |
 
 ### 7.3 実装用 TODO リスト（t-wada 式 TDD）
 

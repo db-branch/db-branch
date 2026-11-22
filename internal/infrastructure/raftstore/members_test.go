@@ -188,3 +188,39 @@ func TestStore_AddNonvoter_同名別アドレスは拒否し同アドレスは�
 		t.Errorf("after idempotent retry: voters=%d non=%d, want 2, 0", v, n)
 	}
 }
+
+func TestStore_RemoveServerで構成からノードを外せる(t *testing.T) {
+	c := growingCluster(t, 3)
+	c.joinAll(t)
+	if err := c.stores[0].RemoveServer(context.Background(), "node2"); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := c.stores[0].Servers(context.Background())
+	if err != nil || len(servers) != 2 {
+		t.Fatalf("servers = %v, %v", servers, err)
+	}
+	for _, s := range servers {
+		if s.ID == "node2" {
+			t.Fatal("node2 is still a member")
+		}
+	}
+	// A second removal of the same node changes nothing and does not fail.
+	if err := c.stores[0].RemoveServer(context.Background(), "node2"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStore_RemoveServerはリーダー以外ではErrNoLeader(t *testing.T) {
+	c := growingCluster(t, 2)
+	c.joinAll(t)
+	eventually(t, func() bool { return len(serversOf(c.stores[1])) == 2 })
+	err := c.stores[1].RemoveServer(context.Background(), "node0")
+	if !errors.Is(err, domain.ErrNoLeader) {
+		t.Fatalf("err = %v, want ErrNoLeader", err)
+	}
+}
+
+func serversOf(s *raftstore.Store) []membership.Server {
+	out, _ := s.Servers(context.Background())
+	return out
+}

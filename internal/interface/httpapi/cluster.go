@@ -12,6 +12,7 @@ import (
 
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/usecase/dbbranch"
+	"github.com/db-branch/db-branch/internal/usecase/membership"
 	"github.com/db-branch/db-branch/pkg/ext"
 )
 
@@ -81,6 +82,9 @@ type Cluster interface {
 	// AddRuntime asks every node to install ref; RemoveRuntime withdraws it.
 	AddRuntime(ctx context.Context, ref domain.RuntimeRef) error
 	RemoveRuntime(ctx context.Context, ref domain.RuntimeRef) error
+	// RemoveNode takes a node out of the cluster (leader only); see
+	// membership.Remover.
+	RemoveNode(ctx context.Context, node string, force bool) (membership.RemoveReport, error)
 }
 
 // forwardedHeader marks a request one node passed to another, so that
@@ -239,7 +243,7 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
 		}
 		nodes = append(nodes, v)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"mode": st.Mode, "leader": st.Leader, "protocol": st.Protocol, "service_ids": st.ServiceIDs, "nodes": nodes})
+	writeJSON(w, http.StatusOK, map[string]any{"mode": st.Mode, "self": s.Node, "leader": st.Leader, "protocol": st.Protocol, "service_ids": st.ServiceIDs, "nodes": nodes})
 }
 
 func (s *Server) clusterToken(local bool) http.HandlerFunc {
@@ -259,6 +263,34 @@ func (s *Server) clusterToken(local bool) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 	}
+}
+
+// clusterRemoveNode takes a failed or retired node out of the cluster. The
+// leader does it; a follower passes the request on. With force=true the
+// records of what the node held are forgotten too (see membership.Remover).
+func (s *Server) clusterRemoveNode(w http.ResponseWriter, r *http.Request) {
+	if s.Cluster == nil {
+		writeError(w, http.StatusConflict, "not_clustered", "this node is not in a cluster")
+		return
+	}
+	st, err := s.Cluster.Status(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if st.Leader == "" {
+		fail(w, domain.ErrNoLeader)
+		return
+	}
+	if s.forward(w, r, st.Leader) {
+		return
+	}
+	rep, err := s.Cluster.RemoveNode(r.Context(), r.PathValue("name"), r.URL.Query().Get("force") == "true")
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
 }
 
 // nodeMetrics returns a node's recent samples; each node keeps its own.

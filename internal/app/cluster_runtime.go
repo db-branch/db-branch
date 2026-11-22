@@ -17,6 +17,7 @@ import (
 	"github.com/db-branch/db-branch/internal/interface/httpapi"
 	"github.com/db-branch/db-branch/internal/interface/nodeapi"
 	"github.com/db-branch/db-branch/internal/usecase/auth"
+	"github.com/db-branch/db-branch/internal/usecase/membership"
 	"github.com/db-branch/db-branch/internal/usecase/operation"
 )
 
@@ -173,6 +174,12 @@ func (c *clusterRuntime) Status(ctx context.Context) (httpapi.ClusterStatus, err
 		})
 	}
 	return st, nil
+}
+
+// RemoveNode implements httpapi.Cluster.
+func (c *clusterRuntime) RemoveNode(ctx context.Context, node string, force bool) (membership.RemoveReport, error) {
+	r := membership.Remover{Roster: c.store, Catalog: c.store, Self: c.self.Node, Clock: time.Now, DownAfter: NodeDownAfter}
+	return r.Remove(ctx, node, force)
 }
 
 // NewToken implements httpapi.Cluster.

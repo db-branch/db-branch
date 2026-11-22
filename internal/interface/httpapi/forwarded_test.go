@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"github.com/db-branch/db-branch/internal/usecase/membership"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -37,11 +38,14 @@ func (c *stubCluster) Forward(string) (http.Handler, error) {
 		w.WriteHeader(http.StatusOK)
 	}), nil
 }
-func (c *stubCluster) NodeHost(string) string                          { return "" }
-func (c *stubCluster) BranchUsage(string, string) (domain.Usage, bool) { return domain.Usage{}, false }
-func (c *stubCluster) NodeCheckpoints(string) bool                     { return false }
+func (c *stubCluster) NodeHost(string) string                                 { return "" }
+func (c *stubCluster) BranchUsage(string, string) (domain.Usage, bool)        { return domain.Usage{}, false }
+func (c *stubCluster) NodeCheckpoints(string) bool                            { return false }
 func (c *stubCluster) AddRuntime(context.Context, domain.RuntimeRef) error    { return nil }
 func (c *stubCluster) RemoveRuntime(context.Context, domain.RuntimeRef) error { return nil }
+func (c *stubCluster) RemoveNode(context.Context, string, bool) (membership.RemoveReport, error) {
+	return membership.RemoveReport{}, nil
+}
 
 type stubRenewal struct{}
 

@@ -105,6 +105,11 @@ type BranchOwner struct {
 // Protocol is the cluster protocol this binary speaks. Raise it whenever a
 // command is added or changes meaning, and list the command in opProtocol.
 //
+// Numbers only go up and none is held back: the next feature that needs one
+// takes the next number above Protocol (a feature developed in parallel gets
+// its number when it is merged, never an earlier gap). The gaps below (19, 20)
+// were never used by any release.
+//
 // 18: a branch may be paused: its status is paused (pausing, resuming) inside
 // put_branch, so there is no new command; nodes at 17 would not know the
 // status, so the feature waits for protocol 18 everywhere
@@ -124,8 +129,7 @@ type BranchOwner struct {
 // Source, which travel inside put_module, so there is no new command; a node
 // at 18 would take such a module for a plugin that never loads and refuse the
 // API (503 modules_pending), so the feature waits for protocol 21 everywhere
-// (domain.ProtocolRuntimeModules, checked by the use case). 19 and 20 are
-// reserved for branch fork and branch merge.
+// (domain.ProtocolRuntimeModules, checked by the use case).
 //
 // 22: delete_module removes a recorded module (module forget) once it is no
 // longer wanted. Older nodes do not know delete_module, so the command waits

@@ -340,6 +340,7 @@ func (s *Server) routes(mux router, local bool) {
 	r("GET /v1/metrics", "metrics.read", s.withService(s.metrics))
 	r("GET /v1/nodes/{name}/metrics", "cluster.read", s.nodeMetrics)
 	r("GET /v1/nodes/{name}/storage", "cluster.read", s.nodeStorage)
+	r("DELETE /v1/cluster/nodes/{name}", "cluster.remove", s.clusterRemoveNode)
 	r("POST /v1/cluster/token", "cluster.token", s.clusterToken(local))
 
 	// Logging in happens before there is a principal; it is audited itself.
