@@ -250,10 +250,15 @@ type Branch struct {
 	Record bool `json:"record,omitempty"`
 	// LegacyAuth keeps MySQL 8.4's mysql_native_password plugin loaded for a
 	// branch upgraded with accounts that use it.
-	LegacyAuth bool       `json:"legacy_auth,omitempty"`
-	Error      string     `json:"error,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	ResetAt    *time.Time `json:"reset_at,omitempty"`
+	LegacyAuth bool   `json:"legacy_auth,omitempty"`
+	Error      string `json:"error,omitempty"`
+	// LostFrom is the status a lost branch had when its node stopped
+	// answering, kept only for the quiet ones (paused, failed) so that the
+	// node coming back restores that status instead of starting the branch.
+	// Older nodes drop it, and then treat the branch as they always did.
+	LostFrom  BranchStatus `json:"lost_from,omitempty"`
+	CreatedAt time.Time    `json:"created_at"`
+	ResetAt   *time.Time   `json:"reset_at,omitempty"`
 }
 
 // ProtocolBranchOwnerID is the cluster protocol from which branch owners use

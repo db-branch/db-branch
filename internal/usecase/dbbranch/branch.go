@@ -143,6 +143,9 @@ func (s *Service) reserveBranch(ctx context.Context, req CreateBranchRequest) (d
 	if err != nil {
 		return domain.Branch{}, err
 	}
+	if s.deletingBases[base.Name] {
+		return domain.Branch{}, fmt.Errorf("%w: base %s is being deleted", domain.ErrConflict, base.Name)
+	}
 	port, err := s.allocatePort(ctx)
 	if err != nil {
 		return domain.Branch{}, err
@@ -240,7 +243,7 @@ func (s *Service) fail(ctx context.Context, br domain.Branch, cause error) error
 
 func (s *Service) markFailed(ctx context.Context, br domain.Branch, cause error) error {
 	br.Status, br.Error = domain.BranchFailed, cause.Error()
-	return s.Store.PutBranch(context.WithoutCancel(ctx), br)
+	return s.saveBranch(context.WithoutCancel(ctx), br)
 }
 
 func (s *Service) transitionBranch(ctx context.Context, name domain.Name, check func(domain.Branch) error, to domain.BranchStatus) (domain.Branch, error) {
@@ -273,7 +276,7 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 	if in, swap, err := s.resetBySwap(ctx, br); err != nil {
 		// Nothing was touched: the branch is still what it was.
 		br.Status = domain.BranchReady
-		return br, errors.Join(err, s.Store.PutBranch(ctx, br))
+		return br, errors.Join(err, s.saveBranch(ctx, br))
 	} else if swap {
 		return s.runRestore(ctx, br, in, report)
 	}
@@ -303,7 +306,7 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 	// The reset point is the base's state, made by the base's runtime.
 	if rt := s.runtimeOf(ctx, br, ""); rt != br.Runtime || br.LegacyAuth {
 		br.Runtime, br.LegacyAuth = rt, false
-		if err := s.Store.PutBranch(ctx, br); err != nil {
+		if err := s.saveBranch(ctx, br); err != nil {
 			return br, s.fail(ctx, br, err)
 		}
 		if srv, err = s.server(br.Runtime); err != nil {
@@ -323,7 +326,7 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 	}
 	now := s.Clock()
 	br.Status, br.ResetAt, br.Error = domain.BranchReady, &now, ""
-	if err := s.Store.PutBranch(ctx, br); err != nil {
+	if err := s.saveBranch(ctx, br); err != nil {
 		_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
 		return br, err
 	}
@@ -368,6 +371,9 @@ func (s *Service) ExtendBranch(ctx context.Context, name domain.Name, ttl time.D
 	if err != nil {
 		return br, err
 	}
+	if br.Status == domain.BranchDeleting {
+		return br, fmt.Errorf("%w: branch %s is %s", domain.ErrConflict, br.Name, br.Status)
+	}
 	if err := br.Extend(s.Clock(), ttl); err != nil {
 		return br, err
 	}
@@ -400,11 +406,12 @@ func (s *Service) Expire(ctx context.Context) ([]domain.Name, error) {
 // resets, deletes, pauses and resumes are finished,
 // and interrupted creates are marked failed.
 func (s *Service) Recover(ctx context.Context) error {
+	baseErr := s.recoverBases(ctx)
 	branches, err := s.Store.ListBranches(ctx)
 	if err != nil {
-		return err
+		return errors.Join(baseErr, err)
 	}
-	var errs []error
+	errs := []error{baseErr}
 	for _, br := range branches {
 		if !s.owns(br.Node) {
 			continue
@@ -597,4 +604,20 @@ func (s *Service) ownUser(ctx context.Context, br domain.Branch) error {
 	}
 	cur.User = br.Name.String()
 	return s.Store.PutBranch(ctx, cur)
+}
+
+// saveBranch records the outcome of a long operation (reset, restore, pause,
+// upgrade...). The operation worked on a copy read when it began, so what
+// someone changed meanwhile (the TTL, the owner, the access) is taken from the
+// stored record rather than written back over. Callers must not hold s.mu.
+func (s *Service) saveBranch(ctx context.Context, br domain.Branch) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur, err := s.Store.GetBranch(ctx, br.Name)
+	if err != nil {
+		// Gone meanwhile (deleted elsewhere): do not bring it back.
+		return err
+	}
+	br.ExpiresAt, br.Owner, br.OwnerName, br.Access, br.User = cur.ExpiresAt, cur.Owner, cur.OwnerName, cur.Access, cur.User
+	return s.Store.PutBranch(ctx, br)
 }
