@@ -355,7 +355,11 @@ func (s *Server) mcpHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// A JSON-RPC message is small; read it with a cap before the SDK parses it.
 		body, err := io.ReadAll(io.LimitReader(r.Body, MCPMaxBody+1))
-		if err != nil || len(body) > MCPMaxBody {
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "cannot read the request")
+			return
+		}
+		if len(body) > MCPMaxBody {
 			writeError(w, http.StatusRequestEntityTooLarge, "too_large", "the MCP request is larger than "+strconv.Itoa(MCPMaxBody)+" bytes")
 			return
 		}

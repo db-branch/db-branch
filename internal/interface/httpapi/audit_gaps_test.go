@@ -87,21 +87,31 @@ func TestAudit_Fail_closed設定では記録できない変更を実行せず503
 	f := newFixture(t)
 	sink := &recordingSink{err: errors.New("siem down")}
 	f.srv.Ext = ext.Module{AuditSink: sink}
+	f.srv.TokenAuth = &fakeTokens{}
 	closed := true
 	f.srv.AuditFailClosed = func() bool { return closed }
+	h := f.srv.Handler(false)
 
-	resp, body := f.do(t, "POST", "/v1/bases/prod/stop", nil)
+	resp, body := send(t, h, "POST", "/v1/bases/prod/stop", nil, bearer("t-full"))
 	if resp.StatusCode != 503 || errCode(body) != "audit_unavailable" {
 		t.Fatalf("closed: %d %v", resp.StatusCode, body)
 	}
 	if len(f.branches.calls) != 0 {
 		t.Error("the change ran although it could not be audited")
 	}
-	if resp, _ := f.do(t, "GET", "/v1/branches", nil); resp.StatusCode != 200 {
+	if got := sink.actions(); len(got) != 1 || !strings.HasSuffix(got[0], ":"+ext.OutcomeAttempt) {
+		t.Errorf("the intent is recorded first: %v", got)
+	}
+	if resp, _ := send(t, h, "GET", "/v1/branches", nil, bearer("t-full")); resp.StatusCode != 200 {
 		t.Errorf("unaudited reads still work: %d", resp.StatusCode)
 	}
-	closed = false
+	// The local socket is the way back in: it never fails closed, so an
+	// admin can turn the setting off while the sink is down.
 	if resp, _ := f.do(t, "POST", "/v1/bases/prod/stop", nil); resp.StatusCode != 204 {
+		t.Errorf("socket: %d", resp.StatusCode)
+	}
+	closed = false
+	if resp, _ := send(t, h, "POST", "/v1/bases/prod/stop", nil, bearer("t-full")); resp.StatusCode != 204 {
 		t.Errorf("fail-open (the default) keeps going: %d", resp.StatusCode)
 	}
 }

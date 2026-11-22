@@ -192,7 +192,8 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 			maxBranchTTL.Store(int64(max(d, 0)))
 			pruneSnapshots.Store(v["base.prune_snapshots"] != "false")
 			updateAutoCheck.Store(v["update.auto_check"] == "true")
-			auditFailClosed.Store(v["audit.fail_closed"] == "true")
+			closed, _ := strconv.ParseBool(v["audit.fail_closed"])
+			auditFailClosed.Store(closed)
 			if d, err := time.ParseDuration(v["backup.interval"]); err == nil && d >= 0 {
 				backupEvery.Store(int64(d))
 			}

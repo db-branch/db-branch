@@ -207,9 +207,9 @@ func (s *Server) guard(action string, h http.HandlerFunc) http.HandlerFunc {
 			fail(w, err)
 			return
 		}
-		if changes(r, action) && !forwardedIn && s.auditFailClosed() {
+		if changes(r, action) && !forwardedIn && p.ID != LocalPrincipal.ID && s.auditFailClosed() {
 			// Fail closed: the intent is on record before the change runs.
-			if err := s.record(r, p, action, res, outcomeAttempt, 0); err != nil {
+			if err := s.record(r, p, action, res, ext.OutcomeAttempt, 0); err != nil {
 				s.requests.add(action, ext.OutcomeFailed)
 				writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "the change cannot be recorded in the audit log, so it was not made")
 				return
@@ -265,9 +265,6 @@ func pathResource(r *http.Request) string {
 	}
 	return ""
 }
-
-// outcomeAttempt marks the event recorded before a change runs (fail-closed mode).
-const outcomeAttempt = "attempt"
 
 // changes: the request changes something or reads what the audit log must show.
 func changes(r *http.Request, action string) bool {
