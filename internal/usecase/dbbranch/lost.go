@@ -99,7 +99,11 @@ func (s *Service) RecreateBranch(ctx context.Context, name domain.Name, report R
 		return br, s.fail(ctx, br, err)
 	}
 	br.Status = domain.BranchReady
-	return br, s.Store.PutBranch(ctx, br)
+	if err := s.Store.PutBranch(ctx, br); err != nil {
+		_ = s.stopBranchImmediate(ctx, br)
+		return br, err
+	}
+	return br, nil
 }
 
 // dropSharedCopy destroys the lost branch's volume on shared storage before
@@ -164,18 +168,37 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		if b.Status != domain.BranchLost {
 			continue
 		}
-		if err := s.ensureRunning(ctx, b); err != nil {
+		if err := s.reconcileLost(ctx, b); err != nil {
 			errs = append(errs, err)
-			continue
 		}
-		if err := s.releaseFreeze(ctx, b); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		errs = append(errs, s.resume(ctx, b.Name))
 	}
 	errs = append(errs, s.removeMoved(ctx, byName))
 	return errors.Join(errs...)
+}
+
+func (s *Service) reconcileLost(ctx context.Context, b domain.Branch) error {
+	srv, spec, started, err := s.startServerIfDown(ctx, b)
+	if err != nil {
+		return err
+	}
+	stopIfStarted := func() {
+		if started {
+			_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
+		}
+	}
+	if err := s.releaseFreeze(ctx, b); err != nil {
+		stopIfStarted()
+		return err
+	}
+	if err := s.putLoginRight(ctx, b, srv, spec); err != nil {
+		stopIfStarted()
+		return err
+	}
+	if err := s.resume(ctx, b.Name); err != nil {
+		stopIfStarted()
+		return err
+	}
+	return nil
 }
 
 // resume marks a lost branch of this node ready again, unless it changed meanwhile.

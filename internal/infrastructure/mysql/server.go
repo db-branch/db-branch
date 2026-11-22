@@ -157,10 +157,12 @@ func (m *Server) Initialize(ctx context.Context, s domain.Server) error {
 	return err
 }
 
-// PrepareClone drops the cloned server identity so every branch gets its own server UUID.
+// PrepareClone drops the cloned server identity so every branch gets its own
+// server UUID, and removes any stale error.log from a previous dataset so
+// verifyShutdown cannot mistake an older shutdown line for this dataset's state.
 func (m *Server) PrepareClone(_ context.Context, s domain.Server) error {
 	stale, _ := filepath.Glob(filepath.Join(s.DataDir, "*.pid"))
-	for _, p := range append(stale, filepath.Join(s.DataDir, "auto.cnf")) {
+	for _, p := range append(stale, filepath.Join(s.DataDir, "auto.cnf"), m.errLog(s)) {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -174,6 +176,9 @@ func (m *Server) Start(ctx context.Context, s domain.Server) error {
 }
 
 func (m *Server) start(ctx context.Context, s domain.Server, timeout time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("start %s: %w", s.ID, err)
+	}
 	if m.CheckOwner != nil {
 		if err := m.CheckOwner(s.DataDir); err != nil {
 			return err
@@ -183,22 +188,86 @@ func (m *Server) start(ctx context.Context, s domain.Server, timeout time.Durati
 		return err
 	}
 	offset := fileSize(m.errLog(s))
-	if _, err := m.Run.Run(ctx, "systemctl", "start", unit(s)); err != nil {
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if _, err := m.Run.Run(waitCtx, "systemctl", "start", unit(s)); err != nil {
+		if ctx.Err() != nil || waitCtx.Err() != nil {
+			return m.abortStart(ctx, s, offset, timeout)
+		}
 		return fmt.Errorf("start %s: %w", s.ID, err)
 	}
-	deadline := time.Now().Add(timeout)
 	for {
-		if _, err := m.Run.Run(ctx, m.bin(s, "mysqladmin"), "--socket="+m.socket(s), "-uroot", "ping"); err == nil {
+		if _, err := m.Run.Run(waitCtx, m.bin(s, "mysqladmin"), "--socket="+m.socket(s), "-uroot", "ping"); err == nil {
 			return nil
 		}
-		if m.exited(ctx, s) {
-			return domain.StartFailure(s.ID, m.startOutput(ctx, s, offset, 2048))
+		if ctx.Err() != nil || waitCtx.Err() != nil {
+			return m.abortStart(ctx, s, offset, timeout)
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not become ready within %s: %s", s.ID, timeout, m.startOutput(ctx, s, offset, 2048))
+		if m.exited(waitCtx, s) {
+			logCtx, lcancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			out := m.startOutput(logCtx, s, offset, 2048)
+			lcancel()
+			return domain.StartFailure(s.ID, out)
 		}
-		time.Sleep(m.PollInterval)
+		if err := sleepContext(waitCtx, m.PollInterval); err != nil {
+			return m.abortStart(ctx, s, offset, timeout)
+		}
 	}
+}
+
+func (m *Server) abortStart(ctx context.Context, s domain.Server, offset int64, timeout time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		m.stopAborted(ctx, s)
+		return fmt.Errorf("start %s: %w", s.ID, err)
+	}
+	logCtx, lcancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	out := m.startOutput(logCtx, s, offset, 2048)
+	lcancel()
+	m.stopAborted(ctx, s)
+	return fmt.Errorf("%s did not become ready within %s: %s", s.ID, timeout, out)
+}
+
+func (m *Server) runTimeout(base context.Context, d time.Duration, name string, args ...string) error {
+	c, cancel := context.WithTimeout(base, d)
+	defer cancel()
+	_, err := m.Run.Run(c, name, args...)
+	return err
+}
+
+// stopAborted stops a unit whose start was cancelled or timed out, using a
+// fresh context per command so one slow stop cannot starve SIGKILL/reset-failed.
+func (m *Server) stopAborted(ctx context.Context, s domain.Server) {
+	base := context.WithoutCancel(ctx)
+	if err := m.runTimeout(base, 30*time.Second, "systemctl", "stop", unit(s)); err != nil {
+		_ = m.runTimeout(base, 10*time.Second, "systemctl", "kill", "--signal=SIGKILL", unit(s))
+		_ = m.runTimeout(base, 10*time.Second, "systemctl", "stop", unit(s))
+	}
+	_ = m.runTimeout(base, 10*time.Second, "systemctl", "reset-failed", unit(s))
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+func (m *Server) activeState(ctx context.Context, s domain.Server) (string, error) {
+	out, err := m.Run.Run(ctx, "systemctl", "show", "--property=ActiveState", "--value", unit(s))
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // exited reports whether the unit has stopped for good (mysqld gave up), so
@@ -206,8 +275,7 @@ func (m *Server) start(ctx context.Context, s domain.Server, timeout time.Durati
 func (m *Server) exited(ctx context.Context, s domain.Server) bool {
 	// is-active exits non-zero for a stopped unit, and the runner then
 	// returns no output; show prints the state whatever it is.
-	out, err := m.Run.Run(ctx, "systemctl", "show", "--property=ActiveState", "--value", unit(s))
-	st := strings.TrimSpace(string(out))
+	st, err := m.activeState(ctx, s)
 	return err == nil && (st == "failed" || st == "inactive")
 }
 
@@ -221,8 +289,18 @@ func (m *Server) Running(ctx context.Context, s domain.Server) (bool, error) {
 // merges first and then checks the shutdown really completed, so a snapshot
 // taken afterwards needs no crash recovery when a branch starts from it.
 func (m *Server) Stop(ctx context.Context, s domain.Server, mode domain.StopMode) error {
-	if ok, _ := m.Running(ctx, s); !ok {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	state, err := m.activeState(ctx, s)
+	if err != nil {
+		return fmt.Errorf("check %s: %w", s.ID, err)
+	}
+	if state == "inactive" || state == "failed" {
+		if mode == domain.StopImmediate {
+			return nil
+		}
+		return m.verifyStopped(ctx, s)
 	}
 	if mode == domain.StopImmediate {
 		_, _ = m.Run.Run(ctx, "systemctl", "kill", "--signal=SIGKILL", unit(s))
@@ -231,18 +309,50 @@ func (m *Server) Stop(ctx context.Context, s domain.Server, mode domain.StopMode
 		return nil
 	}
 	if err := m.Exec(ctx, s, "SET GLOBAL innodb_fast_shutdown = 0"); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return err
 	}
 	offset := fileSize(m.errLog(s))
 	if _, err := m.Run.Run(ctx, "systemctl", "stop", unit(s)); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("stop %s: %w", s.ID, ctx.Err())
+		}
 		return fmt.Errorf("stop %s: %w", s.ID, err)
 	}
-	result, _ := m.Run.Run(ctx, "systemctl", "show", "--property=Result", "--value", unit(s))
+	res, err := m.unitResult(ctx, s)
+	if err != nil {
+		return err
+	}
 	logged := m.tailLog(s, offset)
-	if strings.TrimSpace(string(result)) != "success" || !strings.Contains(logged, "Shutdown complete") {
-		return fmt.Errorf("%w: %s (result=%s): %s", domain.ErrUncleanShutdown, s.ID, strings.TrimSpace(string(result)), logged)
+	if res != "success" || !strings.Contains(logged, "Shutdown complete") {
+		return fmt.Errorf("%w: %s (result=%s): %s", domain.ErrUncleanShutdown, s.ID, res, logged)
 	}
 	return nil
+}
+
+func (m *Server) unitResult(ctx context.Context, s domain.Server) (string, error) {
+	result, err := m.Run.Run(ctx, "systemctl", "show", "--property=Result", "--value", unit(s))
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", fmt.Errorf("check %s shutdown result: %w", s.ID, err)
+	}
+	return strings.TrimSpace(string(result)), nil
+}
+
+// verifyStopped confirms an already-stopped unit finished a clean shutdown.
+func (m *Server) verifyStopped(ctx context.Context, s domain.Server) error {
+	res, err := m.unitResult(ctx, s)
+	if err != nil {
+		return err
+	}
+	if res != "success" {
+		return fmt.Errorf("%w: %s (result=%s): %s", domain.ErrUncleanShutdown, s.ID, res, m.tailLog(s, 0))
+	}
+	return m.verifyShutdown(ctx, s)
 }
 
 // localHost is how this node reaches a server listening on bind.

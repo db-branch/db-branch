@@ -391,10 +391,12 @@ func (s *Service) doUpgrade(ctx context.Context, br domain.Branch, req UpgradeRe
 	}
 	// The server runs: forget the intent first, so a crash from here on keeps the new runtime.
 	if err := s.clearUpgradeIntent(ctx, br.Name); err != nil {
+		_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
 		return res, err
 	}
 	br.Status, br.Error = domain.BranchReady, ""
 	if err := s.Store.PutBranch(ctx, br); err != nil {
+		_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
 		return res, err
 	}
 	res.Status = domain.UpgradeUpgraded
@@ -405,7 +407,7 @@ func (s *Service) doUpgrade(ctx context.Context, br domain.Branch, req UpgradeRe
 // failUpgrade deals with an upgrade that failed after the checkpoint was saved.
 func (s *Service) failUpgrade(ctx context.Context, br domain.Branch, req UpgradeRequest, res domain.UpgradeResult, prevLegacy bool, cause error, report Reporter) (domain.UpgradeResult, error) {
 	srv, _ := s.server(br.Runtime)
-	_ = srv.Stop(ctx, domain.Server{ID: branchServerID(br.Name), Runtime: br.Runtime}, domain.StopImmediate)
+	_ = srv.Stop(context.WithoutCancel(ctx), domain.Server{ID: branchServerID(br.Name), Runtime: br.Runtime}, domain.StopImmediate)
 	if req.NoRollback {
 		msg := fmt.Sprintf("%s%v; the branch was left as it is on %s; restore checkpoint %s to go back to %s, or delete the branch", domain.UpgradeFailedPrefix, cause, br.Runtime, res.Checkpoint, res.From)
 		res.Status = domain.UpgradeFailed

@@ -35,6 +35,8 @@ type fakeSystem struct {
 	outputs map[string]string
 	// onStart is appended to the error log by "systemctl start".
 	onStart string
+	// onCall runs before executing a call (e.g. to cancel ctx mid-command).
+	onCall func(call string)
 }
 
 func (f *fakeSystem) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -45,10 +47,19 @@ func (f *fakeSystem) RunInput(ctx context.Context, in io.Reader, name string, ar
 	return f.RunInputEnv(ctx, nil, in, name, args...)
 }
 
-func (f *fakeSystem) RunInputEnv(_ context.Context, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
+func (f *fakeSystem) RunInputEnv(ctx context.Context, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	call := strings.Join(append([]string{filepath.Base(name)}, args...), " ")
 	f.calls = append(f.calls, call)
 	f.envs = append(f.envs, append([]string(nil), env...))
+	if f.onCall != nil {
+		f.onCall(call)
+		if ctx.Err() != nil {
+			return nil, &execx.Error{Command: call, Err: errors.New("signal: killed")}
+		}
+	}
 	var input string
 	if in != nil {
 		b, _ := io.ReadAll(in)
@@ -299,6 +310,7 @@ func TestStop_正常停止を確認できなければUncleanShutdown(t *testing.
 
 func TestStop_止まっていれば何もしない(t *testing.T) {
 	f := newFixture(t)
+	appendFile(f.sys.errorLog, "[Server] /mysqld: ready for connections.\n[Server] /mysqld: Shutdown complete (mysqld 8.4.13)\n")
 
 	if err := f.srv.Stop(ctx, f.spec, domain.StopClean); err != nil {
 		t.Fatal(err)
@@ -949,6 +961,246 @@ func TestCreateUser_権限を外す文の失敗は返す(t *testing.T) {
 		f.sys.failOn = fail
 		if err := f.srv.CreateUser(ctx, f.spec, "feature-x", "pw1"); err == nil {
 			t.Errorf("%s: want an error", name)
+		}
+	}
+}
+
+func TestStopClean_既に異常停止済みのサーバーに対してverifyShutdownを実行しErrUncleanShutdownを返す(t *testing.T) {
+	for label, setup := range map[string]func(*fixture){
+		"no error log": func(*fixture) {},
+		"crashed after previous clean stop": func(f *fixture) {
+			appendFile(f.sys.errorLog, "[Server] /mysqld: ready for connections.\n[Server] /mysqld: Shutdown complete (mysqld 8.4.13)\n[Server] /mysqld (mysqld 8.4.13) starting as process 42\n[ERROR] crashed\n")
+		},
+		"unit failed despite old shutdown line": func(f *fixture) {
+			appendFile(f.sys.errorLog, "[Server] /mysqld: ready for connections.\n[Server] /mysqld: Shutdown complete (mysqld 8.4.13)\n")
+			f.sys.stopResult = "signal"
+		},
+		"mysql 5.7 crashed during InnoDB init after previous clean stop": func(f *fixture) {
+			appendFile(f.sys.errorLog, "[Note] /mysqld: ready for connections.\n[Note] /mysqld: Shutdown complete\n[Note] InnoDB: Initializing buffer pool, total size = 128M\n")
+		},
+	} {
+		f := newFixture(t)
+		setup(&f)
+		err := f.srv.Stop(ctx, f.spec, domain.StopClean)
+		if !errors.Is(err, domain.ErrUncleanShutdown) {
+			t.Errorf("%s: Stop(StopClean) = %v, want ErrUncleanShutdown", label, err)
+		}
+		if f.sys.called("systemctl stop") {
+			t.Errorf("%s: should not call systemctl stop on inactive unit: %q", label, f.sys.calls)
+		}
+	}
+
+	// PrepareClone removes stale error.log so a restored/cloned dataset cannot reuse an old shutdown line.
+	fp := newFixture(t)
+	appendFile(fp.sys.errorLog, "[Server] /mysqld: ready for connections.\n[Server] /mysqld: Shutdown complete (mysqld 8.4.13)\n")
+	if err := fp.srv.PrepareClone(ctx, fp.spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := fp.srv.Stop(ctx, fp.spec, domain.StopClean); !errors.Is(err, domain.ErrUncleanShutdown) {
+		t.Errorf("after PrepareClone without Start: StopClean = %v, want ErrUncleanShutdown", err)
+	}
+
+	// activating / deactivating states must NOT be treated as stopped.
+	for _, st := range []string{"activating", "deactivating"} {
+		fa := newFixture(t)
+		appendFile(fa.sys.errorLog, "[Server] /mysqld: ready for connections.\n[Server] /mysqld: Shutdown complete (mysqld 8.4.13)\n")
+		fa.sys.outputs = map[string]string{"--property=ActiveState": st + "\n"}
+		if err := fa.srv.Stop(ctx, fa.spec, domain.StopImmediate); err != nil {
+			t.Fatalf("%s StopImmediate: %v", st, err)
+		}
+		if !fa.sys.called("systemctl kill --signal=SIGKILL") {
+			t.Errorf("%s StopImmediate did not kill unit: %q", st, fa.sys.calls)
+		}
+
+		fc := newFixture(t)
+		appendFile(fc.sys.errorLog, "[Server] /mysqld: ready for connections.\n[Server] /mysqld: Shutdown complete (mysqld 8.4.13)\n")
+		fc.sys.outputs = map[string]string{"--property=ActiveState": st + "\n"}
+		fc.sys.failOn = "innodb_fast_shutdown"
+		if err := fc.srv.Stop(ctx, fc.spec, domain.StopClean); err == nil || errors.Is(err, domain.ErrUncleanShutdown) {
+			t.Errorf("%s StopClean: err = %v, want stop/exec failure (not nil or ErrUncleanShutdown)", st, err)
+		}
+	}
+
+	// Cancelled ctx and systemctl show errors must NOT be turned into nil or ErrUncleanShutdown.
+	fCan := newFixture(t)
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := fCan.srv.Stop(cctx, fCan.spec, domain.StopClean); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled StopClean = %v, want context.Canceled", err)
+	}
+	fShow := newFixture(t)
+	fShow.sys.failOn = "--property=ActiveState"
+	if err := fShow.srv.Stop(ctx, fShow.spec, domain.StopClean); err == nil || errors.Is(err, domain.ErrUncleanShutdown) {
+		t.Errorf("ActiveState error = %v, want non-UncleanShutdown error", err)
+	}
+	fRes := newFixture(t)
+	fRes.sys.failOn = "--property=Result"
+	if err := fRes.srv.Stop(ctx, fRes.spec, domain.StopClean); err == nil || errors.Is(err, domain.ErrUncleanShutdown) {
+		t.Errorf("Result error = %v, want non-UncleanShutdown error", err)
+	}
+
+	// Cleanly stopped previously: succeeds without calling systemctl stop.
+	clean := newFixture(t)
+	appendFile(clean.sys.errorLog, "[Server] /mysqld: ready for connections.\n[Server] /mysqld: Shutdown complete (mysqld 8.4.13)\n")
+	if err := clean.srv.Stop(ctx, clean.spec, domain.StopClean); err != nil {
+		t.Fatalf("cleanly stopped: %v", err)
+	}
+	if clean.sys.called("systemctl stop") {
+		t.Errorf("cleanly stopped: called systemctl stop: %q", clean.sys.calls)
+	}
+
+	// StopImmediate on a stopped server skips shutdown verification.
+	imm := newFixture(t)
+	imm.sys.stopResult = "signal"
+	if err := imm.srv.Stop(ctx, imm.spec, domain.StopImmediate); err != nil {
+		t.Fatalf("StopImmediate on stopped: %v", err)
+	}
+}
+
+func TestStart_ctxキャンセル時に即座に待機中断し起動途中ユニットを停止する(t *testing.T) {
+	// Cancelled while waiting for mysqld to become ready: stops polling right away and stops the unit.
+	f := newFixture(t)
+	f.sys.pingFails = 1 << 30
+	f.srv.StartTimeout = time.Minute
+	f.srv.PollInterval = 5 * time.Second
+	cctx, cancel := context.WithCancel(ctx)
+	timer := time.AfterFunc(20*time.Millisecond, cancel)
+	defer timer.Stop()
+
+	begin := time.Now()
+	err := f.srv.Start(cctx, f.spec)
+	elapsed := time.Since(begin)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if elapsed > time.Second {
+		t.Errorf("Start waited %s after cancellation", elapsed)
+	}
+	if !f.sys.called("systemctl stop db-branch-mysqld@branch-feature-x.service") {
+		t.Errorf("in-flight unit was not stopped: %q", f.sys.calls)
+	}
+	if f.sys.active {
+		t.Error("unit should no longer be active after cancel")
+	}
+
+	// If graceful stop fails while aborting, falls back to SIGKILL.
+	fk := newFixture(t)
+	fk.sys.pingFails = 1 << 30
+	fk.sys.failOn = "systemctl stop"
+	fk.srv.StartTimeout = time.Minute
+	fk.srv.PollInterval = 5 * time.Second
+	kctx, kcancel := context.WithCancel(ctx)
+	ktimer := time.AfterFunc(20*time.Millisecond, kcancel)
+	defer ktimer.Stop()
+	if err := fk.srv.Start(kctx, fk.spec); !errors.Is(err, context.Canceled) {
+		t.Fatalf("fallback err = %v, want context.Canceled", err)
+	}
+	if !fk.sys.called("systemctl kill --signal=SIGKILL db-branch-mysqld@branch-feature-x.service") {
+		t.Errorf("expected SIGKILL fallback when stop fails: %q", fk.sys.calls)
+	}
+
+	// Already cancelled before Start: does not start the unit.
+	fPre := newFixture(t)
+	preCtx, preCancel := context.WithCancel(ctx)
+	preCancel()
+	if err := fPre.srv.Start(preCtx, fPre.spec); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-cancelled err = %v, want context.Canceled", err)
+	}
+	if fPre.sys.called("systemctl start") {
+		t.Errorf("started unit despite cancelled ctx: %q", fPre.sys.calls)
+	}
+
+	// Timeout also stops the stuck unit.
+	ft := newFixture(t)
+	ft.sys.pingFails = 1 << 30
+	ft.srv.StartTimeout = 10 * time.Millisecond
+	if err := ft.srv.Start(ctx, ft.spec); err == nil {
+		t.Fatal("timeout: want error")
+	}
+	if !ft.sys.called("systemctl stop db-branch-mysqld@branch-feature-x.service") || ft.sys.active {
+		t.Errorf("timed-out unit was left running: active=%v calls=%q", ft.sys.active, ft.sys.calls)
+	}
+
+	// Cancelled mid-"systemctl start": preserves context.Canceled and stops the unit.
+	fMid := newFixture(t)
+	midCtx, midCancel := context.WithCancel(ctx)
+	fMid.sys.onCall = func(call string) {
+		if strings.HasPrefix(call, "systemctl start") {
+			fMid.sys.active = true
+			midCancel()
+		}
+	}
+	if err := fMid.srv.Start(midCtx, fMid.spec); !errors.Is(err, context.Canceled) {
+		t.Fatalf("mid-start cancel err = %v, want context.Canceled", err)
+	}
+	if !fMid.sys.called("systemctl stop db-branch-mysqld@branch-feature-x.service") || fMid.sys.active {
+		t.Errorf("mid-start cancelled unit left running: active=%v calls=%q", fMid.sys.active, fMid.sys.calls)
+	}
+
+	// StartUpgraded cancelled: preserves context.Canceled, stops unit, and still collects journal excerpt.
+	fUp := newFixture(t)
+	fUp.sys.pingFails = 1 << 30
+	fUp.sys.outputs = map[string]string{"journalctl": "upgrade interrupted log\n"}
+	fUp.srv.UpgradeTimeout = time.Minute
+	fUp.srv.PollInterval = 5 * time.Second
+	upCtx, upCancel := context.WithCancel(ctx)
+	upTimer := time.AfterFunc(20*time.Millisecond, upCancel)
+	defer upTimer.Stop()
+	upLog, err := fUp.srv.StartUpgraded(upCtx, fUp.spec, domain.Login{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("StartUpgraded cancel err = %v, want context.Canceled", err)
+	}
+	if !strings.Contains(upLog.Excerpt, "Shutdown complete") {
+		t.Errorf("StartUpgraded cancel excerpt = %q, want the error log of the aborted start", upLog.Excerpt)
+	}
+	if fUp.sys.active {
+		t.Error("StartUpgraded unit left active after cancel")
+	}
+}
+
+func TestStop_状態や結果を確かめられなければエラーにしキャンセルはそのまま返す(t *testing.T) {
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	f := newFixture(t)
+	if err := f.srv.Stop(cancelled, f.spec, domain.StopClean); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled Stop = %v, want context.Canceled", err)
+	}
+
+	for name, fail := range map[string]string{
+		"状態を読めない":     "ActiveState",
+		"停止後の結果を読めない": "Result",
+	} {
+		f := newFixture(t)
+		f.sys.active = true
+		f.sys.shutdownOK = true
+		f.sys.failOn = fail
+		if err := f.srv.Stop(ctx, f.spec, domain.StopClean); err == nil || errors.Is(err, domain.ErrUncleanShutdown) {
+			t.Errorf("%s: error = %v, want a check failure", name, err)
+		}
+	}
+
+	// A stopped unit whose result cannot be read is not assumed clean.
+	f = newFixture(t)
+	f.sys.failOn = "Result"
+	if err := f.srv.Stop(ctx, f.spec, domain.StopClean); err == nil {
+		t.Error("already-stopped unit with unreadable result passed")
+	}
+}
+
+func TestStop_キャンセルされたら各段階でcontextエラーを返す(t *testing.T) {
+	for _, step := range []string{"mysql --socket", "systemctl stop", "Result"} {
+		f := newFixture(t)
+		f.sys.active = true
+		f.sys.shutdownOK = true
+		c, cancel := context.WithCancel(ctx)
+		f.sys.onCall = func(call string) {
+			if strings.Contains(call, step) {
+				cancel()
+			}
+		}
+		f.sys.failOn = step
+		if err := f.srv.Stop(c, f.spec, domain.StopClean); !errors.Is(err, context.Canceled) {
+			t.Errorf("cancel at %q: error = %v, want context.Canceled", step, err)
 		}
 	}
 }

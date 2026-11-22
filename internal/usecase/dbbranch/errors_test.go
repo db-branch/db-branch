@@ -31,6 +31,13 @@ func (f *failingStore) ListBranches(ctx context.Context) ([]domain.Branch, error
 	return f.Store.ListBranches(ctx)
 }
 
+func (f *failingStore) PutBranch(ctx context.Context, b domain.Branch) error {
+	if f.failOn == "put-branch" || (f.failOn == "put-branch-ready" && b.Status == domain.BranchReady) {
+		return errStore
+	}
+	return f.Store.PutBranch(ctx, b)
+}
+
 func TestストアやDBサーバーの失敗はそのまま返す(t *testing.T) {
 	cases := map[string]func(e *env) error{
 		"port: list bases": func(e *env) error {

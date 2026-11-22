@@ -31,5 +31,5 @@ func (p *Server) CheckUpgrade(_ context.Context, s domain.Server, to domain.Runt
 // StartUpgraded starts the server on the new binaries.
 func (p *Server) StartUpgraded(ctx context.Context, s domain.Server, _ domain.Login) (domain.UpgradeLog, error) {
 	err := p.Start(ctx, s)
-	return domain.UpgradeLog{Excerpt: p.journal(ctx, s)}, err
+	return domain.UpgradeLog{Excerpt: p.journalFresh(ctx, s)}, err
 }

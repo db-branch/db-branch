@@ -90,6 +90,9 @@ func (p *Server) verifyShutdown(ctx context.Context, s domain.Server) error {
 	control, err := p.Run.Run(ctx, name, args...)
 	state := controlState(string(control))
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("%w: %s (cluster state=%q): %v", domain.ErrUncleanShutdown, s.ID, state, err)
 	}
 	if state != "shut down" {

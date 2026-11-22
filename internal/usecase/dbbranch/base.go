@@ -63,7 +63,7 @@ func (s *Service) CreateBase(ctx context.Context, req CreateBaseRequest, report 
 	}
 	if err := s.buildBase(ctx, srv, &base, req.Dump, report); err != nil {
 		base.Status, base.Error = domain.BaseFailed, err.Error()
-		_ = s.Store.PutBase(ctx, base)
+		_ = s.Store.PutBase(context.WithoutCancel(ctx), base)
 		return base, err
 	}
 	base.Status = domain.BaseReady
@@ -177,9 +177,16 @@ func (s *Service) buildBase(ctx context.Context, srv domain.DBServer, base *doma
 	if err := srv.Initialize(ctx, spec); err != nil {
 		return err
 	}
+	started := false
+	defer func() {
+		if started {
+			_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
+		}
+	}()
 	if err := srv.Start(ctx, spec); err != nil {
 		return err
 	}
+	started = true
 	if dump != "" {
 		report.report("loading")
 		if err := srv.Load(ctx, spec, dump); err != nil {
@@ -190,6 +197,7 @@ func (s *Service) buildBase(ctx context.Context, srv domain.DBServer, base *doma
 	if err != nil {
 		return err
 	}
+	started = false
 	base.Snapshots = append(base.Snapshots, snap)
 	return nil
 }
@@ -197,6 +205,15 @@ func (s *Service) buildBase(ctx context.Context, srv domain.DBServer, base *doma
 // cleanSnapshot stops the server cleanly and snapshots its dataset. Branches
 // cloned from such a snapshot start without crash recovery.
 func (s *Service) cleanSnapshot(ctx context.Context, srv domain.DBServer, spec domain.Server, ds string, report Reporter) (domain.BaseSnapshot, error) {
+	started := false
+	defer func() {
+		if started {
+			stopCtx := context.WithoutCancel(ctx)
+			if serr := srv.Stop(stopCtx, spec, domain.StopClean); serr != nil {
+				_ = srv.Stop(stopCtx, spec, domain.StopImmediate)
+			}
+		}
+	}()
 	// Statistics first, so branches of the snapshot plan their queries well.
 	// A stopped server is started for it (and stopped again below).
 	if u, ok := srv.(domain.StatsUpdater); ok {
@@ -205,6 +222,7 @@ func (s *Service) cleanSnapshot(ctx context.Context, srv domain.DBServer, spec d
 			if err := srv.Start(ctx, spec); err != nil {
 				return domain.BaseSnapshot{}, err
 			}
+			started = true
 		}
 		report.report("analyzing")
 		if err := u.UpdateStats(ctx, spec); err != nil {
@@ -215,6 +233,7 @@ func (s *Service) cleanSnapshot(ctx context.Context, srv domain.DBServer, spec d
 	if err := srv.Stop(ctx, spec, domain.StopClean); err != nil {
 		return domain.BaseSnapshot{}, err
 	}
+	started = false
 	report.report("snapshotting")
 	snap := domain.BaseSnapshot{Name: s.snapshotName(), CreatedAt: s.Clock(), Distro: s.Distro}
 	if err := s.Storage.Snapshot(ctx, domain.Snapshot{Dataset: ds, Name: snap.Name}); err != nil {
@@ -252,8 +271,10 @@ func (s *Service) snapshotRunningBase(ctx context.Context, base domain.Base, rep
 		return snap, err
 	}
 	if wasRunning {
-		report.report("restarting")
-		err = errors.Join(err, srv.Start(ctx, spec))
+		if running, _ := srv.Running(ctx, spec); !running {
+			report.report("restarting")
+			err = errors.Join(err, srv.Start(ctx, spec))
+		}
 	}
 	return snap, err
 }
