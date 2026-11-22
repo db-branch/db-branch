@@ -755,3 +755,46 @@ func TestOwnership_branchReadは自分とopenとSharesBranchesのブランチだ
 		t.Errorf("teammate policy must not expose legacy: got %d, want 403", resp.StatusCode)
 	}
 }
+
+// loginCookie signs user in to the console and returns a request modifier that
+// carries the session.
+func loginCookie(t *testing.T, h http.Handler, user string) func(*http.Request) {
+	t.Helper()
+	resp, body := send(t, h, "POST", "/v1/auth/login", map[string]any{"username": user, "password": "pw"}, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("login %s: %d %v", user, resp.StatusCode, body)
+	}
+	for _, c := range resp.Cookies() {
+		if c.Name == "dbb_session" {
+			return func(r *http.Request) { r.AddCookie(c) }
+		}
+	}
+	t.Fatal("no session cookie")
+	return nil
+}
+
+func TestOwnership_表示名で作られ移行できなかった旧ブランチは本人のセッションだけが管理できる(t *testing.T) {
+	f := ownedFixture(t)
+	// Created before owners were IDs by a console user shown as "Carol.Smith@Example.com";
+	// migration could not resolve an ID, so OwnerName stays empty.
+	f.branches.branches["carols"] = domain.Branch{Name: name("carols"), Base: name("prod"), Status: domain.BranchReady,
+		Owner: "Carol.Smith@Example.com", Runtime: mysql84, Port: 40009, User: "carols", Password: "secret"}
+	// A service token that is merely named like the old owner must not take it over.
+	f.branches.branches["alices-old"] = domain.Branch{Name: name("alices-old"), Base: name("prod"), Status: domain.BranchReady,
+		Owner: "alice", Runtime: mysql84, Port: 40010, User: "alices-old", Password: "secret"}
+	h := f.srv.Handler(false)
+
+	carol := loginCookie(t, h, "carol")
+	if r, b := send(t, h, "GET", "/v1/branches/carols/dsn", nil, carol); r.StatusCode != 200 {
+		t.Errorf("carol on her unmigrated branch: %d %v, want 200", r.StatusCode, b)
+	}
+	if r, b := send(t, h, "GET", "/v1/branches/carols/dsn", nil, loginCookie(t, h, "bob")); r.StatusCode != 403 {
+		t.Errorf("bob on carol's unmigrated branch: %d %v, want 403", r.StatusCode, b)
+	}
+	if r, b := send(t, h, "GET", "/v1/branches/alices-old/dsn", nil, as("t-alice")); r.StatusCode != 403 {
+		t.Errorf("service token named alice on an unmigrated branch: %d %v, want 403", r.StatusCode, b)
+	}
+	if r, b := send(t, h, "GET", "/v1/branches/alices-old/dsn", nil, loginCookie(t, h, "alice")); r.StatusCode != 200 {
+		t.Errorf("alice's console session on her unmigrated branch: %d %v, want 200", r.StatusCode, b)
+	}
+}

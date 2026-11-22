@@ -37,7 +37,10 @@ func MigrateBranchOwners(ctx context.Context, store domain.Store, migrator domai
 	}
 	var errs []error
 	for _, b := range pending {
-		owner, ownerName := resolveLegacyOwner(b, tokenList)
+		owner, ownerName, ok := resolveLegacyOwner(b, tokenList)
+		if !ok {
+			continue // stays a legacy name owner: matched by display name, never by a service token
+		}
 		if err := migrator.MigrateBranchOwner(ctx, b.Name, owner, ownerName); err != nil {
 			if errors.Is(err, domain.ErrClusterUpgrading) {
 				return err
@@ -48,29 +51,29 @@ func MigrateBranchOwners(ctx context.Context, store domain.Store, migrator domai
 	return errors.Join(errs...)
 }
 
-func resolveLegacyOwner(b domain.Branch, tokens []domain.APIToken) (owner, ownerName string) {
+func resolveLegacyOwner(b domain.Branch, tokens []domain.APIToken) (owner, ownerName string, ok bool) {
 	// Built-in principals have stable IDs equal to their names; never let a
 	// service token with a colliding name claim them.
 	switch b.Owner {
 	case "admin", "local", "anonymous":
-		return b.Owner, b.Owner
+		return b.Owner, b.Owner, true
 	}
 	// Already an immutable service token ID ("token:<id>").
 	if id, ok := strings.CutPrefix(b.Owner, "token:"); ok {
 		for _, t := range tokens {
 			if t.ID == id && t.Name != "" {
-				return b.Owner, t.Name
+				return b.Owner, t.Name, true
 			}
 		}
-		return b.Owner, b.Owner
+		return b.Owner, b.Owner, true
 	}
 	// Already matches a known personal token's immutable principal ID.
 	for _, t := range tokens {
 		if t.Owner != "" && t.Owner == b.Owner {
 			if t.OwnerName != "" {
-				return b.Owner, t.OwnerName
+				return b.Owner, t.OwnerName, true
 			}
-			return b.Owner, b.Owner
+			return b.Owner, b.Owner, true
 		}
 	}
 	// Match display name against personal tokens and pre-existing service tokens.
@@ -89,10 +92,10 @@ func resolveLegacyOwner(b domain.Branch, tokens []domain.APIToken) (owner, owner
 	}
 	if len(candidates) == 1 {
 		for id := range candidates {
-			return id, b.Owner
+			return id, b.Owner, true
 		}
 	}
-	// Unresolved or ambiguous: keep Owner as-is and seal OwnerName so future
-	// tokens with the same name cannot hijack this branch.
-	return b.Owner, b.Owner
+	// Unresolved or ambiguous: leave the branch as a legacy name owner (matched
+	// by display name in httpapi, never by a service token).
+	return "", "", false
 }

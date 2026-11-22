@@ -98,10 +98,10 @@ func TestMigrateBranchOwners_既存ブランチの所有者をトークン情報
 		"by-ci":         {"token:ci01", "ci"},
 		"by-alice":      {"oidc:alice", "alice@example.com"},
 		"by-alice-id":   {"oidc:alice", "alice@example.com"},
-		"by-dup":        {"dup", "dup"},
-		"by-late":       {"late", "late"},
-		"by-clash":      {"clash", "clash"},
-		"by-unknown":    {"ghost@example.com", "ghost@example.com"},
+		"by-dup":        {"dup", ""},
+		"by-late":       {"late", ""},
+		"by-clash":      {"clash", ""},
+		"by-unknown":    {"ghost@example.com", ""},
 		"by-tokid":      {"token:exist1", "ci-runner"},
 		"by-gone-tokid": {"token:deleted", "token:deleted"},
 	}
@@ -116,12 +116,12 @@ func TestMigrateBranchOwners_既存ブランチの所有者をトークン情報
 	}
 
 	// Creating a new service token named "ghost@example.com" later and re-running
-	// migration must NOT hijack "by-unknown" (it is already sealed with OwnerName).
-	_ = store.PutToken(ctx, domain.APIToken{ID: "evil99", Name: "ghost@example.com", Scope: domain.ScopeBranches, CreatedAt: t1})
+	// migration must NOT hijack "by-unknown" (the token is newer than the branch).
+	_ = store.PutToken(ctx, domain.APIToken{ID: "evil99", Name: "ghost@example.com", Scope: domain.ScopeBranches, CreatedAt: t3})
 	if err := dbbranch.MigrateBranchOwners(ctx, store, store, store); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := store.GetBranch(ctx, name("by-unknown")); got.Owner != "ghost@example.com" {
+	if got, _ := store.GetBranch(ctx, name("by-unknown")); got.Owner != "ghost@example.com" || got.OwnerName != "" {
 		t.Errorf("sealed branch was hijacked on re-run: %+v", got)
 	}
 }

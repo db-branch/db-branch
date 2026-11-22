@@ -143,7 +143,7 @@ export function Portal() {
 
   const mine = usePoll<Branch[]>(
     async () => {
-      if (session) return (await api.branches()).filter((b) => b.owner === myId);
+      if (session) return (await api.branches()).filter((b) => b.owner === myId || (b.owner_name === b.owner && b.owner === myName));
       const found: Branch[] = [];
       for (const n of local) {
         try {
