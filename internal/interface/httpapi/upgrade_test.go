@@ -174,7 +174,8 @@ func TestUpgradeBranch_所有者と管理者だけが使える(t *testing.T) {
 		{"t-bob", "/v1/branches/opened/upgrade", 403}, // open lets anyone connect, not change the branch
 		{"t-alice", "/v1/branches/alices/upgrade", 202},
 		{"t-full", "/v1/branches/alices/upgrade", 202},
-		{"t-bob", "/v1/branches/legacy/upgrade", 202},
+		{"t-bob", "/v1/branches/legacy/upgrade", 403},
+		{"t-full", "/v1/branches/legacy/upgrade", 202},
 		{"", "/v1/branches/opened/upgrade", 401},
 	} {
 		resp, b := send(t, h, "POST", c.path, body, as(c.tok))
@@ -339,6 +340,9 @@ func TestUpgradeBranch_オペレーションを記録できなければ失敗を
 func TestMCP_アップグレードの確認と実行と結果(t *testing.T) {
 	httpapi.MCPPoll = time.Millisecond
 	f := upgradeFixture(t)
+	bx := f.branches.branches["x"]
+	bx.Owner, bx.OwnerName = "token:dev", "dev"
+	f.branches.branches["x"] = bx
 	f.srv.TokenAuth = &fakeTokens{}
 	s, err := mcpSession(t, f, "t-branches")
 	if err != nil {

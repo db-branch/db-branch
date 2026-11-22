@@ -202,7 +202,7 @@ paths:
       x-dbb-action: branch.read
       x-dbb-token-scopes: [full, branches]
       description: |-
-        Lists all branches, sorted by name. Everyone signed in can read every branch; the connection password is not included (see getBranchDsn).
+        Lists branches visible to the caller, sorted by name. Admins see every branch; non-admins see their own branches, `open` branches, and branches shared with them by a branch policy. The connection password is not included (see getBranchDsn).
 
         **Action:** `branch.read`. Allowed for `full` and `branches` tokens.
       responses:
@@ -215,7 +215,8 @@ paths:
                 items:
                   - name: feature-x
                     id: alice/feature-x
-                    owner: alice@example.com
+                    owner: oidc:alice@example.com
+                    owner_name: alice@example.com
                     access: private
                     status: ready
                     status_reason: null
@@ -313,7 +314,7 @@ paths:
       x-dbb-action: branch.read
       x-dbb-token-scopes: [full, branches]
       description: |-
-        Returns one branch. Without a login this works for `open` branches only.
+        Returns one branch. Admins may read every branch; non-admins may read their own branches, `open` branches, and branches shared with them by a branch policy. Without a login this works for `open` branches only.
 
         **Action:** `branch.read`. Allowed for `full` and `branches` tokens.
       security:
@@ -958,11 +959,11 @@ paths:
       operationId: listPublicBases
       summary: List bases open to branches without a login
       x-dbb-action: base.public
-      x-dbb-token-scopes: [full]
+      x-dbb-token-scopes: [full, branches]
       description: |-
         Lists the ready bases that have a public snapshot and allow branches without a login, only those snapshots, what may be done with each, and the cluster-wide limits. Works without credentials.
 
-        **Action:** `base.public`. Needs a console session of an admin, the local socket, or a `full` token.
+        **Action:** `base.public`. Allowed for `full` and `branches` tokens, signed-in users, and without credentials.
       security:
         - bearerAuth: []
         - session: []
@@ -3452,11 +3453,15 @@ components:
         name: {$ref: '#/components/schemas/Name'}
         id:
           type: string
-          description: '`owner/name` when the branch has an owner (an email owner is shortened to its local part), otherwise the name.'
+          description: '`owner_name/name` when the branch has an owner (an email is shortened to its local part), otherwise the name.'
           examples: [alice/feature-x]
         owner:
           type: [string, 'null']
-          description: Who manages the branch. An email address for people who signed in with one.
+          description: Immutable principal ID of who manages the branch (null for legacy branches without an owner, which are admin-only).
+          examples: [oidc:alice@example.com]
+        owner_name:
+          type: [string, 'null']
+          description: Display name of the branch owner (e.g. email address or token name; falls back to `owner`).
           examples: [alice@example.com]
         access:
           type: string
@@ -3516,6 +3521,7 @@ components:
         - name
         - id
         - owner
+        - owner_name
         - access
         - status
         - status_reason
@@ -3536,7 +3542,8 @@ components:
       example:
         name: feature-x
         id: alice/feature-x
-        owner: alice@example.com
+        owner: oidc:alice@example.com
+        owner_name: alice@example.com
         access: private
         status: ready
         status_reason: null
@@ -3584,7 +3591,10 @@ components:
           description: 'Node to place the branch on. Default: chosen by load, among nodes that hold the snapshot.'
         owner:
           type: string
-          description: 'Who manages the branch. Default: the caller. Only an admin (or a `full` token) may name someone else.'
+          description: 'Immutable principal ID of who manages the branch. Default: the caller. Only an admin (or a `full` token) may name someone else.'
+        owner_name:
+          type: string
+          description: 'Display name of the owner when an admin creates a branch for another owner. Ignored for non-admins.'
         access:
           type: string
           enum: [private, open]

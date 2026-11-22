@@ -48,8 +48,8 @@ func as(tok string) func(*http.Request) {
 func ownedFixture(t *testing.T) *fixture {
 	f := newFixture(t)
 	f.srv.TokenAuth = tokenAuth{}
-	f.branches.branches["alices"] = domain.Branch{Name: name("alices"), Base: name("prod"), Status: domain.BranchReady, Owner: "alice", Runtime: mysql84, Port: 40001, User: "alices", Password: "secret"}
-	f.branches.branches["opened"] = domain.Branch{Name: name("opened"), Base: name("prod"), Status: domain.BranchReady, Owner: "alice", Access: domain.AccessOpen, Runtime: mysql84, Port: 40002, User: "opened", Password: "shared"}
+	f.branches.branches["alices"] = domain.Branch{Name: name("alices"), Base: name("prod"), Status: domain.BranchReady, Owner: "token:a", OwnerName: "alice", Runtime: mysql84, Port: 40001, User: "alices", Password: "secret"}
+	f.branches.branches["opened"] = domain.Branch{Name: name("opened"), Base: name("prod"), Status: domain.BranchReady, Owner: "token:a", OwnerName: "alice", Access: domain.AccessOpen, Runtime: mysql84, Port: 40002, User: "opened", Password: "shared"}
 	f.branches.branches["legacy"] = domain.Branch{Name: name("legacy"), Base: name("prod"), Status: domain.BranchReady, Runtime: mysql84}
 	return f
 }
@@ -64,9 +64,12 @@ func TestOwnership_自分のブランチだけを変えられる(t *testing.T) {
 		{"t-bob", "DELETE", "/v1/branches/alices", 403},
 		{"t-bob", "GET", "/v1/branches/alices/dsn", 403},
 		{"t-bob", "GET", "/v1/branches/opened/dsn", 200},
-		{"t-bob", "GET", "/v1/branches/alices", 200},
+		{"t-bob", "GET", "/v1/branches/opened", 200},
+		{"t-bob", "GET", "/v1/branches/alices", 403},
+		{"t-alice", "GET", "/v1/branches/alices", 200},
 		{"t-bob", "GET", "/v1/branches", 200},
-		{"t-bob", "POST", "/v1/branches/legacy/reset", 202},
+		{"t-bob", "POST", "/v1/branches/legacy/reset", 403},
+		{"t-full", "POST", "/v1/branches/legacy/reset", 202},
 		{"t-alice", "GET", "/v1/branches/alices/dsn", 200},
 		{"t-alice", "POST", "/v1/branches/alices/reset", 202},
 		{"t-full", "GET", "/v1/branches/alices/dsn", 200},
@@ -77,11 +80,11 @@ func TestOwnership_自分のブランチだけを変えられる(t *testing.T) {
 			t.Errorf("%s %s %s: %d %v", c.tok, c.method, c.path, resp.StatusCode, body)
 		}
 	}
-	_, body := send(t, h, "GET", "/v1/branches/alices", nil, as("t-bob"))
-	if body["owner"] != "alice" || body["id"] != "alice/alices" || body["access"] != "private" {
+	_, body := send(t, h, "GET", "/v1/branches/alices", nil, as("t-alice"))
+	if body["owner"] != "token:a" || body["owner_name"] != "alice" || body["id"] != "alice/alices" || body["access"] != "private" {
 		t.Errorf("view = %v", body)
 	}
-	if _, body := send(t, h, "GET", "/v1/branches/legacy", nil, as("t-bob")); body["owner"] != nil || body["id"] != "legacy" {
+	if _, body := send(t, h, "GET", "/v1/branches/legacy", nil, as("t-full")); body["owner"] != nil || body["owner_name"] != nil || body["id"] != "legacy" {
 		t.Errorf("legacy view = %v", body)
 	}
 }
@@ -94,14 +97,26 @@ func TestOwnership_作った人が所有者になり他人の名義は管理者�
 		t.Fatalf("%d %v", resp.StatusCode, body)
 	}
 	waitFor(t, func() bool { _, ok := f.branches.get("bobs"); return ok })
-	if b, _ := f.branches.get("bobs"); b.Owner != "bob" || b.Access != domain.AccessOpen {
+	if b, _ := f.branches.get("bobs"); b.Owner != "token:b" || b.OwnerName != "bob" || b.Access != domain.AccessOpen {
 		t.Errorf("bobs = %+v", b)
 	}
-	if resp, _ := send(t, h, "POST", "/v1/branches", map[string]any{"name": "for-alice", "base": "prod", "owner": "alice"}, as("t-bob")); resp.StatusCode != 403 {
+	// Non-admin naming themselves cannot spoof owner_name.
+	if resp, body := send(t, h, "POST", "/v1/branches", map[string]any{"name": "bobs2", "base": "prod", "owner": "token:b", "owner_name": "spoof"}, as("t-bob")); resp.StatusCode != 202 {
+		t.Fatalf("self with spoofed owner_name: %d %v", resp.StatusCode, body)
+	}
+	waitFor(t, func() bool { _, ok := f.branches.get("bobs2"); return ok })
+	if b, _ := f.branches.get("bobs2"); b.Owner != "token:b" || b.OwnerName != "bob" {
+		t.Errorf("bobs2 = %+v", b)
+	}
+	if resp, _ := send(t, h, "POST", "/v1/branches", map[string]any{"name": "for-alice", "base": "prod", "owner": "token:a"}, as("t-bob")); resp.StatusCode != 403 {
 		t.Errorf("bob for alice: %d", resp.StatusCode)
 	}
-	if resp, _ := send(t, h, "POST", "/v1/branches", map[string]any{"name": "for-alice", "base": "prod", "owner": "alice"}, as("t-full")); resp.StatusCode != 202 {
+	if resp, _ := send(t, h, "POST", "/v1/branches", map[string]any{"name": "for-alice", "base": "prod", "owner": "token:a", "owner_name": "alice"}, as("t-full")); resp.StatusCode != 202 {
 		t.Errorf("admin for alice: %d", resp.StatusCode)
+	}
+	waitFor(t, func() bool { _, ok := f.branches.get("for-alice"); return ok })
+	if b, _ := f.branches.get("for-alice"); b.Owner != "token:a" || b.OwnerName != "alice" {
+		t.Errorf("for-alice = %+v", b)
 	}
 	if resp, _ := send(t, h, "POST", "/v1/branches", map[string]any{"name": "x", "base": "prod", "access": "world"}, as("t-bob")); resp.StatusCode != 400 {
 		t.Errorf("bad access: %d", resp.StatusCode)
@@ -319,7 +334,7 @@ func (p *teamPolicy) CheckBranch(_ context.Context, who ext.Principal, r ext.Bra
 	}
 	n := 0
 	for _, b := range r.Existing {
-		if b.Owner == "alice" || b.Owner == "bob" {
+		if b.Owner == "token:a" || b.Owner == "token:b" {
 			n++
 		}
 	}
@@ -330,8 +345,8 @@ func (p *teamPolicy) CheckBranch(_ context.Context, who ext.Principal, r ext.Bra
 }
 
 func (p *teamPolicy) SharesBranches(_ context.Context, who ext.Principal, owner string) bool {
-	team := map[string]bool{"alice": true, "bob": true}
-	return team[who.Name] && team[owner]
+	team := map[string]bool{"token:a": true, "token:b": true}
+	return team[who.ID] && team[owner]
 }
 
 func TestBranchPolicy_モジュールが作成を判断しチームの人は互いのブランチを扱える(t *testing.T) {
@@ -343,7 +358,7 @@ func TestBranchPolicy_モジュールが作成を判断しチームの人は互�
 	if resp, body := send(t, h, "POST", "/v1/branches", map[string]any{"name": "b1", "base": "prod", "ttl": "4h"}, as("t-bob")); resp.StatusCode != 202 {
 		t.Fatalf("allowed: %d %v", resp.StatusCode, body)
 	}
-	if g := pol.got[0]; g.Name != "b1" || g.Owner != "bob" || g.TTL != 4*time.Hour || len(g.Existing) < 3 {
+	if g := pol.got[0]; g.Name != "b1" || g.Owner != "token:b" || g.TTL != 4*time.Hour || len(g.Existing) < 3 {
 		t.Errorf("request %+v", g)
 	}
 	if resp, _ := send(t, h, "POST", "/v1/branches", map[string]any{"name": "b2", "base": "prod"}, as("t-bob")); resp.StatusCode != 403 {
@@ -447,8 +462,8 @@ func TestCreateBranch_利用者が作る名前には所有者名が前に付く(
 		t.Fatalf("%d %v", resp.StatusCode, body)
 	}
 	waitFor(t, func() bool { _, ok := f.branches.get("alice-test"); return ok })
-	if b, _ := f.branches.get("alice-test"); b.Owner != "alice" {
-		t.Errorf("owner = %q", b.Owner)
+	if b, _ := f.branches.get("alice-test"); b.Owner != "sso:alice" || b.OwnerName != "alice" {
+		t.Errorf("owner = (%q, %q)", b.Owner, b.OwnerName)
 	}
 	if _, ok := f.branches.get("test"); ok {
 		t.Error("unprefixed branch was made")
@@ -466,8 +481,8 @@ func TestCreateBranch_別々の利用者が同じ名前でそれぞれ作れる(
 	for _, want := range []string{"alice-test", "bob-test", "carol-smith-test"} {
 		waitFor(t, func() bool { _, ok := f.branches.get(want); return ok })
 	}
-	if b, _ := f.branches.get("carol-smith-test"); b.Owner != "Carol.Smith@Example.com" {
-		t.Errorf("owner = %q", b.Owner)
+	if b, _ := f.branches.get("carol-smith-test"); b.Owner != "sso:carol" || b.OwnerName != "Carol.Smith@Example.com" {
+		t.Errorf("owner = (%q, %q)", b.Owner, b.OwnerName)
 	}
 }
 
@@ -558,4 +573,228 @@ func TestCreateBranch_トークンで作る名前は利用者でもそのまま�
 		t.Fatalf("%d %v", resp.StatusCode, body)
 	}
 	waitFor(t, func() bool { _, ok := f.branches.get("ci-run"); return ok })
+}
+
+func TestOwnership_同名サービストークンで他ユーザーのprivateブランチを操作およびDSN取得できない(t *testing.T) {
+	f := ownedFixture(t)
+	h := f.srv.Handler(false)
+	// SSO user alice (ID: "sso:alice", Name: "alice") creates a private branch.
+	resp, body := createAs(t, h, "alice", map[string]any{"name": "priv"})
+	if resp.StatusCode != 202 {
+		t.Fatalf("alice create: %d %v", resp.StatusCode, body)
+	}
+	waitFor(t, func() bool { _, ok := f.branches.get("alice-priv"); return ok })
+	b, _ := f.branches.get("alice-priv")
+	if b.Owner != "sso:alice" || b.OwnerName != "alice" {
+		t.Fatalf("stored owner = (%q, %q), want (sso:alice, alice)", b.Owner, b.OwnerName)
+	}
+
+	// Service token "t-alice" has the SAME display Name ("alice"), but a different
+	// immutable ID ("token:a"). It must NOT be able to operate on or get DSN for
+	// sso:alice's private branch!
+	for _, c := range []struct{ method, path string }{
+		{"GET", "/v1/branches/alice-priv/dsn"},
+		{"DELETE", "/v1/branches/alice-priv"},
+		{"POST", "/v1/branches/alice-priv/reset"},
+		{"PATCH", "/v1/branches/alice-priv"},
+		{"POST", "/v1/branches/alice-priv/pause"},
+		{"POST", "/v1/branches/alice-priv/query"},
+	} {
+		var reqBody any
+		if c.method == "PATCH" {
+			reqBody = map[string]any{"ttl": "1h"}
+		} else if strings.HasSuffix(c.path, "/query") {
+			reqBody = map[string]any{"sql": "SELECT 1"}
+		}
+		if r, rb := send(t, h, c.method, c.path, reqBody, as("t-alice")); r.StatusCode != 403 {
+			t.Errorf("service token 'alice' %s %s: got %d %v, want 403", c.method, c.path, r.StatusCode, rb)
+		}
+	}
+
+	// Admin/owner view returns immutable owner ID and display owner_name separately.
+	_, view := send(t, h, "GET", "/v1/branches/alice-priv", nil, as("t-full"))
+	if view["owner"] != "sso:alice" || view["owner_name"] != "alice" || view["id"] != "alice/alice-priv" {
+		t.Errorf("view = %v", view)
+	}
+}
+
+type shareEverythingPolicy struct{ calledWithEmpty bool }
+
+func (p *shareEverythingPolicy) CheckBranch(context.Context, ext.Principal, ext.BranchRequest) error {
+	return nil
+}
+
+func (p *shareEverythingPolicy) SharesBranches(_ context.Context, _ ext.Principal, owner string) bool {
+	if owner == "" {
+		p.calledWithEmpty = true
+	}
+	return true
+}
+
+func TestOwnership_Owner空レガシーブランチは非管理者が変更削除できない(t *testing.T) {
+	f := ownedFixture(t)
+	pol := &shareEverythingPolicy{}
+	f.srv.Ext = ext.Module{BranchPolicy: pol}
+	f.branches.branches["legacy-open"] = domain.Branch{
+		Name: name("legacy-open"), Base: name("prod"), Status: domain.BranchReady,
+		Access: domain.AccessOpen, Runtime: mysql84, Port: 40003, User: "legacy-open", Password: "shared",
+	}
+	h := f.srv.Handler(false)
+
+	for _, c := range []struct {
+		tok, method, path string
+		body              any
+		want              int
+	}{
+		// Private legacy branch (Owner == ""): non-admin denied for mutations and connect/query.
+		{"t-bob", "DELETE", "/v1/branches/legacy", nil, 403},
+		{"t-bob", "POST", "/v1/branches/legacy/reset", nil, 403},
+		{"t-bob", "PATCH", "/v1/branches/legacy", map[string]any{"ttl": "1h"}, 403},
+		{"t-bob", "POST", "/v1/branches/legacy/pause", nil, 403},
+		{"t-bob", "POST", "/v1/branches/legacy/checkpoints", nil, 403},
+		{"t-bob", "POST", "/v1/branches/legacy/upgrade", map[string]any{"runtime": "mysql@8.4.13"}, 403},
+		{"t-bob", "GET", "/v1/branches/legacy/dsn", nil, 403},
+		{"t-bob", "POST", "/v1/branches/legacy/query", map[string]any{"sql": "SELECT 1"}, 403},
+		// Open legacy branch (Owner == "", Access == "open"): non-admin can connect, NOT mutate.
+		{"t-bob", "GET", "/v1/branches/legacy-open/dsn", nil, 200},
+		{"t-bob", "DELETE", "/v1/branches/legacy-open", nil, 403},
+		{"t-bob", "POST", "/v1/branches/legacy-open/reset", nil, 403},
+		// Admin can manage legacy branches.
+		{"t-full", "GET", "/v1/branches/legacy/dsn", nil, 200},
+		{"t-full", "POST", "/v1/branches/legacy/reset", nil, 202},
+		{"t-full", "DELETE", "/v1/branches/legacy", nil, 202},
+	} {
+		resp, body := send(t, h, c.method, c.path, c.body, as(c.tok))
+		if resp.StatusCode != c.want {
+			t.Errorf("%s %s %s: got %d %v, want %d", c.tok, c.method, c.path, resp.StatusCode, body, c.want)
+		}
+	}
+	if pol.calledWithEmpty {
+		t.Error("SharesBranches must not be called for a branch with empty owner")
+	}
+}
+
+func TestHTTPAPI_branchesスコープトークンでpublicBasesを取得できる(t *testing.T) {
+	f := ownedFixture(t)
+	b := f.branches.bases["prod"]
+	b.SetPublic("s1", true)
+	f.branches.bases["prod"] = b
+	h := f.srv.Handler(false)
+
+	resp, body := send(t, h, "GET", "/v1/public/bases", nil, as("t-bob"))
+	if resp.StatusCode != 200 {
+		t.Fatalf("branches token GET /v1/public/bases: got %d %v, want 200", resp.StatusCode, body)
+	}
+	items := body["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["name"] != "prod" {
+		t.Errorf("items = %v", items)
+	}
+}
+
+func TestOwnership_branchReadは自分とopenとSharesBranchesのブランチだけ閲覧および一覧できる(t *testing.T) {
+	f := ownedFixture(t)
+	f.branches.branches["bobs"] = domain.Branch{Name: name("bobs"), Base: name("prod"), Status: domain.BranchReady, Owner: "token:b", OwnerName: "bob", Runtime: mysql84}
+	f.branches.branches["carols"] = domain.Branch{Name: name("carols"), Base: name("prod"), Status: domain.BranchReady, Owner: "sso:carol", OwnerName: "Carol.Smith@Example.com", Runtime: mysql84}
+	f.branches.branches["legacy-open"] = domain.Branch{Name: name("legacy-open"), Base: name("prod"), Status: domain.BranchReady, Access: domain.AccessOpen, Runtime: mysql84}
+	h := f.srv.Handler(false)
+
+	listNames := func(tok string) []string {
+		resp, body := send(t, h, "GET", "/v1/branches", nil, as(tok))
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s GET /v1/branches: %d %v", tok, resp.StatusCode, body)
+		}
+		var names []string
+		for _, item := range body["items"].([]any) {
+			names = append(names, item.(map[string]any)["name"].(string))
+		}
+		return names
+	}
+
+	// Without SharesBranches: bob sees only his own ("bobs") and open branches ("legacy-open", "opened").
+	// Bob must NOT see alice's private ("alices"), carol's private ("carols"), or private legacy ("legacy").
+	if got, want := listNames("t-bob"), []string{"bobs", "legacy-open", "opened"}; !slices.Equal(got, want) {
+		t.Errorf("bob list without policy = %v, want %v", got, want)
+	}
+	for _, c := range []struct {
+		tok, path string
+		want      int
+	}{
+		{"t-bob", "/v1/branches/bobs", 200},
+		{"t-bob", "/v1/branches/opened", 200},
+		{"t-bob", "/v1/branches/legacy-open", 200},
+		{"t-bob", "/v1/branches/alices", 403},
+		{"t-bob", "/v1/branches/carols", 403},
+		{"t-bob", "/v1/branches/legacy", 403},
+		{"t-bob", "/v1/branches/nope", 404},
+		// Admin sees every branch including private and legacy.
+		{"t-full", "/v1/branches/alices", 200},
+		{"t-full", "/v1/branches/carols", 200},
+		{"t-full", "/v1/branches/legacy", 200},
+	} {
+		if resp, body := send(t, h, "GET", c.path, nil, as(c.tok)); resp.StatusCode != c.want {
+			t.Errorf("%s GET %s: got %d %v, want %d", c.tok, c.path, resp.StatusCode, body, c.want)
+		}
+	}
+	if got, want := listNames("t-full"), []string{"alices", "bobs", "carols", "legacy", "legacy-open", "opened"}; !slices.Equal(got, want) {
+		t.Errorf("admin list = %v, want %v", got, want)
+	}
+
+	// With SharesBranches (alice + bob share a team): bob can now also read and list "alices",
+	// but still NOT carol's private branch or legacy private branch.
+	f.srv.Ext = ext.Module{BranchPolicy: &teamPolicy{}}
+	if got, want := listNames("t-bob"), []string{"alices", "bobs", "legacy-open", "opened"}; !slices.Equal(got, want) {
+		t.Errorf("bob list with team policy = %v, want %v", got, want)
+	}
+	if resp, body := send(t, h, "GET", "/v1/branches/alices", nil, as("t-bob")); resp.StatusCode != 200 {
+		t.Errorf("teammate GET alices: got %d %v, want 200", resp.StatusCode, body)
+	}
+	if resp, _ := send(t, h, "GET", "/v1/branches/carols", nil, as("t-bob")); resp.StatusCode != 403 {
+		t.Errorf("non-teammate GET carols: got %d, want 403", resp.StatusCode)
+	}
+	if resp, _ := send(t, h, "GET", "/v1/branches/legacy", nil, as("t-bob")); resp.StatusCode != 403 {
+		t.Errorf("teammate policy must not expose legacy: got %d, want 403", resp.StatusCode)
+	}
+}
+
+// loginCookie signs user in to the console and returns a request modifier that
+// carries the session.
+func loginCookie(t *testing.T, h http.Handler, user string) func(*http.Request) {
+	t.Helper()
+	resp, body := send(t, h, "POST", "/v1/auth/login", map[string]any{"username": user, "password": "pw"}, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("login %s: %d %v", user, resp.StatusCode, body)
+	}
+	for _, c := range resp.Cookies() {
+		if c.Name == "dbb_session" {
+			return func(r *http.Request) { r.AddCookie(c) }
+		}
+	}
+	t.Fatal("no session cookie")
+	return nil
+}
+
+func TestOwnership_表示名で作られ移行できなかった旧ブランチは本人のセッションだけが管理できる(t *testing.T) {
+	f := ownedFixture(t)
+	// Created before owners were IDs by a console user shown as "Carol.Smith@Example.com";
+	// migration could not resolve an ID, so OwnerName stays empty.
+	f.branches.branches["carols"] = domain.Branch{Name: name("carols"), Base: name("prod"), Status: domain.BranchReady,
+		Owner: "Carol.Smith@Example.com", Runtime: mysql84, Port: 40009, User: "carols", Password: "secret"}
+	// A service token that is merely named like the old owner must not take it over.
+	f.branches.branches["alices-old"] = domain.Branch{Name: name("alices-old"), Base: name("prod"), Status: domain.BranchReady,
+		Owner: "alice", Runtime: mysql84, Port: 40010, User: "alices-old", Password: "secret"}
+	h := f.srv.Handler(false)
+
+	carol := loginCookie(t, h, "carol")
+	if r, b := send(t, h, "GET", "/v1/branches/carols/dsn", nil, carol); r.StatusCode != 200 {
+		t.Errorf("carol on her unmigrated branch: %d %v, want 200", r.StatusCode, b)
+	}
+	if r, b := send(t, h, "GET", "/v1/branches/carols/dsn", nil, loginCookie(t, h, "bob")); r.StatusCode != 403 {
+		t.Errorf("bob on carol's unmigrated branch: %d %v, want 403", r.StatusCode, b)
+	}
+	if r, b := send(t, h, "GET", "/v1/branches/alices-old/dsn", nil, as("t-alice")); r.StatusCode != 403 {
+		t.Errorf("service token named alice on an unmigrated branch: %d %v, want 403", r.StatusCode, b)
+	}
+	if r, b := send(t, h, "GET", "/v1/branches/alices-old/dsn", nil, loginCookie(t, h, "alice")); r.StatusCode != 200 {
+		t.Errorf("alice's console session on her unmigrated branch: %d %v, want 200", r.StatusCode, b)
+	}
 }

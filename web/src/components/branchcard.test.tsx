@@ -100,6 +100,11 @@ describe("BranchRow page: SQL", () => {
     expect(h.indexOf("SQL BODY")).toBeLessThan(h.indexOf("TX BODY"));
     expect(h).toMatch(/<h2>SQL<\/h2>/);
   });
+  it("shows owner_name in details while keeping owner id in title", () => {
+    const h = row({ mode: "page" }, branch({ owner: "sso:alice", owner_name: "alice@example.com" }));
+    expect(h).toContain("alice@example.com");
+    expect(h).toContain('title="sso:alice"');
+  });
   it("shows nothing without it", () => {
     expect(row({ mode: "page" })).not.toMatch(/<h2>SQL<\/h2>/);
   });

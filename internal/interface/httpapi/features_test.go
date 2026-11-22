@@ -152,6 +152,9 @@ func TestMCP_エンジンが宣言していない機能のツールは明示的�
 	httpapi.MCPPoll = time.Millisecond
 	mysqlWith(t, func(c *domain.RuntimeCaps) { c.Upgrade = false; c.Checkpoints = false })
 	f := checkpointFixture(t)
+	bx := f.branches.branches["x"]
+	bx.Owner, bx.OwnerName = "token:dev", "dev"
+	f.branches.branches["x"] = bx
 	f.srv.TokenAuth = &fakeTokens{}
 	q := &fakeQuery{noSQL: true}
 	f.srv.Providers = providersOf(q)

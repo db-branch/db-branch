@@ -27,6 +27,7 @@ type branchView struct {
 	ExpiresAt   *string `json:"expires_at"`
 	ResetAt     *string `json:"reset_at"`
 	Owner       *string `json:"owner"`
+	OwnerName   *string `json:"owner_name,omitempty"`
 	ID          string  `json:"id"`
 	Access      string  `json:"access"`
 	Record      bool    `json:"record"`

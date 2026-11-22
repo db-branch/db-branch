@@ -73,7 +73,7 @@ func (h *branchHost) local(ctx context.Context, name string) (Branches, hostServ
 
 func stateOf(b domain.Branch) ext.BranchState {
 	return ext.BranchState{Name: b.Name.String(), Owner: b.Owner, Engine: string(b.Runtime.Engine), Version: b.Runtime.Version,
-		Status: string(b.Status), Record: b.Record, Anonymous: b.Owner == Anonymous.Name, CreatedAt: b.CreatedAt,
+		Status: string(b.Status), Record: b.Record, Anonymous: b.Owner == Anonymous.ID, CreatedAt: b.CreatedAt,
 		Base: b.Base.String(), Snapshot: b.Snapshot}
 }
 

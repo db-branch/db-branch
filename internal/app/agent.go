@@ -29,6 +29,7 @@ import (
 	"github.com/db-branch/db-branch/internal/usecase/arccap"
 	"github.com/db-branch/db-branch/internal/usecase/auth"
 	"github.com/db-branch/db-branch/internal/usecase/backup"
+	"github.com/db-branch/db-branch/internal/usecase/dbbranch"
 	"github.com/db-branch/db-branch/internal/usecase/operation"
 	"github.com/db-branch/db-branch/internal/usecase/token"
 	"github.com/db-branch/db-branch/pkg/ext"
@@ -395,6 +396,9 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		if err := svc.Adopt(runCtx); err != nil {
 			log.Error("adopting unowned bases and branches", "err", err)
 		}
+		if cl == nil || cl.store.IsLeader() {
+			migrateBranchOwners(runCtx, svc, log)
+		}
 		if err := svc.Recover(runCtx); err != nil {
 			log.Error("recovery finished with errors", "err", err)
 		}
@@ -436,4 +440,12 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		return nil
 	}
 	return result
+}
+
+func migrateBranchOwners(ctx context.Context, svc *dbbranch.Service, log *slog.Logger) {
+	mig, _ := svc.Store.(domain.BranchOwnerMigrator)
+	toks, _ := svc.Store.(domain.TokenStore)
+	if err := dbbranch.MigrateBranchOwners(ctx, svc.Store, mig, toks); err != nil && !errors.Is(err, domain.ErrClusterUpgrading) {
+		log.Warn("migrating legacy branch owners", "err", err)
+	}
 }

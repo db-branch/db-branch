@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useId, useReducer, useRef, useState } from "react";
-import { api, Branch } from "../api";
+import { api, Branch, ownerLabel } from "../api";
 import { confirmReducer, countdown, elapsed, expiryState, extendTtl, isBusy, longerChoices, ttlChoices } from "../lib/branches";
 import { bytes, relative } from "../lib/format";
 import { t } from "../lib/i18n";
@@ -121,7 +121,7 @@ export function BranchRow({
   const resetWhy = why("branch.reset", true);
   const extendWhy = why("branch.update");
   const deleteWhy = why("branch.delete");
-  const [prefix, rest] = splitOwned(b.name, b.owner ?? undefined);
+  const [prefix, rest] = splitOwned(b.name, ownerLabel(b) ?? undefined);
   const more = longerChoices(ttlChoices, b.expires_at, now);
 
   const paused = b.status === "paused" && !job;
@@ -271,7 +271,7 @@ export function BranchRow({
               <RecordingValue record={b.record} />
             </dd>
             <dt>Owner</dt>
-            <dd>{b.owner ?? <span className="muted">—</span>}</dd>
+            <dd title={b.owner ?? undefined}>{ownerLabel(b) ?? <span className="muted">—</span>}</dd>
             <dt>Created</dt>
             <dd title={new Date(b.created_at).toLocaleString()}>{relative(b.created_at)}</dd>
             <dt>Expires</dt>

@@ -12,7 +12,7 @@ import (
 // serverBranch describes a branch to the modules that add server options.
 func serverBranch(b domain.Branch, maintenance bool) ext.ServerBranch {
 	return ext.ServerBranch{Name: b.Name.String(), Owner: b.Owner, Engine: string(b.Runtime.Engine), Version: b.Runtime.Version,
-		Record: b.Record, Anonymous: b.Owner == Anonymous.Name, Maintenance: maintenance}
+		Record: b.Record, Anonymous: b.Owner == Anonymous.ID, Maintenance: maintenance}
 }
 
 // ServerBranchOf is serverBranch for the code that wires the modules in.

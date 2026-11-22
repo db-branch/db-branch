@@ -91,7 +91,7 @@ func (s *Service) Check(ctx context.Context) error {
 				continue
 			}
 			if s.once("expiring/" + b.Name.String() + "/" + b.ExpiresAt.Format(time.RFC3339)) {
-				notices = append(notices, Notice{Event: "branch.expiring", Level: "warning", Subject: b.Name.String(), Owner: b.Owner, Time: now,
+				notices = append(notices, Notice{Event: "branch.expiring", Level: "warning", Subject: b.Name.String(), Owner: b.DisplayOwner(), Time: now,
 					Text: fmt.Sprintf("Branch %s expires in %s (at %s). Extend it if it is still in use.", b.Name, short(b.ExpiresAt.Sub(now)), b.ExpiresAt.Format(time.RFC3339))})
 			}
 		}

@@ -1,5 +1,5 @@
 import { FormEvent, useContext, useState } from "react";
-import { api, Base, Branch, isAdmin } from "../api";
+import { api, Base, Branch, isAdmin, ownerLabel } from "../api";
 import { Icon, Status } from "../components/marks";
 import { Dialog, Drawer, Empty, ErrorLine, Field } from "../components/ui";
 import { relative } from "../lib/format";
@@ -27,7 +27,7 @@ export function Branches() {
     { key: "status", label: "Status", options: optionsOf(all.map((b) => b.status)) },
     { key: "engine", label: "Engine", options: optionsOf(all.map((b) => engineOf(b.runtime))) },
     { key: "base", label: "Base", options: optionsOf(all.map((b) => b.base)) },
-    { key: "owner", label: "Owner", options: optionsOf(all.map((b) => b.owner)) },
+    { key: "owner", label: "Owner", options: optionsOf(all.map((b) => ownerLabel(b))) },
   ];
 
   return (
@@ -69,7 +69,7 @@ export function Branches() {
                       e.preventDefault();
                       go(`${ADMIN}/branches/${encodeURIComponent(b.name)}`);
                     }}>
-                      <BranchName name={b.name} owner={b.owner} />
+                      <BranchName name={b.name} owner={ownerLabel(b)} />
                     </a>
                     {b.access === "open" && (
                       <span className="badge" title={t("Anyone may connect, with the shared password")}>

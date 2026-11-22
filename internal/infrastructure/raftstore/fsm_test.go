@@ -192,7 +192,7 @@ func TestProtocol_すべてのコマンドに必要な版があり最新の版�
 	for _, op := range []string{"put_base", "delete_base", "put_branch", "delete_branch", "put_node", "delete_node",
 		"set_join_secret", "insert_base", "insert_branch", "put_operation", "set_admin", "init_admin", "add_replica",
 		"add_runtime", "remove_runtime", "put_route_user", "delete_route_user", "put_module", "delete_module", "put_settings", "put_token", "delete_token",
-		"put_module_data", "delete_module_data", "start_trial", "set_base_refresh", "record_base_refresh_run", "clear_base_refresh", "set_base_replica_nodes", "remove_replica", "set_base_anonymous", "init_service_ids", "init_cluster_id"} {
+		"put_module_data", "delete_module_data", "start_trial", "set_base_refresh", "record_base_refresh_run", "clear_base_refresh", "set_base_replica_nodes", "remove_replica", "set_base_anonymous", "init_service_ids", "init_cluster_id", "migrate_branch_owner"} {
 		n := raftstore.Command{Op: op}.Needs()
 		if n < 1 || n > raftstore.Protocol {
 			t.Errorf("%s needs %d", op, n)
@@ -572,5 +572,61 @@ func TestFSM_delete_moduleで記録を消し冪等でスナップショット往
 	}
 	if _, ok := g.State().Modules["proxysql"]; !ok {
 		t.Errorf("kept module missing after snapshot restore: %+v", g.State().Modules)
+	}
+}
+
+func TestFSM_migrate_branch_ownerで所有者を原子的に移行しput_branchが旧ノードからの欠落で消さない(t *testing.T) {
+	if got := raftstore.MigrateBranchOwner(name("x"), "token:abc", "ci").Needs(); got != domain.ProtocolBranchOwnerID {
+		t.Fatalf("MigrateBranchOwner.Needs() = %d, want %d", got, domain.ProtocolBranchOwnerID)
+	}
+	f := raftstore.NewFSM()
+	exp := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	apply(t, f, raftstore.PutBranch(domain.Branch{Name: name("x"), Base: name("prod"), Status: domain.BranchReady, Owner: "ci", ExpiresAt: &exp}))
+	apply(t, f, raftstore.PutBranch(domain.Branch{Name: name("noowner"), Base: name("prod"), Status: domain.BranchReady}))
+
+	apply(t, f, raftstore.MigrateBranchOwner(name("x"), "token:abc", "ci"))
+	got := f.State().Branches["x"]
+	if got.Owner != "token:abc" || got.OwnerName != "ci" || got.ExpiresAt == nil || !got.ExpiresAt.Equal(exp) {
+		t.Fatalf("migrated = %+v", got)
+	}
+	// Idempotent: second migration does not overwrite.
+	apply(t, f, raftstore.MigrateBranchOwner(name("x"), "token:evil", "evil"))
+	if got = f.State().Branches["x"]; got.Owner != "token:abc" || got.OwnerName != "ci" {
+		t.Errorf("overwritten = %+v", got)
+	}
+	// Empty owner and missing branch are no-ops.
+	apply(t, f, raftstore.MigrateBranchOwner(name("noowner"), "token:z", "z"))
+	if got = f.State().Branches["noowner"]; got.Owner != "" || got.OwnerName != "" {
+		t.Errorf("empty owner modified = %+v", got)
+	}
+	apply(t, f, raftstore.MigrateBranchOwner(name("missing"), "token:z", "z"))
+
+	// An older node's put_branch (without owner_name) keeps OwnerName for the same owner.
+	apply(t, f, raftstore.PutBranch(domain.Branch{Name: name("x"), Base: name("prod"), Status: domain.BranchPaused, Owner: "token:abc"}))
+	if got = f.State().Branches["x"]; got.Status != domain.BranchPaused || got.OwnerName != "ci" {
+		t.Errorf("put_branch dropped OwnerName = %+v", got)
+	}
+
+	// Incomplete command is rejected cleanly.
+	if res := f.Apply(&raft.Log{Data: mustEncode(raftstore.Command{Op: "migrate_branch_owner"})}); res == nil {
+		t.Error("incomplete migrate_branch_owner: want error")
+	}
+
+	// Survives snapshot/restore.
+	snap, err := f.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := snap.Persist(&sink{Buffer: &buf}); err != nil {
+		t.Fatal(err)
+	}
+	snap.Release()
+	g := raftstore.NewFSM()
+	if err := g.Restore(io.NopCloser(&buf)); err != nil {
+		t.Fatal(err)
+	}
+	if got = g.State().Branches["x"]; got.Owner != "token:abc" || got.OwnerName != "ci" {
+		t.Errorf("after restore = %+v", got)
 	}
 }

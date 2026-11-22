@@ -24,16 +24,17 @@ type Store struct {
 }
 
 var (
-	_ domain.Store            = (*Store)(nil)
-	_ domain.RouteUserStore   = (*Store)(nil)
-	_ domain.ModuleStore      = (*Store)(nil)
-	_ domain.SettingsStore    = (*Store)(nil)
-	_ domain.TrialStore       = (*Store)(nil)
-	_ domain.ClusterIDStore   = (*Store)(nil)
-	_ domain.TokenStore       = (*Store)(nil)
-	_ domain.ModuleDataStore  = (*Store)(nil)
-	_ domain.BaseRefreshStore = (*Store)(nil)
-	_ domain.UpdateStore      = (*Store)(nil)
+	_ domain.Store               = (*Store)(nil)
+	_ domain.BranchOwnerMigrator = (*Store)(nil)
+	_ domain.RouteUserStore      = (*Store)(nil)
+	_ domain.ModuleStore         = (*Store)(nil)
+	_ domain.SettingsStore       = (*Store)(nil)
+	_ domain.TrialStore          = (*Store)(nil)
+	_ domain.ClusterIDStore      = (*Store)(nil)
+	_ domain.TokenStore          = (*Store)(nil)
+	_ domain.ModuleDataStore     = (*Store)(nil)
+	_ domain.BaseRefreshStore    = (*Store)(nil)
+	_ domain.UpdateStore         = (*Store)(nil)
 )
 
 type state struct {
@@ -239,8 +240,26 @@ func (s *Store) PutBranch(_ context.Context, b domain.Branch) error {
 	return s.update(func(st *state) error {
 		if old, ok := st.Branches[b.Name.String()]; ok {
 			b.Record = old.Record
+			if b.OwnerName == "" && old.OwnerName != "" && b.Owner == old.Owner {
+				b.OwnerName = old.OwnerName
+			}
 		}
 		st.Branches[b.Name.String()] = b
+		return nil
+	})
+}
+
+// MigrateBranchOwner atomically updates a legacy branch's Owner and OwnerName
+// when OwnerName is not yet set.
+func (s *Store) MigrateBranchOwner(_ context.Context, name domain.Name, owner, ownerName string) error {
+	return s.update(func(st *state) error {
+		b, ok := st.Branches[name.String()]
+		if !ok || b.Owner == "" || b.OwnerName != "" {
+			return nil
+		}
+		b.Owner = owner
+		b.OwnerName = ownerName
+		st.Branches[name.String()] = b
 		return nil
 	})
 }

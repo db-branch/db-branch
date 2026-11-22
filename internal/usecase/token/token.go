@@ -199,7 +199,7 @@ func (Scoped) Authorize(_ context.Context, p ext.Principal, action string, _ ext
 		if r != "scope:"+domain.ScopeBranches {
 			continue
 		}
-		if strings.HasPrefix(action, "branch.") || (strings.HasSuffix(action, ".read") && !secretReads[action]) || action == "mcp.use" {
+		if strings.HasPrefix(action, "branch.") || (strings.HasSuffix(action, ".read") && !secretReads[action]) || action == "mcp.use" || action == "base.public" {
 			return nil
 		}
 		return fmt.Errorf("%w: a %s-scoped token cannot %s", ext.ErrForbidden, domain.ScopeBranches, action)

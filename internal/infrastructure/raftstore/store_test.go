@@ -877,3 +877,28 @@ func TestStore_delete_moduleは全ノードがプロトコル22になるまで�
 		t.Errorf("modules after delete = %+v, %v", got, err)
 	}
 }
+
+func TestStore_migrate_branch_ownerは全ノードがプロトコル23になるまで書かれない(t *testing.T) {
+	if raftstore.Protocol < domain.ProtocolBranchOwnerID {
+		t.Fatalf("Protocol = %d, below domain.ProtocolBranchOwnerID (%d)", raftstore.Protocol, domain.ProtocolBranchOwnerID)
+	}
+	l := newCluster(t, 1).leader(t)
+	_ = l.PutBranch(ctx, domain.Branch{Name: name("feat"), Base: name("prod"), Status: domain.BranchReady, Owner: "ci"})
+	_ = l.PutNode(ctx, domain.Node{Name: "new", Protocol: raftstore.Protocol})
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: 22})
+
+	if err := l.MigrateBranchOwner(ctx, name("feat"), "token:abc", "ci"); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("with a node at protocol 22: %v, want ErrClusterUpgrading", err)
+	}
+	if b, _ := l.GetBranch(ctx, name("feat")); b.Owner != "ci" || b.OwnerName != "" {
+		t.Fatalf("migrated while upgrading: %+v", b)
+	}
+
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: domain.ProtocolBranchOwnerID})
+	if err := l.MigrateBranchOwner(ctx, name("feat"), "token:abc", "ci"); err != nil {
+		t.Fatalf("after upgrade to 23: %v", err)
+	}
+	if b, _ := l.GetBranch(ctx, name("feat")); b.Owner != "token:abc" || b.OwnerName != "ci" {
+		t.Errorf("branch after migrate = %+v", b)
+	}
+}

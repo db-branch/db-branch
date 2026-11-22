@@ -65,6 +65,11 @@ describe("BranchView", () => {
     expect(h).toContain("Recording");
     expect(h).toContain("alice");
   });
+  it("shows owner_name when distinct from immutable owner id", () => {
+    const h = view(branch({ owner: "sso:alice", owner_name: "alice@example.com" }));
+    expect(h).toContain("alice@example.com");
+    expect(h).toContain('title="sso:alice"');
+  });
   it("puts the sections it is given under their titles", () => {
     const h = view(branch(), { sections: [{ id: "x", title: "Connect", body: <p>CONNECT BODY</p> }, { id: "y", title: "Checkpoints", body: <p>CP BODY</p> }] });
     expect(h.indexOf("Connect")).toBeLessThan(h.indexOf("CONNECT BODY"));

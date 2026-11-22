@@ -57,7 +57,7 @@ func TestCheck_期限切れ間近と失敗とノード停止を一度ずつ知�
 	now := t0
 	st := &state{
 		branches: []domain.Branch{
-			{Name: name("soon"), Owner: "a@x.io", ExpiresAt: at(30 * time.Minute)},
+			{Name: name("soon"), Owner: "oidc:a@x.io", OwnerName: "a@x.io", ExpiresAt: at(30 * time.Minute)},
 			{Name: name("later"), ExpiresAt: at(5 * time.Hour)},
 			{Name: name("forever")},
 		},
