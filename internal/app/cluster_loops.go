@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/db-branch/db-branch/internal/usecase/notify"
-
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/execx"
 	"github.com/db-branch/db-branch/internal/infrastructure/raftstore"
@@ -221,22 +219,6 @@ func (c *clusterRuntime) publish(ctx context.Context, srv *httpapi.Server, bus *
 				}
 				c.replicateNow()
 			}
-		}
-	}
-}
-
-// notifyLoop sends notices while this node leads.
-func (c *clusterRuntime) notifyLoop(ctx context.Context, n *notify.Service, log *slog.Logger) {
-	for {
-		if c.store.IsLeader() {
-			if err := n.Check(ctx); err != nil {
-				log.Warn("sending notices", "err", err)
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(heartbeatEvery):
 		}
 	}
 }

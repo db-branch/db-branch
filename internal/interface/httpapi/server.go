@@ -176,6 +176,8 @@ type Server struct {
 	Uploads domain.UploadStore
 	// PoolFree reports the free bytes of this node's ZFS pool. Optional.
 	PoolFree func() uint64
+	// PoolStats reports total and free bytes of this node's ZFS pool (single-node mode). Optional.
+	PoolStats func(context.Context) (size, free uint64)
 	// Log receives audit events and audit failures. Optional.
 	Log      *slog.Logger
 	inner    internalMux

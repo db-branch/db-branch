@@ -115,3 +115,17 @@ func TestLoad_署名のないランタイムモジュールの許可は既定で
 		t.Error("a string where a boolean is needed was accepted")
 	}
 }
+
+func TestLoad_通知のプライベートIP許可は既定で無効で設定で有効にできる(t *testing.T) {
+	got, err := config.Load(writeFile(t, "pool = \"tank\"\n"))
+	if err != nil || got.Notify.AllowPrivateIPs {
+		t.Errorf("default: %+v, %v", got.Notify.AllowPrivateIPs, err)
+	}
+	got, err = config.Load(writeFile(t, "[notify]\nallow_private_ips = true\n"))
+	if err != nil || !got.Notify.AllowPrivateIPs {
+		t.Errorf("enabled: %+v, %v", got.Notify.AllowPrivateIPs, err)
+	}
+	if _, err := config.Load(writeFile(t, "[notify]\nallow_private_ips = \"yes\"\n")); err == nil {
+		t.Error("a string where a boolean is needed was accepted")
+	}
+}

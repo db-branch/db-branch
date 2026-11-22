@@ -8,6 +8,7 @@ import (
 
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/usecase/dbbranch"
+	"github.com/db-branch/db-branch/internal/usecase/notify"
 	"github.com/db-branch/db-branch/internal/usecase/operation"
 	"github.com/db-branch/db-branch/internal/usecase/routing"
 )
@@ -144,6 +145,29 @@ func every(ctx context.Context, d time.Duration, f func()) {
 			return
 		case <-time.After(d):
 			f()
+		}
+	}
+}
+
+// notifyLoop checks for new notices on every tick while leading returns true
+// (always true in single-node mode, and only on the Raft leader in cluster mode).
+func notifyLoop(ctx context.Context, interval time.Duration, leading func() bool, n *notify.Service, log *slog.Logger) {
+	if interval <= 0 {
+		interval = heartbeatEvery
+	}
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if leading() {
+			if err := n.Check(ctx); err != nil && ctx.Err() == nil {
+				log.Warn("sending notices", "err", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
 		}
 	}
 }

@@ -28,7 +28,7 @@ func moduleExempt(action string) bool {
 		return true
 	}
 	switch action {
-	case "cluster.read", "capability.read", "event.read", "operation.read":
+	case "cluster.read", "capability.read", "event.read", "operation.read", "metrics.read":
 		return true
 	}
 	return false
