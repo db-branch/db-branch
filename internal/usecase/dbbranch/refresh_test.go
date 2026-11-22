@@ -368,3 +368,26 @@ func TestRecover_起動時にsrcdump作業ディレクトリの残留ダンプ�
 		t.Fatal(err)
 	}
 }
+
+func TestRecover_実行中のrefreshがあるときは残留ダンプを掃除しない(t *testing.T) {
+	e := newEnv(t)
+	d := &sweepingDumper{fakeDumper: fakeDumper{j: e.j, started: make(chan struct{}), release: make(chan struct{})}}
+	e.svc.Dumper = d
+	e.withBase(t)
+	if _, err := e.svc.SetRefresh(ctx, name("prod"), mysqlRefresh()); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- e.svc.RefreshBase(ctx, name("prod"), nil) }()
+	<-d.started // the dump is in progress
+	if err := e.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d.swept != 0 {
+		t.Errorf("swept %d times while a dump was being written", d.swept)
+	}
+	close(d.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}

@@ -391,6 +391,9 @@ func (s *Service) setAside(ctx context.Context, br domain.Branch, in restoreInte
 		for k, v := range engineProps(br.Runtime) { // the clone does not keep its origin's properties
 			props[k] = v
 		}
+		if q := s.resourceLimits().RefQuotaBytes; q > 0 { // nor does it keep the quota
+			props["refquota"] = strconv.FormatUint(q, 10)
+		}
 		props["canmount"] = "off"
 		props[domain.PropLine] = strconv.Itoa(in.NewLine)
 		props[domain.PropFrom] = in.Source

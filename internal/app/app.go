@@ -193,6 +193,9 @@ func New(cfg config.Config) (*App, error) {
 		ResourceLimits: resourceLimits,
 		PoolSpace: func(ctx context.Context) (uint64, uint64, error) {
 			size, free := poolStats(ctx, pool)
+			if size == 0 && pool != "" {
+				return 0, 0, fmt.Errorf("cannot read the space of ZFS pool %s", pool)
+			}
 			return size, free, nil
 		},
 		Pool:     pool,

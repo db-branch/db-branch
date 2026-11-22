@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/usecase/dbbranch"
 )
 
 // history builds: v1 -> c1, v2 -> c2, v3 (not checkpointed).
@@ -433,4 +434,14 @@ type stuckSnapshots struct{ *zsim }
 
 func (stuckSnapshots) DestroySnapshot(context.Context, domain.Snapshot) error {
 	return errors.New("dataset is busy")
+}
+
+func TestRestoreCheckpoint_復元後のデータセットにもrefquotaを設定する(t *testing.T) {
+	z := newZEnv(t)
+	z.svc.ResourceLimits = func() dbbranch.Limits { return dbbranch.Limits{RefQuotaBytes: 3 << 30} }
+	z.history(t)
+	z.restore(t, "c1")
+	if got := z.sim.ds[live].props["refquota"]; got != "3221225472" {
+		t.Errorf("refquota after restore = %q: the restored clone does not inherit it", got)
+	}
 }

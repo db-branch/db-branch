@@ -431,9 +431,15 @@ func (s *Service) Expire(ctx context.Context) ([]domain.Name, error) {
 }
 
 // sweepDumps removes the source dumps a crash left behind (unmasked
-// production data). Refreshes start only after Recover, so none is running.
+// production data). A refresh already running keeps its dump.
 func (s *Service) sweepDumps() {
 	if sw, ok := s.Dumper.(interface{ Sweep() int }); ok {
+		// The API is up before Recover runs: a refresh already dumping owns its files.
+		s.refreshMu.Lock()
+		defer s.refreshMu.Unlock()
+		if len(s.running) > 0 {
+			return
+		}
 		if n := sw.Sweep(); n > 0 && s.Logf != nil {
 			s.Logf("removed %d source dumps left in the refresh work directory", n)
 		}
