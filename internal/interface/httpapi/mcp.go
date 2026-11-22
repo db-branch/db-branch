@@ -6,14 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/db-branch/db-branch/pkg/ext"
 )
 
 // mcpInstructions tell an LLM agent how to use the tools.
@@ -160,6 +160,9 @@ type checkUpgradeIn struct {
 	Branch  string `json:"branch" jsonschema:"the branch to check"`
 	Runtime string `json:"runtime" jsonschema:"the target, engine@version, e.g. mysql@8.4.13"`
 }
+
+// MCPMaxBody is the largest MCP request body (bytes) POST /v1/mcp accepts.
+const MCPMaxBody = 1 << 20
 
 // MCPPoll is how often tools check a running operation.
 var MCPPoll = 500 * time.Millisecond
@@ -345,14 +348,18 @@ func (s *Server) mcpServer(r *http.Request) *mcp.Server {
 }
 
 // mcpHandler serves MCP (streamable HTTP, stateless) to principals allowed
-// "mcp.use"; API clients authenticate with a bearer token.
+// "mcp.use" (routes wraps it in guard, which authorizes and audits);
+// API clients authenticate with a bearer token.
 func (s *Server) mcpHandler() http.Handler {
 	h := mcp.NewStreamableHTTPHandler(s.mcpServer, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := s.authorizer().Authorize(r.Context(), principalOf(r), "mcp.use", ext.Resource{Kind: "mcp"}); err != nil {
-			fail(w, err)
+		// A JSON-RPC message is small; read it with a cap before the SDK parses it.
+		body, err := io.ReadAll(io.LimitReader(r.Body, MCPMaxBody+1))
+		if err != nil || len(body) > MCPMaxBody {
+			writeError(w, http.StatusRequestEntityTooLarge, "too_large", "the MCP request is larger than "+strconv.Itoa(MCPMaxBody)+" bytes")
 			return
 		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		h.ServeHTTP(w, r)
 	})
 }

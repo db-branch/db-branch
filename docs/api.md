@@ -222,6 +222,8 @@ PUT  /v1/auth/password     {"current_password":"...","new_password":"..."} → 2
 
 - 認可の単位は `action`（例: `branch.create`、`branch.delete`、`runtime.install`）と対象リソース。各エンドポイントの `action` は OpenAPI の `x-dbb-action` に書く
 - **変更系の呼び出しはすべて**監査イベントを出す。成功・失敗（認可拒否を含む）の両方を出す
+- 認証に失敗した要求（無効なトークン `auth.token`、期限切れのセッション `auth.session`、CSRF トークンの欠落 `auth.csrf`）も `denied` として記録する。対象のリソースは、パスが指すもの（ブランチ・ベース名、トークン ID、設定のスコープ、バックアップのファイル名、`<engine>@<version>`）。利用者が打った名前に所有者の接頭辞が付く場合は、付いたあとの名前を記録する
+- 監査の記録に失敗しても、既定では変更を止めずエージェントのログに残す（fail-open）。設定 `audit.fail_closed` を `true` にすると、変更の前に「`attempt`」を記録し、記録できなければ `503 audit_unavailable` で変更を行わない（記録対象でない読み取りには影響しない）
 
 ```json
 {

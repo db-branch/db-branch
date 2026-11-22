@@ -84,6 +84,8 @@ func coreSettings(cfg config.Config) []ext.Setting {
 			Help: "Signs each webhook body: X-Db-Branch-Signature: sha256=<HMAC-SHA256 hex>."},
 		{Key: "notify.expiry_warning", Label: "Warn before expiry", Type: "duration", Default: "1h",
 			Help: "How long before a branch expires to warn. 0: no expiry warnings."},
+		{Key: "audit.fail_closed", Label: "Refuse changes that cannot be audited", Type: "bool", Default: "false",
+			Help: "Off (default): if the audit sink fails, the change goes ahead and the failure is only logged. On: every change is first recorded in the audit log and refused with 503 audit_unavailable when that fails. Reads that are not audited are unaffected."},
 		{Key: "update.auto_check", Label: "Check for updates daily", Type: "bool", Default: "false",
 			Help: "The leader asks the package repository once a day for newer db-branch versions. Off: the repository is contacted only when an admin clicks Check for updates."},
 		{Key: "base.prune_snapshots", Label: "Prune old snapshots", Type: "bool", Default: "true",
@@ -125,6 +127,8 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 	svc.OpenPassword = func() string { return openPassword.Load().(string) }
 	srv.Anonymous = func() (time.Duration, int) { return time.Duration(anonTTL.Load()), int(anonMax.Load()) }
 	srv.AnonymousRate = func() int { return int(anonRate.Load()) }
+	var auditFailClosed atomic.Bool
+	srv.AuditFailClosed = auditFailClosed.Load
 	srv.DefaultTTL = func() time.Duration { return time.Duration(defaultTTL.Load()) }
 	srv.Auth.TTL = func() time.Duration { return time.Duration(sessionTTL.Load()) }
 	// The licence service exists before the modules are managed: a loaded
@@ -188,6 +192,7 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 			maxBranchTTL.Store(int64(max(d, 0)))
 			pruneSnapshots.Store(v["base.prune_snapshots"] != "false")
 			updateAutoCheck.Store(v["update.auto_check"] == "true")
+			auditFailClosed.Store(v["audit.fail_closed"] == "true")
 			if d, err := time.ParseDuration(v["backup.interval"]); err == nil && d >= 0 {
 				backupEvery.Store(int64(d))
 			}

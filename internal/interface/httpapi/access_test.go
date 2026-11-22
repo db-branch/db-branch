@@ -113,7 +113,7 @@ func TestAccess_モジュールの認可で断り断ったことも記録する(
 		t.Errorf("revoked token: %d", resp.StatusCode)
 	}
 	got := strings.Join(sink.actions(), " ")
-	if got != "base.delete:token:viewer:base/prod:denied base.stop:token:admin:base/prod:ok" {
+	if got != "base.delete:token:viewer:base/prod:denied base.stop:token:admin:base/prod:ok auth.token:anonymous:auth/:denied" {
 		t.Errorf("audit = %s", got)
 	}
 }
