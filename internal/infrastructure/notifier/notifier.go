@@ -135,7 +135,10 @@ func parseAndValidateURL(raw string, allowPrivate bool) (*url.URL, error) {
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return nil, fmt.Errorf("%w: localhost is not allowed", domain.ErrUnsafeURL)
 	}
-	if ip := net.ParseIP(host); ip != nil && !allowedIP(ip, allowPrivate) {
+	if ip := net.ParseIP(host); ip == nil && numericLastLabel(host) {
+		// 2130706433, 0x7f.1, 127.1: legacy IPv4 spellings resolvers accept.
+		return nil, fmt.Errorf("%w: invalid host", domain.ErrUnsafeURL)
+	} else if ip != nil && !allowedIP(ip, allowPrivate) {
 		return nil, fmt.Errorf("%w: %s is not an allowed address", domain.ErrUnsafeURL, ip)
 	}
 	return u, nil
@@ -226,4 +229,22 @@ func (w Webhook) Send(ctx context.Context, n notify.Notice) error {
 		h["X-Db-Branch-Signature"] = "sha256=" + hex.EncodeToString(mac.Sum(nil))
 	}
 	return post(ctx, u, w.AllowPrivateIPs, w.Client, b, h)
+}
+
+// numericLastLabel reports whether host ends in a label that is all digits or
+// a 0x hex number, which a resolver may read as a legacy IPv4 literal.
+func numericLastLabel(host string) bool {
+	last := host[strings.LastIndex(host, ".")+1:]
+	if last == "" {
+		return false
+	}
+	if strings.HasPrefix(last, "0x") {
+		return true
+	}
+	for _, r := range last {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

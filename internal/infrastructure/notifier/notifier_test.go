@@ -123,6 +123,9 @@ func TestNotifier_HTTPスキームとメタデータIPとリダイレクトを�
 	// 1. Disallowed schemes, credentials, malformed URLs, loopback, metadata, link-local,
 	//    and (by default) private IPs are all refused without leaking the secret URL path/query.
 	badURLs := []string{
+		"https://2130706433/SECRET_TOKEN",
+		"https://0x7f.1/SECRET_TOKEN",
+		"https://127.1/SECRET_TOKEN",
 		"http://hooks.slack.com/services/T1/B2/SECRET_TOKEN?x=SECRET_Q",
 		"HTTP://hooks.slack.com/services/T1/B2/SECRET_TOKEN",
 		"ftp://hooks.example.com/SECRET_TOKEN",
@@ -374,3 +377,14 @@ func TestNotifier_HTTPスキームとメタデータIPとリダイレクトを�
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestValidateURL_正規形でないIPv4リテラルを保存時に拒否する(t *testing.T) {
+	for _, u := range []string{"https://2130706433/x", "https://0x7f.1/x", "https://127.1/x", "https://0177.0.0.1/x"} {
+		if err := notifier.ValidateURL(u, true); !errors.Is(err, domain.ErrUnsafeURL) {
+			t.Errorf("ValidateURL(%q) = %v, want ErrUnsafeURL", u, err)
+		}
+	}
+	if err := notifier.ValidateURL("https://hooks.slack.com/services/x", false); err != nil {
+		t.Errorf("通常のホスト名は通る: %v", err)
+	}
+}
