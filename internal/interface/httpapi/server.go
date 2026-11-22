@@ -99,6 +99,10 @@ type Server struct {
 	// anonLimiter counts the branches each client address creates without a
 	// login (anonymousRate per hour), in memory.
 	anonLimiter IPLimiter
+	// anonPending are the branches (name -> base) anonymous callers asked
+	// for that the list does not show yet; they count against the caps.
+	anonMu      sync.Mutex
+	anonPending map[string]string
 
 	// Branches returns the service, or an error before `db-branch init`.
 	Branches func() (Branches, error)
@@ -548,8 +552,15 @@ func fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, auth.ErrWeakPassword):
 		writeError(w, http.StatusBadRequest, "weak_password", err.Error())
 	default:
-		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		internalError(w, err)
 	}
+}
+
+// internalError answers 500 without the error's text, which can hold file
+// paths, ZFS output or SQL; the text goes to the log instead.
+func internalError(w http.ResponseWriter, err error) {
+	slog.Error("internal error", "err", err)
+	writeError(w, http.StatusInternalServerError, "internal", "internal error; see the db-branch agent log on the node")
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {

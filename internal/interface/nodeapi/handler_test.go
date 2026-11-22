@@ -191,3 +191,14 @@ func Testリーダーは構成から外れたノードのハートビートを�
 		t.Errorf("on a follower: %d", code)
 	}
 }
+
+func TestNodeAPI_未認証joinにサイズ上限超過ボディを送ると413を返す(t *testing.T) {
+	ca, _ := clusterpki.InitCA(t.TempDir())
+	s := &nodeapi.Server{Store: &fakeStore{leader: true}, CA: ca}
+	big := `{"secret":"` + strings.Repeat("a", 2<<20) + `"}`
+	for _, p := range []string{"/internal/v1/join", "/internal/v1/voters"} {
+		if code := call(t, s, p, big, p == "/internal/v1/voters"); code != http.StatusRequestEntityTooLarge {
+			t.Errorf("%s oversized body: %d", p, code)
+		}
+	}
+}

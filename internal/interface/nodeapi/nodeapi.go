@@ -165,10 +165,27 @@ type joinResponse struct {
 	Nodes []string `json:"nodes,omitempty"`
 }
 
+// decodeSmall reads a small JSON request body (join and voter requests are
+// a few hundred bytes), refusing more than maxSmallBody: /join takes
+// requests without a certificate.
+func decodeSmall(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSmallBody)).Decode(v); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
+		return false
+	}
+	return true
+}
+
+const maxSmallBody = 64 << 10
+
 func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	var in joinRequest
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if !decodeSmall(w, r, &in) {
 		return
 	}
 	want := s.Store.JoinSecretHash()
@@ -318,8 +335,7 @@ type voterRequest struct {
 
 func (s *Server) addMember(w http.ResponseWriter, r *http.Request) {
 	var in voterRequest
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if !decodeSmall(w, r, &in) {
 		return
 	}
 	if s.Store.IsLeader() {

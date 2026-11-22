@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -81,6 +82,9 @@ func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, f)
 }
 
+// maxRestoreBytes caps the (compressed) backup a restore reads.
+const maxRestoreBytes = 64 << 20
+
 // restoreBackup applies a backup (the request body) to the cluster. Only
 // on a node's socket: restoring replaces the admin password and tokens.
 func (s *Server) restoreBackup(local bool) http.HandlerFunc {
@@ -93,8 +97,13 @@ func (s *Server) restoreBackup(local bool) http.HandlerFunc {
 			writeError(w, http.StatusNotImplemented, "not_implemented", "backups are not available on this node")
 			return
 		}
-		sum, err := s.Backups.Restore(r.Context(), r.Body)
+		sum, err := s.Backups.Restore(r.Context(), http.MaxBytesReader(w, r.Body, maxRestoreBytes))
 		if err != nil {
+			var tooBig *http.MaxBytesError
+			if errors.As(err, &tooBig) || errors.Is(err, domain.ErrTooLarge) {
+				writeError(w, http.StatusRequestEntityTooLarge, "too_large", err.Error())
+				return
+			}
 			writeError(w, http.StatusUnprocessableEntity, "restore_failed", err.Error())
 			return
 		}

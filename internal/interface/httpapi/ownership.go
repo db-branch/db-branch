@@ -195,9 +195,10 @@ func (o ownership) Authorize(ctx context.Context, p ext.Principal, action string
 // branchOwner decides the owner and access of a new branch for p: people
 // may name another owner only as an admin; anonymous callers get an open
 // branch from a public snapshot, within the anonymous limits.
-func (s *Server) branchOwner(ctx context.Context, svc Branches, p ext.Principal, in *createBranchJSON, ttl *time.Duration) error {
+func (s *Server) branchOwner(ctx context.Context, svc Branches, p ext.Principal, in *createBranchJSON, ttl *time.Duration) (unreserve func(), err error) {
+	unreserve = func() {}
 	if !domain.ValidAccess(in.Access) {
-		return fmt.Errorf("%w: access must be %q or %q", errInvalidAccess, domain.AccessPrivate, domain.AccessOpen)
+		return unreserve, fmt.Errorf("%w: access must be %q or %q", errInvalidAccess, domain.AccessPrivate, domain.AccessOpen)
 	}
 	if p.ID != Anonymous.ID {
 		id, display := ownerID(p), ownerDisplayName(p)
@@ -210,45 +211,71 @@ func (s *Server) branchOwner(ctx context.Context, svc Branches, p ext.Principal,
 				in.OwnerName = display
 			}
 		case !isAdmin(p):
-			return fmt.Errorf("%w: only an admin may make a branch for %s", ext.ErrForbidden, in.Owner)
+			return unreserve, fmt.Errorf("%w: only an admin may make a branch for %s", ext.ErrForbidden, in.Owner)
 		default:
 			if in.OwnerName == "" {
 				in.OwnerName = in.Owner
 			}
 		}
-		return nil
+		return unreserve, nil
 	}
 	if strings.TrimSpace(in.InitSQL) != "" {
-		return fmt.Errorf("%w: log in to run SQL after the copy (init_sql); branches made without a login take none", ext.ErrForbidden)
+		return unreserve, fmt.Errorf("%w: log in to run SQL after the copy (init_sql); branches made without a login take none", ext.ErrForbidden)
 	}
 	base, err := domain.ParseName(in.Base)
 	if err != nil {
-		return err
+		return unreserve, err
 	}
 	b, err := s.publicSnapshot(ctx, svc, base, in.Snapshot)
 	if err != nil {
-		return err
+		return unreserve, err
 	}
 	if b.Anonymous.Disabled() {
-		return fmt.Errorf("%w: log in to branch from base %s (it allows no branches without a login)", ext.ErrForbidden, base)
+		return unreserve, fmt.Errorf("%w: log in to branch from base %s (it allows no branches without a login)", ext.ErrForbidden, base)
 	}
 	maxTTL, maxCount := s.anonymousLimits()
+	// Checking and reserving are one step: branches still being made are not
+	// in the list yet, and requests in flight would all pass the check.
+	s.anonMu.Lock()
+	defer s.anonMu.Unlock()
 	list, err := svc.ListBranches(ctx)
 	if err != nil {
-		return err
+		return unreserve, err
 	}
 	total, perBase := anonymousCounts(list)
+	listed := map[string]bool{}
+	for _, x := range list {
+		listed[x.Name.String()] = true
+	}
+	for n, b := range s.anonPending {
+		if listed[n] {
+			continue
+		}
+		total++
+		perBase[b]++
+	}
 	if total >= maxCount {
-		return fmt.Errorf("%w: %d branches without a login exist already (the most allowed); try later or log in", domain.ErrConflict, total)
+		return unreserve, fmt.Errorf("%w: %d branches without a login exist already (the most allowed); try later or log in", domain.ErrConflict, total)
 	}
 	if most := b.Anonymous.MaxBranches; most != nil && perBase[base.String()] >= *most {
-		return fmt.Errorf("%w: %d branches without a login exist from base %s already (the most it allows); try later or log in", domain.ErrConflict, perBase[base.String()], base)
+		return unreserve, fmt.Errorf("%w: %d branches without a login exist from base %s already (the most it allows); try later or log in", domain.ErrConflict, perBase[base.String()], base)
+	}
+	if s.anonPending == nil {
+		s.anonPending = map[string]string{}
+	}
+	if n, err := domain.ParseName(in.Name); err == nil { // a bad name fails later, as before
+		s.anonPending[n.String()] = base.String()
+		unreserve = func() {
+			s.anonMu.Lock()
+			defer s.anonMu.Unlock()
+			delete(s.anonPending, n.String())
+		}
 	}
 	in.Owner, in.OwnerName, in.Access = Anonymous.ID, Anonymous.Name, domain.AccessOpen
 	if eff := b.Anonymous.EffectiveTTL(maxTTL); eff > 0 && (*ttl == 0 || *ttl > eff) {
 		*ttl = eff
 	}
-	return nil
+	return unreserve, nil
 }
 
 // anonymousCounts counts the branches made without a login: all of them, and

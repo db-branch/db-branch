@@ -17,6 +17,10 @@ import (
 // BackupFormat is the version of the backup file layout.
 const BackupFormat = 1
 
+// MaxBackupBytes caps the size of a backup after decompression (a gzip
+// can expand a thousandfold), so a hostile file cannot exhaust memory.
+var MaxBackupBytes int64 = 64 << 20
+
 // ErrBackupFormat rejects a backup this version cannot read.
 var ErrBackupFormat = errors.New("unsupported backup format")
 
@@ -62,8 +66,13 @@ func (s *Store) RestoreBackup(ctx context.Context, r io.Reader) (domain.RestoreS
 	if err != nil {
 		return domain.RestoreSummary{}, fmt.Errorf("not a db-branch backup: %w", err)
 	}
+	defer zr.Close()
+	lr := &io.LimitedReader{R: zr, N: MaxBackupBytes + 1}
 	var b backupFile
-	if err := json.NewDecoder(zr).Decode(&b); err != nil {
+	if err := json.NewDecoder(lr).Decode(&b); err != nil {
+		if lr.N <= 0 {
+			return domain.RestoreSummary{}, fmt.Errorf("%w: a backup expands to at most %d bytes", domain.ErrTooLarge, MaxBackupBytes)
+		}
 		return domain.RestoreSummary{}, fmt.Errorf("reading backup: %w", err)
 	}
 	if b.Format != BackupFormat {

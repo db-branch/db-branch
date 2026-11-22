@@ -31,7 +31,10 @@ func (f *fakeBackups) Open(name string) (io.ReadCloser, error) {
 	return nil, domain.ErrNotFound
 }
 func (f *fakeBackups) Restore(_ context.Context, r io.Reader) (domain.RestoreSummary, error) {
-	b, _ := io.ReadAll(r)
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return domain.RestoreSummary{}, err
+	}
 	f.restored = string(b)
 	return domain.RestoreSummary{Node: "n1", Tokens: 2, SkippedBases: []string{"prod"}, TakenAt: time.Unix(0, 0)}, nil
 }
@@ -87,3 +90,19 @@ func TestBackups_ファイル名のノードへ自動で回す(t *testing.T) {
 		t.Errorf("forwarded %v (%d)", c.forwarded, rec.Code)
 	}
 }
+
+func TestBackups_復元の本文が上限を超えたら413を返す(t *testing.T) {
+	f := newFixture(t)
+	f.srv.Backups = &fakeBackups{}
+	big := io.LimitReader(zeroReader{}, 65<<20)
+	req := httptest.NewRequest("POST", "/v1/backups/restore", big)
+	rec := httptest.NewRecorder()
+	f.srv.Handler(true).ServeHTTP(rec, req)
+	if rec.Code != 413 || !strings.Contains(rec.Body.String(), "too_large") {
+		t.Errorf("oversized body: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }

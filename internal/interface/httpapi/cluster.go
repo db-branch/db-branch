@@ -99,17 +99,24 @@ func (s *Server) remote(node string) bool {
 // forward passes the request to node and reports whether it did (or failed
 // trying); false means the caller should handle it here.
 func (s *Server) forward(w http.ResponseWriter, r *http.Request, node string) bool {
+	handled, _ := s.forwardStatus(w, r, node)
+	return handled
+}
+
+// forwardStatus is forward that also tells the status it answered with
+// (0 when it answered with an error of its own, or did not forward).
+func (s *Server) forwardStatus(w http.ResponseWriter, r *http.Request, node string) (handled bool, status int) {
 	if !s.remote(node) {
-		return false
+		return false, 0
 	}
 	if forwardedFromNode(r) {
 		fail(w, fmt.Errorf("%w: forwarded here, but this node sees it on %s", dbbranch.ErrOtherNode, node))
-		return true
+		return true, 0
 	}
 	rec, err := s.forwardTo(r, node)
 	if err != nil {
 		fail(w, err)
-		return true
+		return true, 0
 	}
 	if rec.status == http.StatusAccepted {
 		// The operation was recorded through Raft on the other node; wait
@@ -126,7 +133,7 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, node string) bo
 	}
 	w.WriteHeader(rec.status)
 	_, _ = w.Write(rec.body.Bytes())
-	return true
+	return true, rec.status
 }
 
 // forwardTo runs r on node and returns the buffered response.
@@ -325,7 +332,7 @@ func (s *Server) nodeStorage(w http.ResponseWriter, r *http.Request) {
 	}
 	rep, err := s.Storage(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		internalError(w, err)
 		return
 	}
 	rep.Node = s.Node
