@@ -19,6 +19,7 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/execx"
 	"github.com/db-branch/db-branch/internal/infrastructure/licenseclient"
 	"github.com/db-branch/db-branch/internal/infrastructure/modmask"
+	"github.com/db-branch/db-branch/internal/infrastructure/notifier"
 	"github.com/db-branch/db-branch/internal/infrastructure/portreserve"
 	"github.com/db-branch/db-branch/internal/interface/httpapi"
 	"github.com/db-branch/db-branch/internal/usecase/arccap"
@@ -88,11 +89,16 @@ func coreSettings(cfg config.Config) []ext.Setting {
 func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranch.Service, srv *httpapi.Server,
 	mods []*plugin.Loaded, moduleSettings map[string][]ext.Setting, loadedNames, loadedRuntimes []string, nodes func() int,
 	problems *moduleProblems, arc *arcNode, rolled func(context.Context) map[string]string, leading func() bool, log *slog.Logger) func() {
+	checkNotifyURL := func(v string) error {
+		return notifier.ValidateURL(v, cfg.Notify.AllowPrivateIPs)
+	}
 	set := &settings.Service{Core: coreSettings(cfg), Modules: func() map[string][]ext.Setting { return moduleSettings },
 		Checks: map[string]func(string) error{
 			"zfs.arc_max":            arc.ctl.Check,
 			"branch.max_checkpoints": settings.NonNegativeInt,
 			"backup.dir":             backupdir.ValidatePath,
+			"notify.slack_url":       checkNotifyURL,
+			"notify.webhook_url":     checkNotifyURL,
 		}}
 	if st, ok := svc.Store.(domain.SettingsStore); ok {
 		set.Store = st
@@ -238,7 +244,7 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 		lic.Modules = mgr
 		srv.Licensing = lic
 		// Renewing a subscription's key is the leader's job.
-		notices := newNotifier(nil)
+		notices := newNotifier(nil, cfg.Notify.AllowPrivateIPs, 0)
 		renewer := &licensing.Renewer{Service: lic, Client: &licenseclient.Client{Version: version}, Leader: leading, Log: log,
 			Notify: func(ctx context.Context, event, level, subject, text string) {
 				if err := notices.Publish(ctx, event, level, subject, text); err != nil {

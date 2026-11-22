@@ -337,6 +337,11 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		}
 		return math.MaxUint64 // unknown: let the load report it
 	}
+	if cl == nil && pool != "" {
+		srv.PoolStats = func(ctx context.Context) (uint64, uint64) {
+			return poolStats(ctx, pool)
+		}
+	}
 	srv.OnPasswordReset = func() { _ = os.Remove(InitialPasswordFile) }
 	api.set(srv.Handler(true))
 
@@ -423,8 +428,11 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		if cl != nil {
 			go cl.replicationLoop(runCtx, svc.Replicate, log)
 			go cl.healthLoop(runCtx, svc, log)
-			go cl.notifyLoop(runCtx, newNotifier(cl.store), log)
+			go notifyLoop(runCtx, heartbeatEvery, cl.store.IsLeader, newNotifier(cl.store, cfg.Notify.AllowPrivateIPs, NodeDownAfter), log)
 			go cl.membershipLoop(runCtx, log)
+		} else {
+			st := singleNotifyState{branches: svc.ListBranches, ops: ops.List}
+			go notifyLoop(runCtx, heartbeatEvery, func() bool { return true }, newNotifier(st, cfg.Notify.AllowPrivateIPs, 0), log)
 		}
 	}
 

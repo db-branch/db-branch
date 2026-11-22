@@ -33,3 +33,8 @@
 [console]
 # listen = ":7080"
 
+[notify]
+# Allow Slack / webhook notifications to reach private network addresses (RFC 1918 / IPv6 ULA).
+# Loopback and link-local addresses (e.g. cloud metadata) are always refused.
+# allow_private_ips = false
+

@@ -38,6 +38,15 @@ type Config struct {
 	Branch                Branch  `toml:"branch"`
 	ZFS                   ZFS     `toml:"zfs"`
 	Console               Console `toml:"console"`
+	Notify                Notify  `toml:"notify"`
+}
+
+// Notify configures outbound notifications (Slack, webhooks).
+type Notify struct {
+	// AllowPrivateIPs permits notification targets on private network ranges
+	// (RFC 1918 and IPv6 ULA). Loopback and link-local addresses (including
+	// cloud metadata endpoints) are always refused.
+	AllowPrivateIPs bool `toml:"allow_private_ips"`
 }
 
 // Ports is the inclusive TCP port range handed to bases and branches.

@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http/httptest"
@@ -71,6 +72,67 @@ func TestMetrics_単体ノードでも出す(t *testing.T) {
 	}
 }
 
+func TestMetrics_単一ノードでpool容量とmoduleProblemメトリクスが出力されmodules_pending中でも200を返す(t *testing.T) {
+	f := newFixture(t)
+	f.srv.PoolStats = func(context.Context) (uint64, uint64) { return 200, 80 }
+	f.srv.ModuleProblems = func() map[string]string { return map[string]string{"auth": "licence expired"} }
+	f.srv.PendingModules = func() []string { return []string{"auth"} }
+
+	// Unauthenticated /v1/metrics is still rejected with 401.
+	unauthRec := httptest.NewRecorder()
+	f.srv.Handler(false).ServeHTTP(unauthRec, httptest.NewRequest("GET", "/v1/metrics", nil))
+	if unauthRec.Code != 401 {
+		t.Fatalf("unauthenticated metrics: %d, want 401", unauthRec.Code)
+	}
+
+	cookie, csrf := login(t, f)
+	req := httptest.NewRequest("GET", "/v1/metrics", nil)
+	withSession(cookie, csrf)(req)
+	rec := httptest.NewRecorder()
+	f.srv.Handler(false).ServeHTTP(rec, req)
+	out := rec.Body.String()
+	if rec.Code != 200 {
+		t.Fatalf("metrics while modules_pending: %d %s", rec.Code, out)
+	}
+	for _, want := range []string{
+		`dbbranch_pool_size_bytes{node="node1"} 200`,
+		`dbbranch_pool_free_bytes{node="node1"} 80`,
+		`dbbranch_module_problem{module="auth",node="node1"} 1`,
+	} {
+		if !strings.Contains(out, want+"\n") {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Cluster mode: /v1/metrics also returns 200 while modules_pending, and GET /v1/cluster does not invoke PoolStats.
+	fc, c := remoteFixture(t)
+	poolCalled := false
+	fc.srv.PoolStats = func(context.Context) (uint64, uint64) {
+		poolCalled = true
+		return 1, 1
+	}
+	fc.srv.PendingModules = func() []string { return []string{"auth"} }
+	c.status = httpapi.ClusterStatus{Mode: "cluster", Leader: "node1", Nodes: []httpapi.NodeStatus{{Name: "node1", Leader: true}}}
+	cc, ccsrf := login(t, fc)
+	creq := httptest.NewRequest("GET", "/v1/metrics", nil)
+	withSession(cc, ccsrf)(creq)
+	crec := httptest.NewRecorder()
+	fc.srv.Handler(false).ServeHTTP(crec, creq)
+	if crec.Code != 200 {
+		t.Fatalf("cluster metrics while modules_pending: %d %s", crec.Code, crec.Body.String())
+	}
+	clReq := httptest.NewRequest("GET", "/v1/cluster", nil)
+	withSession(cc, ccsrf)(clReq)
+	clRec := httptest.NewRecorder()
+	fc.srv.Handler(false).ServeHTTP(clRec, clReq)
+	if clRec.Code != 200 {
+		t.Fatalf("cluster status: %d %s", clRec.Code, clRec.Body.String())
+	}
+	if poolCalled {
+		t.Error("PoolStats was called in cluster mode")
+	}
+}
+
 func TestHealth_生存とリーダーの有無を返す(t *testing.T) {
 	f, c := remoteFixture(t)
 	h := f.srv.Handler(false) // remote: no login needed for these
@@ -96,5 +158,67 @@ func TestHealth_生存とリーダーの有無を返す(t *testing.T) {
 	c.status.Leader = "n2"
 	if get("/readyz") != 503 {
 		t.Errorf("not initialized: %d", get("/readyz"))
+	}
+}
+
+func TestReadyz_modules_pending時に503汎用メッセージを返し内部エラー詳細を露出しない(t *testing.T) {
+	f, c := remoteFixture(t)
+	h := f.srv.Handler(false)
+	get := func(path string) (int, string) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		return rec.Code, rec.Body.String()
+	}
+	c.status = httpapi.ClusterStatus{Mode: "cluster", Leader: "n2"}
+
+	// Pending modules -> 503 with generic message (no module names leaked); /healthz stays 200.
+	f.srv.PendingModules = func() []string { return []string{"auth", "audit"} }
+	if code, body := get("/readyz"); code != 503 || strings.TrimSpace(body) != "not ready" || strings.Contains(body, "auth") || strings.Contains(body, "audit") {
+		t.Errorf("modules_pending readyz: %d %q", code, body)
+	}
+	if code, _ := get("/healthz"); code != 200 {
+		t.Errorf("modules_pending healthz: %d, want 200", code)
+	}
+	f.srv.PendingModules = func() []string { return nil }
+	if code, body := get("/readyz"); code != 200 || strings.TrimSpace(body) != "ready" {
+		t.Errorf("ready after modules loaded: %d %q", code, body)
+	}
+
+	// Internal error from Branches() -> 503 with generic message (no path or internal detail leaked).
+	f.srv.Branches = func() (httpapi.Branches, error) {
+		return nil, errors.New("open /var/lib/db-branch/state.json: permission denied")
+	}
+	if code, body := get("/readyz"); code != 503 || strings.TrimSpace(body) != "not ready" || strings.Contains(body, "/var/lib/db-branch") || strings.Contains(body, "permission denied") {
+		t.Errorf("branches error readyz: %d %q", code, body)
+	}
+
+	// Single-node /readyz must never call PoolStats (no unauthenticated zfs fork DoS),
+	// returns 503 on modules_pending or empty Node, and 200 when ready.
+	sf := newFixture(t)
+	poolCalled := false
+	sf.srv.PoolStats = func(context.Context) (uint64, uint64) {
+		poolCalled = true
+		return 100, 50
+	}
+	sh := sf.srv.Handler(false)
+	sget := func(path string) (int, string) {
+		rec := httptest.NewRecorder()
+		sh.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		return rec.Code, rec.Body.String()
+	}
+	if code, body := sget("/readyz"); code != 200 || strings.TrimSpace(body) != "ready" {
+		t.Errorf("single-node healthy readyz: %d %q", code, body)
+	}
+	if poolCalled {
+		t.Error("single-node /readyz invoked PoolStats")
+	}
+	sf.srv.PendingModules = func() []string { return []string{"auth"} }
+	if code, body := sget("/readyz"); code != 503 || strings.TrimSpace(body) != "not ready" || strings.Contains(body, "auth") {
+		t.Errorf("single-node modules_pending readyz: %d %q", code, body)
+	}
+	sf.srv.PendingModules = nil
+	sf.srv.Node = ""
+	if code, body := sget("/readyz"); code != 503 || strings.TrimSpace(body) != "not ready" {
+		t.Errorf("single-node empty node readyz: %d %q", code, body)
 	}
 }

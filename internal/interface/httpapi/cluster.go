@@ -200,8 +200,15 @@ type nodeJSON struct {
 }
 
 func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
-	st := s.single(r.Context())
-	if s.Cluster == nil {
+	var st ClusterStatus
+	if s.Cluster != nil {
+		var err error
+		if st, err = s.Cluster.Status(r.Context()); err != nil {
+			fail(w, err)
+			return
+		}
+	} else {
+		st = s.single(r.Context())
 		if s.Metrics != nil {
 			if h := s.Metrics(); len(h) > 0 {
 				st.Nodes[0].Metrics = &h[len(h)-1]
@@ -214,13 +221,6 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, ref := range refs {
 			st.Nodes[0].Runtimes = append(st.Nodes[0].Runtimes, ref.String())
-		}
-	}
-	if s.Cluster != nil {
-		var err error
-		if st, err = s.Cluster.Status(r.Context()); err != nil {
-			fail(w, err)
-			return
 		}
 	}
 	nodes := make([]nodeJSON, 0, len(st.Nodes))

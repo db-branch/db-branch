@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"io"
 	"path/filepath"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/notifier"
 	"github.com/db-branch/db-branch/internal/infrastructure/uploads"
 	"github.com/db-branch/db-branch/internal/usecase/notify"
+	"github.com/db-branch/db-branch/internal/usecase/operation"
 )
 
 // newInt64 and newBool make the atomics that back live settings.
@@ -66,15 +68,33 @@ func loadString(v *atomic.Value) func() string {
 	return func() string { s, _ := v.Load().(string); return s }
 }
 
+// singleNotifyState adapts a single node's branch store and operation manager
+// to notify.State. Peer node health is not tracked in single-node mode.
+type singleNotifyState struct {
+	branches func(context.Context) ([]domain.Branch, error)
+	ops      func() []operation.Operation
+}
+
+func (s singleNotifyState) ListBranches(ctx context.Context) ([]domain.Branch, error) {
+	return s.branches(ctx)
+}
+
+func (s singleNotifyState) ListOperations(context.Context) ([]operation.Operation, error) {
+	return s.ops(), nil
+}
+
+func (s singleNotifyState) ListNodes(context.Context) ([]domain.Node, error) {
+	return nil, nil
+}
+
 // newNotifier tells Slack and a webhook about expiring branches, failed
-// operations and nodes going down. Only the leader checks; after a leader
-// change a notice may be sent again.
-func newNotifier(st notify.State) *notify.Service {
-	return &notify.Service{State: st, Clock: time.Now, Since: time.Now(), DownAfter: NodeDownAfter,
+// operations and (in cluster mode) nodes going down.
+func newNotifier(st notify.State, allowPrivateIPs bool, downAfter time.Duration) *notify.Service {
+	return &notify.Service{State: st, Clock: time.Now, Since: time.Now(), DownAfter: downAfter,
 		Warn: func() time.Duration { return time.Duration(notifyWarn.Load()) },
 		Senders: []notify.Sender{
-			notifier.Slack{URL: loadString(&notifySlack)},
-			notifier.Webhook{URL: loadString(&notifyWebhook), Secret: loadString(&notifySecret)},
+			notifier.Slack{URL: loadString(&notifySlack), AllowPrivateIPs: allowPrivateIPs},
+			notifier.Webhook{URL: loadString(&notifyWebhook), Secret: loadString(&notifySecret), AllowPrivateIPs: allowPrivateIPs},
 		}}
 }
 

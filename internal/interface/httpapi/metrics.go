@@ -50,6 +50,12 @@ func (s *Server) single(ctx context.Context) ClusterStatus {
 	if s.System != nil {
 		n.System = s.System(ctx)
 	}
+	if s.PoolStats != nil {
+		n.PoolSize, n.PoolFree = s.PoolStats(ctx)
+	}
+	if s.ModuleProblems != nil {
+		n.ModuleProblems = s.ModuleProblems()
+	}
 	return ClusterStatus{Mode: "single", Leader: s.Node, Nodes: []NodeStatus{n}}
 }
 
@@ -220,7 +226,7 @@ func sortedPairs(m map[[2]string]int) [][2]string {
 
 // health answers load balancers and process supervisors without a login:
 // /healthz when the agent serves, /readyz when it can also act (set up,
-// and the cluster has a leader).
+// every wanted module loaded, and the cluster has a leader).
 func (s *Server) health(w http.ResponseWriter, r *http.Request) bool {
 	switch r.URL.Path {
 	case pathHealthz:
@@ -228,12 +234,21 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	case pathReadyz:
 		if _, err := s.Branches(); err != nil {
-			http.Error(w, "not ready: "+err.Error(), http.StatusServiceUnavailable)
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
 			return true
 		}
-		st, err := s.status(r.Context())
-		if err != nil || st.Leader == "" {
-			http.Error(w, "not ready: no cluster leader", http.StatusServiceUnavailable)
+		if len(s.pending()) > 0 {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return true
+		}
+		if s.Cluster != nil {
+			st, err := s.Cluster.Status(r.Context())
+			if err != nil || st.Leader == "" {
+				http.Error(w, "not ready", http.StatusServiceUnavailable)
+				return true
+			}
+		} else if s.Node == "" {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
 			return true
 		}
 		_, _ = w.Write([]byte("ready\n"))
