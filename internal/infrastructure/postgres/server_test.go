@@ -174,6 +174,32 @@ func TestInitialize_サービスユーザーでinitdbしネットワークから
 	}
 }
 
+func TestInitialize_envは設定ディレクトリごとrootの持ち物にする(t *testing.T) {
+	f := newFixture(t)
+	var config, service []string
+	f.srv.ChownConfig = func(p string) error { config = append(config, p); return nil }
+	f.srv.Chown = func(p string) error { service = append(service, p); return nil }
+
+	if err := f.srv.Initialize(ctx, f.spec); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(f.state, "base-prod")
+	if want := dir + "," + filepath.Join(dir, "env"); strings.Join(config, ",") != want {
+		t.Errorf("config chown %q, want %q", config, want)
+	}
+	if len(service) != 1 || service[0] != f.spec.DataDir {
+		t.Errorf("service chown %q, want only the data dir", service)
+	}
+}
+
+func TestInitialize_設定をrootの持ち物にできなければ失敗する(t *testing.T) {
+	f := newFixture(t)
+	f.srv.ChownConfig = func(string) error { return errors.New("chown failed") }
+	if err := f.srv.Initialize(ctx, f.spec); err == nil {
+		t.Error("want error")
+	}
+}
+
 func TestInitialize_失敗はそのまま返す(t *testing.T) {
 	f := newFixture(t)
 	f.sys.failOn = "initdb"

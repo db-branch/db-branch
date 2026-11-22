@@ -159,7 +159,7 @@ func newFixture(t *testing.T) fixture {
 			MemoryMB: 128,
 		},
 	}
-	f.sys.errorLog = filepath.Join(f.state, f.spec.ID, "error.log")
+	f.sys.errorLog = filepath.Join(f.state, f.spec.ID, "log", "error.log")
 	_ = os.MkdirAll(f.spec.DataDir, 0o755)
 	f.srv = &mysql.Server{
 		Run:          f.sys,
@@ -195,7 +195,7 @@ func TestInitialize_設定ファイルを書いてデータディレクトリを
 		"port=40001",
 		"bind-address=0.0.0.0",
 		"socket=" + filepath.Join(f.runDir, f.spec.ID, "mysqld.sock"),
-		"log-error=" + filepath.Join(f.state, f.spec.ID, "error.log"),
+		"log-error=" + filepath.Join(f.state, f.spec.ID, "log", "error.log"),
 		"innodb_buffer_pool_size=128M",
 		"innodb_doublewrite=OFF",
 		"innodb_flush_neighbors=0",
@@ -438,18 +438,54 @@ func TestStateRootに書けなければ失敗する(t *testing.T) {
 	}
 }
 
-func TestInitialize_設定とデータディレクトリをサービスユーザーに渡す(t *testing.T) {
+func TestInitialize_設定はrootの持ち物にしログとデータだけをサービスユーザーに渡す(t *testing.T) {
 	f := newFixture(t)
-	var owned []string
+	var owned, config []string
 	f.srv.Chown = func(p string) error { owned = append(owned, p); return nil }
+	f.srv.ChownConfig = func(p string) error { config = append(config, p); return nil }
 
 	if err := f.srv.Initialize(ctx, f.spec); err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(f.state, f.spec.ID)
-	want := []string{dir, filepath.Join(dir, "my.cnf"), filepath.Join(dir, "env"), f.spec.DataDir}
-	if strings.Join(owned, ",") != strings.Join(want, ",") {
-		t.Errorf("chown %q, want %q", owned, want)
+	wantConfig := []string{dir, filepath.Join(dir, "my.cnf"), filepath.Join(dir, "env")}
+	if strings.Join(config, ",") != strings.Join(wantConfig, ",") {
+		t.Errorf("config chown %q, want %q", config, wantConfig)
+	}
+	wantOwned := []string{filepath.Join(dir, "log"), f.spec.DataDir}
+	if strings.Join(owned, ",") != strings.Join(wantOwned, ",") {
+		t.Errorf("service chown %q, want %q", owned, wantOwned)
+	}
+}
+
+func TestInitialize_エラーログは設定ディレクトリの下のサービスユーザーのディレクトリに置く(t *testing.T) {
+	f := newFixture(t)
+	if err := f.srv.Initialize(ctx, f.spec); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(f.state, f.spec.ID)
+	if cnf := read(t, filepath.Join(dir, "my.cnf")); !strings.Contains(cnf, "log-error="+filepath.Join(dir, "log", "error.log")+"\n") {
+		t.Errorf("my.cnf = %s", cnf)
+	}
+	if info, err := os.Stat(filepath.Join(dir, "log")); err != nil || info.Mode().Perm() != 0o750 {
+		t.Errorf("log dir: %v %v", info, err)
+	}
+}
+
+func TestInitialize_旧い場所のエラーログは新しい場所へ移す(t *testing.T) {
+	f := newFixture(t)
+	dir := filepath.Join(f.state, f.spec.ID)
+	_ = os.MkdirAll(dir, 0o750)
+	_ = os.WriteFile(filepath.Join(dir, "error.log"), []byte("Shutdown complete\n"), 0o640)
+
+	if err := f.srv.Initialize(ctx, f.spec); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, filepath.Join(dir, "log", "error.log")); got != "Shutdown complete\n" {
+		t.Errorf("moved log = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "error.log")); err == nil {
+		t.Error("old error.log remains")
 	}
 }
 
@@ -465,6 +501,24 @@ func TestInitialize_所有者を変えられなければ失敗する(t *testing.
 		if err := f.srv.Initialize(ctx, f.spec); err == nil {
 			t.Errorf("%s: want error", failing)
 		}
+	}
+}
+
+func TestInitialize_設定をrootの持ち物にできなければ失敗する(t *testing.T) {
+	f := newFixture(t)
+	f.srv.ChownConfig = func(string) error { return errors.New("chown failed") }
+	if err := f.srv.Initialize(ctx, f.spec); err == nil {
+		t.Error("want error")
+	}
+}
+
+func TestInitialize_ログディレクトリを作れなければ失敗する(t *testing.T) {
+	f := newFixture(t)
+	dir := filepath.Join(f.state, f.spec.ID)
+	_ = os.MkdirAll(dir, 0o750)
+	_ = os.WriteFile(filepath.Join(dir, "log"), nil, 0o640)
+	if err := f.srv.Initialize(ctx, f.spec); err == nil {
+		t.Error("log is a file: want error")
 	}
 }
 

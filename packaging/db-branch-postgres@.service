@@ -19,6 +19,16 @@ RuntimeDirectoryMode=0750
 LimitNOFILE=65535
 # The agent's socket and configuration are not for the database server.
 InaccessiblePaths=/run/db-branch /etc/db-branch
+# The database server is a process an attacker may take over: keep it small.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictRealtime=yes
 # SIGINT is PostgreSQL's fast shutdown: clients are disconnected and a
 # shutdown checkpoint is written, so a snapshot afterwards needs no recovery.
 KillSignal=SIGINT

@@ -37,6 +37,11 @@ type Server struct {
 	Bind string
 	// Chown hands a path to the unprivileged service user. Optional.
 	Chown func(path string) error
+	// ChownConfig makes a path root's, readable by the service user's group
+	// (root:db-branch). The instance directory, my.cnf and env go through it:
+	// the service user must not be able to rewrite what its unit starts from.
+	// Optional.
+	ChownConfig func(path string) error
 	// CheckOwner fails with domain.ErrOwnership when path does not belong to
 	// the user the server runs as. Optional.
 	CheckOwner func(path string) error
@@ -52,7 +57,8 @@ var _ domain.DBServer = (*Server)(nil)
 
 func (m *Server) dir(s domain.Server) string    { return filepath.Join(m.StateRoot, s.ID) }
 func (m *Server) cnf(s domain.Server) string    { return filepath.Join(m.dir(s), "my.cnf") }
-func (m *Server) errLog(s domain.Server) string { return filepath.Join(m.dir(s), "error.log") }
+func (m *Server) logDir(s domain.Server) string { return filepath.Join(m.dir(s), "log") }
+func (m *Server) errLog(s domain.Server) string { return filepath.Join(m.logDir(s), "error.log") }
 func (m *Server) socket(s domain.Server) string {
 	return filepath.Join(m.RunRoot, s.ID, "mysqld.sock")
 }
@@ -80,7 +86,33 @@ func (m *Server) writeConfig(s domain.Server) error {
 	if err := os.WriteFile(filepath.Join(m.dir(s), "env"), []byte(env), 0o640); err != nil {
 		return err
 	}
-	return m.chown(m.dir(s), m.cnf(s), filepath.Join(m.dir(s), "env"))
+	if err := m.chownConfig(m.dir(s), m.cnf(s), filepath.Join(m.dir(s), "env")); err != nil {
+		return err
+	}
+	// The server writes its error log here; the directory above is not its own.
+	if err := os.MkdirAll(m.logDir(s), 0o750); err != nil {
+		return err
+	}
+	old := filepath.Join(m.dir(s), "error.log")
+	if _, err := os.Stat(old); err == nil {
+		if _, err := os.Stat(m.errLog(s)); err != nil {
+			_ = os.Rename(old, m.errLog(s)) // best effort: an earlier layout kept it beside my.cnf
+		}
+		_ = os.Remove(old)
+	}
+	return m.chown(m.logDir(s))
+}
+
+func (m *Server) chownConfig(paths ...string) error {
+	if m.ChownConfig == nil {
+		return nil
+	}
+	for _, p := range paths {
+		if err := m.ChownConfig(p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // config renders the instance's my.cnf for the server's runtime. Options the

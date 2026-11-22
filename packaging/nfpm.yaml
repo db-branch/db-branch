@@ -48,6 +48,8 @@ contents:
       mode: 0755
   - src: packaging/db-branch.service
     dst: /usr/lib/systemd/system/db-branch.service
+  - src: packaging/db-branch.slice
+    dst: /usr/lib/systemd/system/db-branch.slice
   - src: packaging/db-branch-mysqld@.service
     dst: /usr/lib/systemd/system/db-branch-mysqld@.service
   - src: packaging/db-branch-postgres@.service

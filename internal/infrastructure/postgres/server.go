@@ -38,6 +38,10 @@ type Server struct {
 	User string
 	// Chown hands a path to User. Optional.
 	Chown func(path string) error
+	// ChownConfig makes a path root's, readable by User's group
+	// (root:db-branch): the instance directory and env the unit starts from
+	// must not be rewritable by the database server's own user. Optional.
+	ChownConfig func(path string) error
 	// CheckOwner fails with domain.ErrOwnership when path does not belong to
 	// User. Optional.
 	CheckOwner func(path string) error
@@ -90,7 +94,15 @@ func (p *Server) writeConfig(s domain.Server) error {
 	if err := os.WriteFile(envFile, []byte(env), 0o640); err != nil {
 		return err
 	}
-	return p.chown(p.dir(s), envFile)
+	if p.ChownConfig == nil {
+		return nil
+	}
+	for _, path := range []string{p.dir(s), envFile} {
+		if err := p.ChownConfig(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // listen is listen_addresses for the instance: none while it is in maintenance
