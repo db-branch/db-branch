@@ -121,7 +121,7 @@ func (s *Server) loadBase(w http.ResponseWriter, r *http.Request, svc Branches, 
 		s.failDump(w, err)
 		return
 	}
-	s.accepted(w, "base.load", operation.Target{Resource: "base", Name: n.String()},
+	s.accepted(w, r, "base.load", operation.Target{Resource: "base", Name: n.String()},
 		func(ctx context.Context, report func(string)) error {
 			defer done()
 			err := svc.LoadBase(ctx, n, path, report)

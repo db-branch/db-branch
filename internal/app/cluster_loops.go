@@ -180,20 +180,20 @@ func (c *clusterRuntime) publish(ctx context.Context, srv *httpapi.Server, bus *
 				default:
 				}
 			case "put_node":
-				bus.Publish("node.updated", map[string]string{"name": cmd.Node.Name})
+				bus.PublishTo(operation.Audience{Action: "cluster.read"}, "node.updated", map[string]string{"name": cmd.Node.Name})
 			case "put_module":
-				bus.Publish("module.updated", *cmd.Module)
+				bus.PublishTo(operation.Audience{Action: "module.read"}, "module.updated", *cmd.Module)
 				if c.moduleChanged != nil {
 					c.moduleChanged()
 				}
 			case "delete_module":
-				bus.Publish("module.updated", map[string]string{"name": cmd.Name})
+				bus.PublishTo(operation.Audience{Action: "module.read"}, "module.updated", map[string]string{"name": cmd.Name})
 			case "put_settings":
-				bus.Publish("setting.updated", map[string]string{"scope": cmd.Name})
+				bus.PublishTo(operation.Audience{Action: "setting.read"}, "setting.updated", map[string]string{"scope": cmd.Name})
 			case "put_update_check", "start_rollout", "record_rollout":
-				bus.Publish("update.updated", map[string]string{"what": cmd.Op})
+				bus.PublishTo(operation.Audience{Action: "update.read"}, "update.updated", map[string]string{"what": cmd.Op})
 			case "put_operation":
-				bus.Publish("operation.updated", *cmd.Operation)
+				bus.PublishTo(operation.Audience{Owner: cmd.Operation.Owner}, "operation.updated", *cmd.Operation)
 			case "put_branch", "insert_branch":
 				srv.PublishBranch(ctx, cmd.Branch.Name)
 			case "migrate_branch_owner":

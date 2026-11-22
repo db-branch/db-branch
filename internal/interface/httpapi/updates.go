@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"github.com/db-branch/db-branch/internal/usecase/operation"
 	"net/http"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -43,7 +44,7 @@ func (s *Server) checkUpdates(w http.ResponseWriter, r *http.Request, u Updates)
 		fail(w, err)
 		return
 	}
-	s.Bus.Publish("update.updated", map[string]string{"what": "check"})
+	s.Bus.PublishTo(operation.Audience{Action: "update.read"}, "update.updated", map[string]string{"what": "check"})
 	writeJSON(w, http.StatusOK, v)
 }
 
@@ -63,7 +64,7 @@ func (s *Server) applyUpdate(w http.ResponseWriter, r *http.Request, u Updates) 
 		fail(w, err)
 		return
 	}
-	s.Bus.Publish("update.updated", map[string]string{"what": "rollout"})
+	s.Bus.PublishTo(operation.Audience{Action: "update.read"}, "update.updated", map[string]string{"what": "rollout"})
 	writeJSON(w, http.StatusAccepted, rollout)
 }
 
@@ -72,6 +73,6 @@ func (s *Server) cancelUpdate(w http.ResponseWriter, r *http.Request, u Updates)
 		fail(w, err)
 		return
 	}
-	s.Bus.Publish("update.updated", map[string]string{"what": "rollout"})
+	s.Bus.PublishTo(operation.Audience{Action: "update.read"}, "update.updated", map[string]string{"what": "rollout"})
 	w.WriteHeader(http.StatusNoContent)
 }

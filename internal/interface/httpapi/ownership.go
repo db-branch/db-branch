@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/usecase/operation"
 	"github.com/db-branch/db-branch/pkg/ext"
 )
 
@@ -111,6 +112,43 @@ func ownsBranch(p ext.Principal, b domain.Branch) bool {
 		return !strings.HasPrefix(b.Owner, "token:") && !strings.HasPrefix(p.ID, "token:") && ownerDisplayName(p) == b.Owner
 	}
 	return b.Owner == ownerID(p)
+}
+
+// canSeeOperation reports whether p may read op: admins, the principal that
+// started it and whoever shares that principal's branches. Operations nobody
+// owns (started by the system) are admin-only. Anonymous callers see only
+// operations anonymous callers started.
+func (s *Server) canSeeOperation(ctx context.Context, p ext.Principal, op operation.Operation) bool {
+	switch {
+	case isAdmin(p):
+		return true
+	case op.Owner == "":
+		return false
+	case op.Owner == p.ID:
+		return true
+	case p.ID == Anonymous.ID || op.Owner == Anonymous.ID:
+		return false
+	}
+	return s.Ext.BranchPolicy != nil && s.Ext.BranchPolicy.SharesBranches(ctx, p, op.Owner)
+}
+
+// canReceive reports whether p may receive an event meant for aud. Admins
+// receive everything; an event with no audience is for them alone.
+func (s *Server) canReceive(ctx context.Context, p ext.Principal, aud operation.Audience) bool {
+	switch {
+	case isAdmin(p):
+		return true
+	case p.ID == Anonymous.ID:
+		return false
+	case aud.Open:
+		return true
+	case aud.Owner != "" && (aud.Owner == p.ID || (aud.Owner != Anonymous.ID && s.Ext.BranchPolicy != nil && s.Ext.BranchPolicy.SharesBranches(ctx, p, aud.Owner))):
+		return true
+	case aud.Action != "":
+		kind, _, _ := strings.Cut(aud.Action, ".")
+		return s.authorizer().Authorize(ctx, p, aud.Action, ext.Resource{Kind: kind}) == nil
+	}
+	return false
 }
 
 // canReadBranch reports whether p may read, connect to, or query b: managers

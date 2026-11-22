@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"github.com/db-branch/db-branch/internal/usecase/operation"
 	"net/http"
 
 	"github.com/db-branch/db-branch/internal/usecase/settings"
@@ -90,7 +91,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 				fail(w, err)
 				return
 			}
-			s.Bus.Publish("setting.updated", v)
+			s.Bus.PublishTo(operation.Audience{Action: "setting.read"}, "setting.updated", v)
 			writeJSON(w, http.StatusOK, v)
 			return
 		}

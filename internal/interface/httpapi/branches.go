@@ -292,7 +292,7 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 			fail(w, err)
 			return
 		}
-		s.acceptedResult(w, "branch.create", operation.Target{Resource: "branch", Name: req.Name.String()},
+		s.acceptedResult(w, r, "branch.create", operation.Target{Resource: "branch", Name: req.Name.String()},
 			func(ctx context.Context, report func(string)) (any, error) {
 				b, res, err := svc.CreateBranchUpgraded(ctx, req, report)
 				s.publishBranch(ctx, svc, b.Name)
@@ -300,7 +300,7 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 			})
 		return
 	}
-	s.accepted(w, "branch.create", operation.Target{Resource: "branch", Name: req.Name.String()},
+	s.accepted(w, r, "branch.create", operation.Target{Resource: "branch", Name: req.Name.String()},
 		func(ctx context.Context, report func(string)) error {
 			b, err := svc.CreateBranch(ctx, req, report)
 			s.publishBranch(ctx, svc, b.Name)
@@ -326,10 +326,14 @@ func (s *Server) publishBranch(ctx context.Context, svc Branches, n domain.Name)
 func (s *Server) publishBranchNow(ctx context.Context, svc Branches, n domain.Name) {
 	b, err := svc.GetBranch(ctx, n)
 	if err != nil {
-		s.Bus.Publish("branch.deleted", map[string]string{"name": n.String()})
+		// The branch is gone, so who owned it comes from the last event about it.
+		owner, _ := s.branchOwners.LoadAndDelete(n.String())
+		id, _ := owner.(string)
+		s.Bus.PublishTo(operation.Audience{Owner: id}, "branch.deleted", map[string]string{"name": n.String()})
 		return
 	}
-	s.Bus.Publish("branch.updated", s.branchView(ctx, svc, b))
+	s.branchOwners.Store(n.String(), b.Owner)
+	s.Bus.PublishTo(operation.Audience{Owner: b.Owner, Open: b.Open()}, "branch.updated", s.branchView(ctx, svc, b))
 }
 
 func (s *Server) patchBranch(w http.ResponseWriter, r *http.Request, svc Branches, n domain.Name) {
@@ -371,7 +375,7 @@ func (s *Server) branchAction(w http.ResponseWriter, r *http.Request, svc Branch
 		fail(w, err)
 		return
 	}
-	s.accepted(w, kind, operation.Target{Resource: "branch", Name: n.String()},
+	s.accepted(w, r, kind, operation.Target{Resource: "branch", Name: n.String()},
 		func(ctx context.Context, report func(string)) error {
 			err := run(ctx, svc, n, report)
 			s.publishBranch(ctx, svc, n)
@@ -430,7 +434,7 @@ func (s *Server) recreateBranch(w http.ResponseWriter, r *http.Request, svc Bran
 		s.forward(w, r, node)
 		return
 	}
-	s.accepted(w, "branch.recreate", operation.Target{Resource: "branch", Name: n.String()},
+	s.accepted(w, r, "branch.recreate", operation.Target{Resource: "branch", Name: n.String()},
 		func(ctx context.Context, report func(string)) error {
 			_, err := svc.RecreateBranch(ctx, n, report)
 			s.publishBranch(ctx, svc, n)

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -87,6 +88,10 @@ type Runtimes interface {
 
 // Server holds the API's dependencies.
 type Server struct {
+	// branchOwners remembers each branch's owner ID (name -> owner) from its
+	// last event, to address the event that tells it was deleted.
+	branchOwners sync.Map
+
 	// anonLimiter counts the branches each client address creates without a
 	// login (anonymousRate per hour), in memory.
 	anonLimiter IPLimiter
@@ -547,8 +552,8 @@ func (s *Server) named(h func(http.ResponseWriter, *http.Request, Branches, doma
 }
 
 // accepted starts op in the background and answers 202 with the operation.
-func (s *Server) accepted(w http.ResponseWriter, kind string, target operation.Target, f operation.Func) {
-	op, err := s.Ops.Start(kind, target, f)
+func (s *Server) accepted(w http.ResponseWriter, r *http.Request, kind string, target operation.Target, f operation.Func) {
+	op, err := s.Ops.StartAs(principalOf(r).ID, kind, target, f)
 	if err != nil {
 		fail(w, err)
 		return

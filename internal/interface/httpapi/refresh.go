@@ -122,7 +122,7 @@ func (s *Server) runRefresh(w http.ResponseWriter, r *http.Request, svc Branches
 	if s.forwardBase(w, r, svc, n) {
 		return
 	}
-	s.accepted(w, "base.refresh", operation.Target{Resource: "base", Name: n.String()},
+	s.accepted(w, r, "base.refresh", operation.Target{Resource: "base", Name: n.String()},
 		func(ctx context.Context, report func(string)) error {
 			err := svc.RefreshBase(ctx, n, report)
 			s.publishBase(ctx, svc, n)

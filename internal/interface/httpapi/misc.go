@@ -70,11 +70,11 @@ func (s *Server) installRuntime(w http.ResponseWriter, r *http.Request) {
 		s.installEverywhere(w, r, ref)
 		return
 	}
-	s.accepted(w, "runtime.install", operation.Target{Resource: "runtime", Name: ref.String()},
+	s.accepted(w, r, "runtime.install", operation.Target{Resource: "runtime", Name: ref.String()},
 		func(ctx context.Context, report func(string)) error {
 			report("downloading")
 			err := s.Runtimes.Install(ctx, ref)
-			s.Bus.Publish("runtime.updated", runtimeViews([]domain.RuntimeRef{ref})[0])
+			s.Bus.PublishTo(operation.Audience{Action: "runtime.read"}, "runtime.updated", runtimeViews([]domain.RuntimeRef{ref})[0])
 			s.runtimesChanged()
 			return err
 		})
@@ -102,7 +102,7 @@ func (s *Server) installEverywhere(w http.ResponseWriter, r *http.Request, ref d
 		fail(w, err)
 		return
 	}
-	s.accepted(w, "runtime.install", operation.Target{Resource: "runtime", Name: ref.String()},
+	s.accepted(w, r, "runtime.install", operation.Target{Resource: "runtime", Name: ref.String()},
 		func(ctx context.Context, report func(string)) error {
 			err := s.Runtimes.Install(ctx, ref)
 			if errors.Is(err, domain.ErrRuntimeInstalled) {
@@ -151,7 +151,7 @@ func (s *Server) removeEverywhere(w http.ResponseWriter, r *http.Request, ref do
 		fail(w, fmt.Errorf("%w: %s was not removed everywhere (%s)", domain.ErrInUse, ref, strings.Join(problems, "; ")))
 		return
 	}
-	s.Bus.Publish("runtime.deleted", map[string]string{"runtime": ref.String()})
+	s.Bus.PublishTo(operation.Audience{Action: "runtime.read"}, "runtime.deleted", map[string]string{"runtime": ref.String()})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -176,17 +176,27 @@ func (s *Server) removeRuntime(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.Bus.Publish("runtime.deleted", map[string]string{"runtime": ref.String()})
+	s.Bus.PublishTo(operation.Audience{Action: "runtime.read"}, "runtime.deleted", map[string]string{"runtime": ref.String()})
 	s.runtimesChanged()
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) listOperations(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, items(s.Ops.List()))
+func (s *Server) listOperations(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	list := []operation.Operation{}
+	for _, op := range s.Ops.List() {
+		if s.canSeeOperation(r.Context(), p, op) {
+			list = append(list, op)
+		}
+	}
+	writeJSON(w, http.StatusOK, items(list))
 }
 
 func (s *Server) getOperation(w http.ResponseWriter, r *http.Request) {
 	op, err := s.Ops.Get(r.PathValue("id"))
+	if err == nil && !s.canSeeOperation(r.Context(), principalOf(r), op) {
+		err = operation.ErrNotFound // do not reveal that the operation exists
+	}
 	if err != nil {
 		fail(w, err)
 		return
@@ -202,6 +212,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lastID, _ := strconv.ParseUint(r.Header.Get("Last-Event-ID"), 10, 64)
+	p := principalOf(r)
 	sub := s.Bus.Subscribe(lastID)
 	defer sub.Close()
 
@@ -227,6 +238,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		case ev, ok := <-sub.Events():
 			if !ok {
 				return // dropped for reading too slowly; the client reconnects
+			}
+			if !s.canReceive(r.Context(), p, ev.Audience) {
+				continue
 			}
 			data, _ := json.Marshal(ev.Data)
 			fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.ID, ev.Type, data)

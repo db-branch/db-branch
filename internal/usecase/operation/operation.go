@@ -35,6 +35,11 @@ type Operation struct {
 	ID     string `json:"id"`
 	Kind   string `json:"kind"`
 	Target Target `json:"target"`
+	// Owner is the immutable ID of the principal that started the task. Only
+	// that principal, those who share its branches and admins may read the
+	// operation; "" (started by the system) is admin-only. A node that does
+	// not know this field drops it, which leaves the operation admin-only.
+	Owner string `json:"owner,omitempty"`
 	// Node is the node running the task.
 	Node       string     `json:"node,omitempty"`
 	State      State      `json:"state"`
@@ -116,7 +121,7 @@ func (m *Manager) put(op Operation) error {
 		return err
 	}
 	if m.Bus != nil {
-		m.Bus.Publish("operation.updated", op)
+		m.Bus.PublishTo(Audience{Owner: op.Owner}, "operation.updated", op)
 	}
 	return nil
 }
@@ -126,15 +131,25 @@ func (m *Manager) put(op Operation) error {
 // is not tied to the caller's context: it keeps running after the HTTP
 // request that started it ends.
 func (m *Manager) Start(kind string, target Target, f Func) (Operation, error) {
-	return m.StartResult(kind, target, func(ctx context.Context, report func(string)) (any, error) {
+	return m.StartAs("", kind, target, f)
+}
+
+// StartAs is Start for a task owned by the principal with the given ID.
+func (m *Manager) StartAs(owner, kind string, target Target, f Func) (Operation, error) {
+	return m.StartResultAs(owner, kind, target, func(ctx context.Context, report func(string)) (any, error) {
 		return nil, f(ctx, report)
 	})
 }
 
 // StartResult is Start for a task that returns a result.
 func (m *Manager) StartResult(kind string, target Target, f ResultFunc) (Operation, error) {
+	return m.StartResultAs("", kind, target, f)
+}
+
+// StartResultAs is StartResult for a task owned by the principal with the given ID.
+func (m *Manager) StartResultAs(owner, kind string, target Target, f ResultFunc) (Operation, error) {
 	now := m.now()
-	op := Operation{ID: newID(), Kind: kind, Target: target, Node: m.Node, State: Running, CreatedAt: now, UpdatedAt: now, Seq: m.nextSeq()}
+	op := Operation{ID: newID(), Kind: kind, Owner: owner, Target: target, Node: m.Node, State: Running, CreatedAt: now, UpdatedAt: now, Seq: m.nextSeq()}
 	if err := m.put(op); err != nil {
 		return Operation{}, err
 	}

@@ -1740,7 +1740,7 @@ paths:
       x-dbb-action: operation.read
       x-dbb-token-scopes: [full, branches]
       description: |-
-        Lists operations, newest first. The newest 200 finished operations are kept.
+        Lists operations, newest first. The newest 200 finished operations are kept. Admins (a `full` token, the admin password, the local socket) see all of them; everyone else sees only the operations they started and those of people who share their branches (a module's team policy). Operations the system started (installing a runtime, a scheduled refresh) are for admins only.
 
         **Action:** `operation.read`. Allowed for `full` and `branches` tokens.
       responses:
@@ -1772,7 +1772,7 @@ paths:
       x-dbb-action: operation.read
       x-dbb-token-scopes: [full, branches]
       description: |-
-        Returns one operation. Without a login this works for operations started by an anonymous branch creation.
+        Returns one operation. Without a login this works for operations started by an anonymous branch creation. Anyone else gets `404` for an operation they may not see (see List operations), as for an ID that does not exist.
 
         **Action:** `operation.read`. Allowed for `full` and `branches` tokens.
       security:
@@ -1804,7 +1804,9 @@ paths:
       x-dbb-action: event.read
       x-dbb-token-scopes: [full, branches]
       description: |-
-        A Server-Sent Events stream of changes, so that a client does not have to poll. Each event has an `id`, an `event` name and JSON `data`:
+        A Server-Sent Events stream of changes, so that a client does not have to poll. Each event has an `id`, an `event` name and JSON `data`.
+
+        **Who receives what.** Admins receive every event. Everyone else receives only the events they could also read with the matching call: `branch.*` and `operation.updated` for their own branches and operations, those of people who share their branches, and open branches; `base.*`, `runtime.*`, `node.updated`, `module.updated`, `setting.updated` and `update.updated` only if the token or role allows `base.read`, `runtime.read`, `cluster.read`, `module.read`, `setting.read` and `update.read`. The `id`s keep counting across the events a client does not receive, so they may skip numbers.
 
         | Event | Data |
         |---|---|
@@ -3449,6 +3451,7 @@ components:
             name: {type: string}
           required: [resource, name]
         node: {type: string, description: The node running the task.}
+        owner: {type: string, description: 'The ID of the principal that started the task (the same ID as a branch''s `owner`). Absent for tasks the system started, which only admins may read.'}
         state:
           type: string
           enum: [running, succeeded, failed]
