@@ -1720,3 +1720,30 @@ func TestInstall_ポートや一時ファイルやデフォルト設定の異常
 		}
 	})
 }
+
+func TestInstall_クラスター構成のノードでは単一ノード限定の実験的機能である警告を返す(t *testing.T) {
+	for _, clustered := range []bool{true, false} {
+		h := newTestHarness(t)
+		kp := newTestKeyPair(t, "acme-2026")
+		if _, err := h.keys.Add(kp.keyID, kp.pub); err != nil {
+			t.Fatal(err)
+		}
+		h.setupValidRelease(t, "clickhouse", "0.2.0", "v0.2.0", kp, false)
+		h.svc.Clustered = func() bool { return clustered }
+		ref, _ := domain.ParseGitHubRef("github.com/acme/db-branch-rt-clickhouse@v0.2.0")
+
+		res, err := h.svc.Install(context.Background(), rtmodule.InstallRequest{Ref: ref})
+		if err != nil {
+			t.Fatalf("Install failed: %v", err)
+		}
+		found := false
+		for _, w := range res.Warnings {
+			if strings.Contains(w, rtmodule.ClusterWarning) {
+				found = true
+			}
+		}
+		if found != clustered {
+			t.Errorf("clustered=%v: warning present=%v, warnings=%v", clustered, found, res.Warnings)
+		}
+	}
+}

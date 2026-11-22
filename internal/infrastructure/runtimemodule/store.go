@@ -33,6 +33,8 @@ type ModuleStore struct {
 	Rename func(oldpath, newpath string) error
 	// Chown sets ownership on directories and the lock file (default: os.Chown).
 	Chown func(name string, uid, gid int) error
+	// RemoveAll deletes the old module directory after a successful swap (default: os.RemoveAll).
+	RemoveAll func(path string) error
 	// Rand supplies randomness for fallback backup directory names (default: crypto/rand.Reader).
 	Rand io.Reader
 }
@@ -40,6 +42,13 @@ type ModuleStore struct {
 // RootDir returns Loader.RootDir().
 func (s ModuleStore) RootDir() string {
 	return s.Loader.RootDir()
+}
+
+func (s ModuleStore) removeAllFn() func(path string) error {
+	if s.RemoveAll != nil {
+		return s.RemoveAll
+	}
+	return os.RemoveAll
 }
 
 func (s ModuleStore) renameFn() func(oldpath, newpath string) error {
@@ -195,6 +204,8 @@ func (s ModuleStore) Commit(stageDir, engine string, upgrade bool) error {
 		return err
 	}
 
+	s.sweepBackups(root)
+
 	dest := filepath.Join(root, engine)
 	_, statErr := os.Lstat(dest)
 	if !upgrade {
@@ -213,7 +224,10 @@ func (s ModuleStore) Commit(stageDir, engine string, upgrade bool) error {
 			}
 			return err
 		}
-		return syncDir(root)
+		// The module is in place; a failed directory sync must not be reported
+		// as a failed commit (the caller would drop the newly trusted key).
+		_ = syncDir(root)
+		return nil
 	}
 	if statErr != nil {
 		if errors.Is(statErr, os.ErrNotExist) {
@@ -226,16 +240,31 @@ func (s ModuleStore) Commit(stageDir, engine string, upgrade bool) error {
 	}
 	err := s.renameExchangeFn()(cleanStage, dest)
 	if err == nil {
-		// cleanStage now holds the old module directory; remove it.
-		if rmErr := os.RemoveAll(cleanStage); rmErr != nil {
-			return rmErr
-		}
-		return syncDir(root)
+		// cleanStage now holds the old module directory. The swap is already
+		// committed, so cleanup failures must not be reported as a failed
+		// commit (the caller would roll back the newly trusted key).
+		_ = s.removeAllFn()(cleanStage)
+		_ = syncDir(root)
+		return nil
 	}
 	if !errors.Is(err, ErrExchangeUnsupported) {
 		return err
 	}
 	return s.commitUpgradeFallback(root, cleanStage, dest)
+}
+
+// sweepBackups removes .old-* backups that an earlier upgrade could not delete.
+// The caller holds the store lock, so no upgrade is using one.
+func (s ModuleStore) sweepBackups(root string) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".old-") {
+			_ = s.removeAllFn()(filepath.Join(root, e.Name()))
+		}
+	}
 }
 
 func (s ModuleStore) commitUpgradeFallback(root, stageDir, dest string) error {
@@ -252,10 +281,10 @@ func (s ModuleStore) commitUpgradeFallback(root, stageDir, dest string) error {
 		_ = rename(oldPath, dest)
 		return err
 	}
-	if err := os.RemoveAll(oldPath); err != nil {
-		return err
-	}
-	return syncDir(root)
+	// The swap is committed; failing to remove the backup is not a commit failure.
+	_ = s.removeAllFn()(oldPath)
+	_ = syncDir(root)
+	return nil
 }
 
 func prepareStageForCommit(stageDir string) error {
