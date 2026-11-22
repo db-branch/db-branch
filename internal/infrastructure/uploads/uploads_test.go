@@ -167,3 +167,44 @@ func TestRoom_送れる大きさは上限と空きの小さい方(t *testing.T) 
 		t.Error("unknown free space")
 	}
 }
+
+func TestSave_並行アップロードの予約バイトを排他的に合算して空き容量を超える受け付けを断る(t *testing.T) {
+	// free 100, reserve 10: one 60-byte upload fits, two do not.
+	s := newStore(t, 100)
+	pr, pw := io.Pipe()
+	first := make(chan error, 1)
+	go func() { _, err := s.Save(pr, "a.sql", 60); first <- err }()
+	// Wait until the first upload holds its reservation.
+	deadline := time.Now().Add(5 * time.Second)
+	for room, _ := s.Room(); room > 30 && time.Now().Before(deadline); room, _ = s.Room() {
+		time.Sleep(time.Millisecond)
+	}
+	if room, _ := s.Room(); room != 30 {
+		t.Fatalf("room while one 60-byte upload runs = %d, want 30", room)
+	}
+	if _, err := s.Save(strings.NewReader(strings.Repeat("x", 60)), "b.sql", 60); !errors.Is(err, domain.ErrNoSpace) {
+		t.Fatalf("second upload: %v, want ErrNoSpace", err)
+	}
+	if _, err := pw.Write([]byte(strings.Repeat("y", 60))); err != nil {
+		t.Fatal(err)
+	}
+	pw.Close()
+	if err := <-first; err != nil {
+		t.Fatalf("first upload: %v", err)
+	}
+	// The reservation is released: once it is on disk the (fake) free space is
+	// what the file system reports, so a small upload fits again.
+	if _, err := s.Save(strings.NewReader("zz"), "c.sql", 2); err != nil {
+		t.Errorf("after the first finished: %v", err)
+	}
+}
+
+func TestSave_失敗したアップロードは予約バイトを返す(t *testing.T) {
+	s := newStore(t, 100)
+	if _, err := s.Save(strings.NewReader("short"), "a.sql", 60); err == nil {
+		t.Fatal("want an error for a truncated body")
+	}
+	if room, _ := s.Room(); room != 90 {
+		t.Errorf("room = %d, want 90 (reservation released)", room)
+	}
+}

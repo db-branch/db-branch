@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -27,6 +28,12 @@ type Store struct {
 	// Free reports the free bytes of the file system holding dir.
 	Free  func(dir string) (uint64, error)
 	Clock func() time.Time
+
+	// mu guards held, the bytes promised to uploads still being written:
+	// the file system does not show them as used yet, so a second upload
+	// must not count them as free.
+	mu   sync.Mutex
+	held uint64
 }
 
 // DefaultReserve keeps 1 GiB free for the rest of the node.
@@ -60,17 +67,14 @@ func (s *Store) Save(r io.Reader, name string, size int64) (domain.Upload, error
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return domain.Upload{}, err
 	}
-	free, err := s.Free(s.Dir)
-	if err != nil {
+	if err := s.hold(uint64(size)); err != nil {
 		return domain.Upload{}, err
 	}
-	if uint64(size)+s.Reserve > free {
-		return domain.Upload{}, fmt.Errorf("%w: %d bytes to store, %d free in %s (keeping %d)", domain.ErrNoSpace, size, free, s.Dir, s.Reserve)
-	}
+	defer s.release(uint64(size))
 	id := newID()
 	part := filepath.Join(s.Dir, id+".part")
 	path := filepath.Join(s.Dir, id+ext)
-	err = write(part, r, size)
+	err := write(part, r, size)
 	if err == nil {
 		err = os.Rename(part, path)
 	}
@@ -79,6 +83,28 @@ func (s *Store) Save(r io.Reader, name string, size int64) (domain.Upload, error
 		return domain.Upload{}, err
 	}
 	return domain.Upload{ID: id, Name: filepath.Base(name), Size: size, Path: path, CreatedAt: s.Clock()}, nil
+}
+
+// hold promises size bytes to an upload, or refuses when the free space,
+// less what other uploads already hold, cannot take it.
+func (s *Store) hold(size uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	free, err := s.Free(s.Dir)
+	if err != nil {
+		return err
+	}
+	if size+s.held+s.Reserve > free {
+		return fmt.Errorf("%w: %d bytes to store, %d free in %s (%d held by uploads in progress, keeping %d)", domain.ErrNoSpace, size, free, s.Dir, s.held, s.Reserve)
+	}
+	s.held += size
+	return nil
+}
+
+func (s *Store) release(size uint64) {
+	s.mu.Lock()
+	s.held -= size
+	s.mu.Unlock()
 }
 
 func write(path string, r io.Reader, size int64) error {
@@ -119,9 +145,12 @@ func (s *Store) Room() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	s.mu.Lock()
+	held := s.held
+	s.mu.Unlock()
 	room := int64(0)
-	if free > s.Reserve {
-		room = int64(free - s.Reserve)
+	if free > s.Reserve+held {
+		room = int64(free - s.Reserve - held)
 	}
 	return min(room, s.MaxBytes()), nil
 }
