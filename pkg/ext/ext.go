@@ -127,6 +127,9 @@ const (
 	OutcomeOK     = "ok"
 	OutcomeDenied = "denied"
 	OutcomeFailed = "failed"
+	// OutcomeAttempt is recorded before a change runs when the cluster fails
+	// closed (setting audit.fail_closed); the change's own event follows.
+	OutcomeAttempt = "attempt"
 )
 
 // Event is one audited action.

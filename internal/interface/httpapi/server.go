@@ -187,6 +187,10 @@ type Server struct {
 	PoolFree func() uint64
 	// PoolStats reports total and free bytes of this node's ZFS pool (single-node mode). Optional.
 	PoolStats func(context.Context) (size, free uint64)
+	// AuditFailClosed says whether a change that cannot be audited is
+	// refused (503 audit_unavailable) instead of going ahead with the failure
+	// only logged. Optional (false: fail open).
+	AuditFailClosed func() bool
 	// Log receives audit events and audit failures. Optional.
 	Log      *slog.Logger
 	inner    internalMux
@@ -312,7 +316,7 @@ func (s *Server) routes(mux router, local bool) {
 	r("POST /v1/account/tokens", "account.token.write", s.createMyToken)
 	r("DELETE /v1/account/tokens/{id}", "account.token.write", s.revokeMyToken)
 	// MCP: each tool call goes through the routes above (authorized and audited there).
-	mux.Handle("POST /v1/mcp", s.mcpHandler())
+	r("POST /v1/mcp", "mcp.use", s.mcpHandler().ServeHTTP)
 
 	r("GET /v1/settings", "setting.read", s.listSettings)
 	r("PUT /v1/settings/{scope}", "setting.write", s.putSettings)
@@ -384,6 +388,7 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			if err != nil || p.ID == LocalPrincipal.ID {
 				// The ID "local" is the socket's alone (path dumps, no guard
 				// for local admin): no remote identity may take it.
+				s.auditAuthFailure(r, Anonymous, "auth.token", http.StatusUnauthorized)
 				writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid token")
 				return
 			}
@@ -419,6 +424,7 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 		}
 		sess, err := s.Auth.Session(c.Value)
 		if err != nil {
+			s.auditAuthFailure(r, Anonymous, "auth.session", http.StatusUnauthorized)
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "session expired; log in again")
 			return
 		}
@@ -441,6 +447,7 @@ func (s *Server) sessionAllowed(w http.ResponseWriter, r *http.Request, sess aut
 		return false
 	}
 	if r.Method != http.MethodGet && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(sess.CSRF)) != 1 {
+		s.auditAuthFailure(r, ext.Principal{ID: sess.User, Name: sess.Name, Roles: sess.Roles}, "auth.csrf", http.StatusForbidden)
 		writeError(w, http.StatusForbidden, "csrf_failed", "missing or wrong X-CSRF-Token")
 		return false
 	}

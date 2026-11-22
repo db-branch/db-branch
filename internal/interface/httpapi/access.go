@@ -183,17 +183,19 @@ func (s *Server) guard(action string, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Only requests that arrived over the trusted node channel carry forwardedKey.
 		forwardedIn := forwardedFromNode(r)
+		target := &auditTarget{}
 		audit := func(outcome string, status int) {
 			if !forwardedIn {
-				s.audit(r, principalOf(r), action, ext.Resource{Kind: kind, Name: resourceName(r)}, outcome, status)
+				s.audit(r, principalOf(r), action, ext.Resource{Kind: kind, Name: target.name}, outcome, status)
 			}
 		}
 		p := principalOf(r)
-		res := ext.Resource{Kind: kind, Name: r.PathValue("name")}
+		res := ext.Resource{Kind: kind, Name: pathResource(r)}
 		if res.Name == "" && r.Method == http.MethodPost {
 			res.Name = peekName(r)
 		}
-		r = r.WithContext(context.WithValue(r.Context(), resourceKey{}, res.Name))
+		target.name = res.Name
+		r = r.WithContext(context.WithValue(r.Context(), resourceKey{}, target))
 		if pending := s.pending(); len(pending) > 0 && !moduleExempt(action) && !forwardedIn && p.ID != LocalPrincipal.ID {
 			writeError(w, http.StatusServiceUnavailable, "modules_pending",
 				"this node does not run every module the cluster requires yet ("+strings.Join(pending, ", ")+"); use another node or wait")
@@ -205,6 +207,14 @@ func (s *Server) guard(action string, h http.HandlerFunc) http.HandlerFunc {
 			fail(w, err)
 			return
 		}
+		if changes(r, action) && !forwardedIn && p.ID != LocalPrincipal.ID && s.auditFailClosed() {
+			// Fail closed: the intent is on record before the change runs.
+			if err := s.record(r, p, action, res, ext.OutcomeAttempt, 0); err != nil {
+				s.requests.add(action, ext.OutcomeFailed)
+				writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "the change cannot be recorded in the audit log, so it was not made")
+				return
+			}
+		}
 		tw, sw := track(w)
 		h(tw, r)
 		outcome := ext.OutcomeOK
@@ -212,10 +222,16 @@ func (s *Server) guard(action string, h http.HandlerFunc) http.HandlerFunc {
 			outcome = ext.OutcomeFailed
 		}
 		s.requests.add(action, outcome)
-		if r.Method != http.MethodGet || auditedReads[action] {
+		if changes(r, action) {
 			audit(outcome, sw.status)
 		}
 	}
+}
+
+// auditAuthFailure records a request refused before any route ran (a bad
+// token or session, a missing CSRF token): the trail of break-in attempts.
+func (s *Server) auditAuthFailure(r *http.Request, p ext.Principal, action string, status int) {
+	s.audit(r, p, action, ext.Resource{Kind: "auth"}, ext.OutcomeDenied, status)
 }
 
 // auditedReads are reads that hand out secrets or data, so the audit log
@@ -225,20 +241,54 @@ var auditedReads = map[string]bool{"branch.connect": true, "backup.download": tr
 
 type resourceKey struct{}
 
-func resourceName(r *http.Request) string {
-	n, _ := r.Context().Value(resourceKey{}).(string)
-	return n
+// auditTarget is the resource name the audit event carries. A handler that
+// resolves the name (a user's branch name gets its owner prefix) sets the
+// resolved one with auditAs.
+type auditTarget struct{ name string }
+
+func auditAs(r *http.Request, name string) {
+	if t, ok := r.Context().Value(resourceKey{}).(*auditTarget); ok {
+		t.name = name
+	}
 }
 
+// pathResource names what the route's path addresses: a branch or base
+// ({name}), a token ({id}), a settings scope, a backup file, a runtime.
+func pathResource(r *http.Request) string {
+	for _, k := range []string{"name", "id", "scope", "file"} {
+		if v := r.PathValue(k); v != "" {
+			return v
+		}
+	}
+	if e := r.PathValue("engine"); e != "" {
+		return e + "@" + r.PathValue("version")
+	}
+	return ""
+}
+
+// changes: the request changes something or reads what the audit log must show.
+func changes(r *http.Request, action string) bool {
+	return r.Method != http.MethodGet || auditedReads[action]
+}
+
+func (s *Server) auditFailClosed() bool { return s.AuditFailClosed != nil && s.AuditFailClosed() }
+
 func (s *Server) audit(r *http.Request, p ext.Principal, action string, res ext.Resource, outcome string, status int) {
+	_ = s.record(r, p, action, res, outcome, status)
+}
+
+// record sends the event to the audit sinks; a failure is logged and returned.
+func (s *Server) record(r *http.Request, p ext.Principal, action string, res ext.Resource, outcome string, status int) error {
 	remote := ""
 	if r.RemoteAddr != "@" {
 		remote = r.RemoteAddr
 	}
 	e := ext.Event{Time: time.Now().UTC(), Node: s.Node, Principal: p, Action: action, Resource: res, Outcome: outcome, Status: status, Remote: remote}
-	if err := s.sink().Record(r.Context(), e); err != nil && s.Log != nil {
+	err := s.sink().Record(r.Context(), e)
+	if err != nil && s.Log != nil {
 		s.Log.Error("audit sink failed", "action", action, "err", err)
 	}
+	return err
 }
 
 // peekName reads the "name" of a JSON body without consuming it. Other

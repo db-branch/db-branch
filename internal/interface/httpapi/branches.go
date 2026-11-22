@@ -233,6 +233,7 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 		if err := s.userBranchName(principalOf(r), r, &in); err != nil {
 			return dbbranch.CreateBranchRequest{}, err
 		}
+		auditAs(r, in.Name)
 		n, err := domain.ParseName(in.Name)
 		if err != nil {
 			return dbbranch.CreateBranchRequest{}, err
