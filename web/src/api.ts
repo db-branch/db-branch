@@ -235,7 +235,9 @@ export type Setting = {
   help?: string;
   type: "string" | "text" | "secret" | "int" | "bool" | "duration";
   default: string;
+  // value: empty for a secret, which is write-only; secret_set says whether one is stored.
   value: string;
+  secret_set?: boolean;
   // translations: a module's own label and help in other languages.
   translations?: Record<string, { label?: string; help?: string }>;
 };
@@ -368,7 +370,8 @@ export const api = {
   createMyToken: (t: { name: string; ttl?: string }) => call<APIToken>("POST", "/v1/account/tokens", t),
   revokeMyToken: (id: string) => call<void>("DELETE", `/v1/account/tokens/${id}`),
   settings: () => call<{ items: SettingScope[] }>("GET", "/v1/settings").then((r) => r.items),
-  putSettings: (scope: string, values: Record<string, string>) => call<SettingScope>("PUT", `/v1/settings/${scope}`, { values }),
+  putSettings: (scope: string, values: Record<string, string>, clear: string[] = []) =>
+    call<SettingScope>("PUT", `/v1/settings/${scope}`, clear.length > 0 ? { values, clear } : { values }),
   license: () => call<{ configured: boolean; report?: LicenseReport; error?: string; renewal?: Renewal }>("GET", "/v1/license"),
   checkLicenseNow: () => call<Renewal>("POST", "/v1/license/renew"),
   verifyLicense: (key: string) => call<LicenseReport>("POST", "/v1/license/verify", { key }),

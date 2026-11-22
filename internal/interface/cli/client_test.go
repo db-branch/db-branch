@@ -1283,3 +1283,28 @@ func TestClusterRemove_ノード名はパスとしてエスケープする(t *te
 		t.Fatalf("%d %q (requests %v)", code, errOut, api.requests)
 	}
 }
+
+func TestSettings_秘密の設定は値を出さず設定済みと表示し_clearで削除できる(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["GET /v1/settings"] = map[string]any{"items": []any{map[string]any{"scope": "core", "settings": []any{
+		map[string]any{"key": "license.key", "type": "secret", "value": "", "default": "", "secret_set": true},
+		map[string]any{"key": "notify.slack_url", "type": "secret", "value": "", "default": "", "secret_set": false}}}}}
+	api.answers["PUT /v1/settings/core"] = map[string]any{}
+	_, out, _ := runAPI(t, api, "settings", "list")
+	if !strings.Contains(out, "(set)") || strings.Count(out, "(set)") != 1 {
+		t.Errorf("settings list:\n%s", out)
+	}
+	if code, _, errOut := runAPI(t, api, "settings", "set", "core", "--clear", "license.key"); code != 0 {
+		t.Fatalf("clear: %s", errOut)
+	}
+	body := api.bodies["PUT /v1/settings/core"].(map[string]any)
+	if got := body["clear"].([]string); len(got) != 1 || got[0] != "license.key" {
+		t.Errorf("body = %v", body)
+	}
+}
+
+func TestSettings_setは設定も_clearもないと失敗する(t *testing.T) {
+	if code, _, _ := runAPI(t, newFakeAPI(), "settings", "set", "core"); code == 0 {
+		t.Error("want failure")
+	}
+}
