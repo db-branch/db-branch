@@ -129,3 +129,28 @@ func TestStart_操作の更新は開始した人宛てに届く(t *testing.T) {
 		t.Errorf("event %+v op %+v", ev, op)
 	}
 }
+
+func TestSubscribe_再送が購読の余裕を超えてもバスを止めずResyncを知らせる(t *testing.T) {
+	bus := operation.NewBus(1000)
+	for i := 0; i < 500; i++ {
+		bus.Publish("x", i)
+	}
+	done := make(chan *operation.Subscription)
+	go func() { done <- bus.Subscribe(1) }()
+	select {
+	case s := <-done:
+		defer s.Close()
+		if !s.Resync {
+			t.Error("a replay too long to deliver must ask the client to reload")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Subscribe blocked on a replay larger than the subscriber's buffer")
+	}
+	published := make(chan struct{})
+	go func() { bus.Publish("y", 0); close(published) }()
+	select {
+	case <-published:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the bus is stuck")
+	}
+}

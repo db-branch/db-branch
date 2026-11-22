@@ -83,10 +83,20 @@ func (b *Bus) Subscribe(lastID uint64) *Subscription {
 		if len(b.ring) > 0 && b.ring[0].ID > lastID+1 {
 			s.Resync = true
 		}
+		var missed []Event
 		for _, ev := range b.ring {
 			if ev.ID > lastID {
-				s.ch <- ev
+				missed = append(missed, ev)
 			}
+		}
+		if len(missed) > cap(s.ch) {
+			// More than the buffer holds: filling it would block here, with the
+			// lock held, and stop the whole bus. Have the client reload instead.
+			s.Resync = true
+			missed = nil
+		}
+		for _, ev := range missed {
+			s.ch <- ev
 		}
 	}
 	b.subs[s] = struct{}{}
