@@ -339,3 +339,32 @@ func TestDueRefreshes_期限が来た自ノードの準備できたベースだ�
 		t.Error("a deleted base has no schedule")
 	}
 }
+
+// sweepingDumper also clears the dump directory (srcdump.Dumper does).
+type sweepingDumper struct {
+	fakeDumper
+	swept int
+}
+
+func (d *sweepingDumper) Sweep() int { d.swept++; return 1 }
+
+func TestRecover_起動時にsrcdump作業ディレクトリの残留ダンプを掃除する(t *testing.T) {
+	e := newEnv(t)
+	d := &sweepingDumper{fakeDumper: fakeDumper{j: e.j}}
+	e.svc.Dumper = d
+	if err := e.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d.swept != 1 {
+		t.Errorf("swept %d times, want 1", d.swept)
+	}
+	// A dumper that cannot sweep, or none at all, is fine.
+	e.svc.Dumper = &fakeDumper{j: e.j}
+	if err := e.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.svc.Dumper = nil
+	if err := e.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

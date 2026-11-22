@@ -49,6 +49,8 @@ func coreSettings(cfg config.Config) []ext.Setting {
 			Help: "The most branches one signed-in user may have at once. 0: no limit."},
 		{Key: "branch.max_ttl", Label: "Longest branch TTL", Type: "duration", Default: "",
 			Help: "No branch may live longer than this from creation or extension; a branch created without a TTL gets it. e.g. 168h. Empty: no limit."},
+		{Key: "base.refresh_max_gb", Label: "Largest refresh dump (GB)", Type: "int", Default: "0",
+			Help: "A scheduled refresh whose source dump grows past this is stopped and the dump deleted. A refresh is also stopped when the node's disk would drop below 1 GiB free. 0: only the disk check."},
 		{Key: "ports.min", Label: "First branch port", Type: "int", Default: strconv.Itoa(cfg.Ports.Min)},
 		{Key: "ports.max", Label: "Last branch port", Type: "int", Default: strconv.Itoa(cfg.Ports.Max)},
 		{Key: "console.session_ttl", Label: "Console session", Type: "duration", Default: auth.DefaultSessionTTL.String(),
@@ -103,6 +105,7 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 			"zfs.arc_max":            arc.ctl.Check,
 			"branch.max_checkpoints": settings.NonNegativeInt,
 			"branch.refquota_gb":     settings.NonNegativeInt,
+			"base.refresh_max_gb":    settings.NonNegativeInt,
 			"branch.max_per_user":    settings.NonNegativeInt,
 			"backup.dir":             backupdir.ValidatePath,
 			"notify.slack_url":       checkNotifyURL,
@@ -177,6 +180,9 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 			}
 			if n, err := strconv.Atoi(v["branch.max_per_user"]); err == nil && n >= 0 {
 				maxPerUser.Store(int64(n))
+			}
+			if n, err := strconv.Atoi(v["base.refresh_max_gb"]); err == nil && n >= 0 {
+				refreshMaxGB.Store(int64(n))
 			}
 			d, _ = time.ParseDuration(v["branch.max_ttl"])
 			maxBranchTTL.Store(int64(max(d, 0)))

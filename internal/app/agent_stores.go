@@ -106,6 +106,9 @@ var maxCheckpoints = newInt64(domain.DefaultMaxCheckpoints)
 // branch.max_ttl settings.
 var refQuotaGB, maxPerUser, maxBranchTTL = newInt64(0), newInt64(0), newInt64(0)
 
+// refreshMaxGB follows the base.refresh_max_gb setting.
+var refreshMaxGB = newInt64(0)
+
 func resourceLimits() dbbranch.Limits {
 	return dbbranch.Limits{
 		RefQuotaBytes:      uint64(refQuotaGB.Load()) << 30,

@@ -430,11 +430,22 @@ func (s *Service) Expire(ctx context.Context) ([]domain.Name, error) {
 	return deleted, errors.Join(errs...)
 }
 
+// sweepDumps removes the source dumps a crash left behind (unmasked
+// production data). Refreshes start only after Recover, so none is running.
+func (s *Service) sweepDumps() {
+	if sw, ok := s.Dumper.(interface{ Sweep() int }); ok {
+		if n := sw.Sweep(); n > 0 && s.Logf != nil {
+			s.Logf("removed %d source dumps left in the refresh work directory", n)
+		}
+	}
+}
+
 // Recover brings branches back to a steady state after the agent restarts:
 // ready branches are started (paused ones are left stopped), interrupted
 // resets, deletes, pauses and resumes are finished,
 // and interrupted creates are marked failed.
 func (s *Service) Recover(ctx context.Context) error {
+	s.sweepDumps()
 	baseErr := s.recoverBases(ctx)
 	branches, err := s.Store.ListBranches(ctx)
 	if err != nil {

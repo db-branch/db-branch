@@ -96,7 +96,7 @@ func TestResourceLimits_設定値がサービスの上限に変換され既定�
 	for _, s := range coreSettings(config.Default()) {
 		keys[s.Key] = s.Default
 	}
-	for _, k := range []string{"branch.refquota_gb", "branch.max_per_user", "branch.max_ttl"} {
+	for _, k := range []string{"base.refresh_max_gb", "branch.refquota_gb", "branch.max_per_user", "branch.max_ttl"} {
 		if _, ok := keys[k]; !ok {
 			t.Errorf("setting %s is not declared", k)
 		}
