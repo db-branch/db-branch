@@ -125,7 +125,19 @@ func (s *Server) extAPI(w http.ResponseWriter, r *http.Request) {
 	if s.isPublic(module, "/"+r.PathValue("path")) {
 		// Public paths (e.g. single sign-on) answer anyone; the module checks
 		// what it is given.
-		serve(w, r)
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || forwardedFromNode(r) {
+			serve(w, r)
+			return
+		}
+		// A change through a public path is audited like any other (the
+		// request is not authorized here: the module decides).
+		tw, sw := track(w)
+		serve(tw, r)
+		outcome := ext.OutcomeOK
+		if sw.status >= 400 {
+			outcome = ext.OutcomeFailed
+		}
+		s.audit(r, principalOf(r), action, ext.Resource{Kind: "ext", Name: module}, outcome, sw.status)
 		return
 	}
 	s.guard(action, serve)(w, r)
