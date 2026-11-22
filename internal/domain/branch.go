@@ -268,6 +268,10 @@ type Branch struct {
 // is understood by every node.
 const ProtocolBranchOwnerID = 23
 
+// ProtocolSessionRevocation is the cluster protocol from which revoke_session
+// (a logout shared by every node) is understood by every node.
+const ProtocolSessionRevocation = 24
+
 // DisplayOwner returns the human-readable owner label: OwnerName when set,
 // otherwise Owner.
 func (b Branch) DisplayOwner() string {

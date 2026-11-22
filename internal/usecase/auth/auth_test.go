@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/usecase/auth"
 )
 
@@ -552,5 +553,95 @@ func TestVerifyFrom_全記録がロック中なら新規クライアントは共
 	}
 	if n := s.TrackedClients(); n > auth.MaxTrackedClients+1 {
 		t.Errorf("tracked = %d", n)
+	}
+}
+
+// memRevocations stands in for the cluster-wide (or on-disk) revocation list.
+type memRevocations struct {
+	ids     map[string]time.Time
+	failErr error
+}
+
+func (m *memRevocations) Revoke(id string, expires, _ time.Time) error {
+	if m.failErr != nil {
+		return m.failErr
+	}
+	if m.ids == nil {
+		m.ids = map[string]time.Time{}
+	}
+	m.ids[id] = expires
+	return nil
+}
+
+func (m *memRevocations) Revoked(id string) bool { _, ok := m.ids[id]; return ok }
+
+func TestLogout_失効を共有の記録に残し別のノードでも使えなくする(t *testing.T) {
+	shared := &memRevocations{}
+	a, _, st := newService(t)
+	a.Revocations = shared
+	b := &auth.Service{Store: st, Hasher: sha{}, Clock: a.Clock, Revocations: shared}
+	sess, _ := a.Login("admin", "correct horse battery")
+	if _, err := b.Session(sess.Token); err != nil {
+		t.Fatalf("before logout: %v", err)
+	}
+	if err := a.Logout(sess.Token); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Session(sess.Token); !errors.Is(err, auth.ErrNoSession) {
+		t.Errorf("other node after logout: %v", err)
+	}
+}
+
+func TestLogout_共有の記録に書けなければセッションを残して再試行でき_クラスタ更新中はこのノードだけ失効させる(t *testing.T) {
+	s, _, _ := newService(t)
+	boom := errors.New("no leader")
+	s.Revocations = &memRevocations{failErr: boom}
+	sess, _ := s.Login("admin", "correct horse battery")
+	if err := s.Logout(sess.Token); !errors.Is(err, boom) {
+		t.Errorf("Logout error = %v, want the failure reported", err)
+	}
+	if _, err := s.Session(sess.Token); err != nil {
+		t.Errorf("session after failed shared revoke: %v, want it left open for a retry", err)
+	}
+	rev := &memRevocations{}
+	s.Revocations = rev
+	if err := s.Logout(sess.Token); err != nil || !rev.Revoked(sessID(t, s, sess.Token)) {
+		t.Errorf("retry: %v", err)
+	}
+	// A node below protocol 24: the logout holds here only.
+	s.Revocations = &memRevocations{failErr: domain.ErrClusterUpgrading}
+	other, _ := s.Login("admin", "correct horse battery")
+	if err := s.Logout(other.Token); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Errorf("upgrading: %v", err)
+	}
+	if _, err := s.Session(other.Token); !errors.Is(err, auth.ErrNoSession) {
+		t.Errorf("after upgrading logout: %v", err)
+	}
+}
+
+// sessID finds the id the service recorded for token (the only one in a memRevocations).
+func sessID(t *testing.T, s *auth.Service, _ string) string {
+	t.Helper()
+	for id := range s.Revocations.(*memRevocations).ids {
+		return id
+	}
+	t.Fatal("nothing recorded")
+	return ""
+}
+
+func TestLogout_失効の記録は更新済みトークンより長く残す(t *testing.T) {
+	s, c, _ := newService(t)
+	rev := &memRevocations{}
+	s.Revocations = rev
+	sess, _ := s.Login("admin", "correct horse battery")
+	c.now = c.now.Add(auth.DefaultSessionTTL * 3 / 4) // past half: the next call would renew
+	// Logging out with the old token near its end must outlast a copy renewed just now.
+	if err := s.Logout(sess.Token); err != nil {
+		t.Fatal(err)
+	}
+	for _, exp := range rev.ids {
+		if exp.Before(c.now.Add(auth.DefaultSessionTTL)) {
+			t.Errorf("record expires %v, before a token renewed now (%v)", exp, c.now.Add(auth.DefaultSessionTTL))
+		}
 	}
 }

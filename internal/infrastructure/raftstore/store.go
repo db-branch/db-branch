@@ -703,3 +703,19 @@ func (s *Store) Voters() int {
 
 // TransferLeadership hands leadership to another voter (leader only).
 func (s *Store) TransferLeadership() error { return s.raft.LeadershipTransfer().Error() }
+
+// SessionRevocations keeps the logged-out console sessions in the cluster
+// state, so a logout on one node holds on every node and survives restarts.
+// It implements auth.Revocations.
+type SessionRevocations struct{ Store *Store }
+
+var _ auth.Revocations = SessionRevocations{}
+
+// Revoke records the logout through the log. It fails with
+// domain.ErrClusterUpgrading until every node speaks protocol 24.
+func (r SessionRevocations) Revoke(id string, expires, now time.Time) error {
+	return r.Store.Apply(context.Background(), RevokeSession(id, expires, now))
+}
+
+// Revoked reads this node's copy of the state.
+func (r SessionRevocations) Revoked(id string) bool { return r.Store.fsm.SessionRevoked(id) }

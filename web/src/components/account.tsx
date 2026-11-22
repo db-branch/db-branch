@@ -93,7 +93,7 @@ export function AccountMenu({ session, where, onSignOut }: { session: Session; w
             </a>
           )}
           <hr />
-          <button role="menuitem" onClick={() => api.logout().finally(onSignOut)}>
+          <button role="menuitem" onClick={() => api.signOut(onSignOut)}>
             {t("Sign out")}
           </button>
         </div>
