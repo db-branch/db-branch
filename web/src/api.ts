@@ -354,6 +354,13 @@ export const api = {
   },
   loginMethods: () => call<{ items: LoginMethod[] }>("GET", "/v1/auth/methods").then((r) => r.items),
   logout: () => call<void>("POST", "/v1/auth/logout"),
+  // signOut ends the session, then calls done. If the server could not record
+  // the logout (503) the session is still open, so stay signed in and say why.
+  signOut: (done: () => void) =>
+    call<void>("POST", "/v1/auth/logout").then(done, (err: unknown) => {
+      if (err instanceof ApiError && err.status !== 503) done();
+      else window.alert((err as Error).message);
+    }),
   changePassword: (current_password: string, new_password: string) =>
     call<void>("PUT", "/v1/auth/password", { current_password, new_password }),
 

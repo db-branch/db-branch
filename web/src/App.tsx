@@ -75,7 +75,7 @@ function NotAdmin({ session, onLogout }: { session: Session; onLogout: () => voi
         <a className="button primary wide" href="/">
           {t("Go to my branches")}
         </a>
-        <button className="text-button" onClick={() => api.logout().finally(onLogout)}>
+        <button className="text-button" onClick={() => api.signOut(onLogout)}>
           {t("Sign in as someone else")}
         </button>
       </div>
