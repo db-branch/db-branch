@@ -80,13 +80,16 @@ func resolveLegacyOwner(b domain.Branch, tokens []domain.APIToken) (owner, owner
 	// Only migrate when a single unambiguous principal ID matches.
 	candidates := map[string]bool{}
 	for _, t := range tokens {
+		if !t.CreatedAt.IsZero() && !b.CreatedAt.IsZero() && t.CreatedAt.After(b.CreatedAt) {
+			continue // a token made after the branch cannot have been its owner
+		}
 		if t.Owner != "" {
 			if t.OwnerName == b.Owner {
 				candidates[t.Owner] = true
 			}
 			continue
 		}
-		if t.Name == b.Owner && (t.CreatedAt.IsZero() || b.CreatedAt.IsZero() || !t.CreatedAt.After(b.CreatedAt)) {
+		if t.Name == b.Owner {
 			candidates["token:"+t.ID] = true
 		}
 	}
@@ -95,7 +98,12 @@ func resolveLegacyOwner(b domain.Branch, tokens []domain.APIToken) (owner, owner
 			return id, b.Owner, true
 		}
 	}
-	// Unresolved or ambiguous: leave the branch as a legacy name owner (matched
-	// by display name in httpapi, never by a service token).
+	// Ambiguous: several principals could be the owner, so none of them may
+	// claim it. Seal it (OwnerName set, Owner no ID): admin-only.
+	if len(candidates) > 1 {
+		return b.Owner, b.Owner, true
+	}
+	// Unresolved: leave the branch as a legacy name owner (matched by display
+	// name in httpapi, never by a service token).
 	return "", "", false
 }
