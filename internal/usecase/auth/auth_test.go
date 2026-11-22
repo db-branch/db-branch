@@ -542,3 +542,15 @@ func TestVerifyFrom_記録が満杯でもロック中のクライアントは残
 		t.Errorf("lock lost: %v", err)
 	}
 }
+
+func TestVerifyFrom_全記録がロック中なら新規クライアントは共有枠にまとめ記録を増やさない(t *testing.T) {
+	s, _, _ := newService(t)
+	for i := 0; i < auth.MaxTrackedClients+50; i++ {
+		for j := 0; j < 6; j++ {
+			_ = s.VerifyFrom(fmt.Sprintf("c%d", i), "admin", "wrong")
+		}
+	}
+	if n := s.TrackedClients(); n > auth.MaxTrackedClients+1 {
+		t.Errorf("tracked = %d", n)
+	}
+}

@@ -211,9 +211,6 @@ func (s *Service) TrackedClients() int {
 // guesses cannot outrun the limit; the hash runs outside the lock, a few at
 // a time.
 func (s *Service) VerifyFrom(client, user, password string) error {
-	if retry := s.reserve(client); retry > 0 {
-		return &RateLimitedError{RetryAfter: retry}
-	}
 	c, err := s.Store.Load()
 	if errors.Is(err, ErrNoCredentials) {
 		return ErrInvalidCredentials
@@ -221,14 +218,23 @@ func (s *Service) VerifyFrom(client, user, password string) error {
 	if err != nil {
 		return err
 	}
+	if retry := s.reserve(client); retry > 0 {
+		return &RateLimitedError{RetryAfter: retry}
+	}
 	if user != AdminUser || !s.verify(c, password) {
 		return ErrInvalidCredentials
 	}
 	s.mu.Lock()
-	delete(s.clients, client)
+	if f := s.clients[client]; f != nil && !s.Clock().Before(f.lockedUntil) {
+		delete(s.clients, client)
+	}
 	s.mu.Unlock()
 	return nil
 }
+
+// overflowClient is the shared record for clients beyond MaxTrackedClients
+// when nothing can be dropped: better a shared limit than unbounded memory.
+const overflowClient = "\x00overflow"
 
 // reserve counts one attempt for client. It returns how long the client is
 // locked out (0 if the attempt may go on).
@@ -244,8 +250,14 @@ func (s *Service) reserve(client string) time.Duration {
 		if len(s.clients) >= MaxTrackedClients {
 			s.pruneClients(now)
 		}
-		f = &failure{}
-		s.clients[client] = f
+		if len(s.clients) >= MaxTrackedClients {
+			client = overflowClient
+			f = s.clients[client]
+		}
+		if f == nil {
+			f = &failure{}
+			s.clients[client] = f
+		}
 	}
 	f.last = now
 	if now.Before(f.lockedUntil) {
