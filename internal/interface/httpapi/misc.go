@@ -332,7 +332,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	who := ext.Principal{ID: in.Username, Name: in.Username}
-	p, err := s.authenticator().Authenticate(r.Context(), ext.Credentials{Username: in.Username, Password: in.Password})
+	p, err := s.authenticator().Authenticate(auth.WithClient(r.Context(), ClientKey(r.RemoteAddr)), ext.Credentials{Username: in.Username, Password: in.Password})
 	var sess auth.Session
 	if err == nil {
 		who = p

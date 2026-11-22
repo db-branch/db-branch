@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -29,9 +30,16 @@ type Service struct {
 	Store domain.TokenStore
 	Clock func() time.Time
 	// Settle is how long to wait for a token this node does not know yet: it
-	// may have just been created on another node (default 2s).
+	// may have just been created on another node. Zero (a single node) means
+	// do not wait: an unknown token is simply unknown.
 	Settle time.Duration
+
+	settlers atomic.Int32
 }
+
+// MaxSettlers caps the requests waiting for an unknown token at once, so a
+// flood of bad bearer tokens cannot hold the agent's goroutines and store reads.
+const MaxSettlers = 16
 
 func random(n int) string {
 	b := make([]byte, n)
@@ -160,11 +168,13 @@ func (s *Service) Authenticate(ctx context.Context, c ext.Credentials) (ext.Prin
 
 // find looks a token up, waiting up to Settle for one not replicated yet.
 func (s *Service) find(ctx context.Context, id string) (domain.APIToken, bool, error) {
-	settle := s.Settle
-	if settle == 0 {
-		settle = 2 * time.Second
-	}
-	deadline := time.Now().Add(settle)
+	deadline := time.Now().Add(s.Settle)
+	waiting := false
+	defer func() {
+		if waiting {
+			s.settlers.Add(-1)
+		}
+	}()
 	for {
 		list, err := s.Store.ListTokens(ctx)
 		if err != nil {
@@ -175,8 +185,15 @@ func (s *Service) find(ctx context.Context, id string) (domain.APIToken, bool, e
 				return t, true, nil
 			}
 		}
-		if time.Now().After(deadline) {
+		if !time.Now().Before(deadline) {
 			return domain.APIToken{}, false, nil
+		}
+		if !waiting {
+			if s.settlers.Add(1) > MaxSettlers {
+				s.settlers.Add(-1)
+				return domain.APIToken{}, false, nil
+			}
+			waiting = true
 		}
 		select {
 		case <-ctx.Done():

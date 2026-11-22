@@ -127,11 +127,11 @@ func (s *Server) sink() ext.AuditSink {
 // passwordAuthenticator is the OSS login: the single admin password.
 type passwordAuthenticator struct{ a *auth.Service }
 
-func (p passwordAuthenticator) Authenticate(_ context.Context, c ext.Credentials) (ext.Principal, error) {
+func (p passwordAuthenticator) Authenticate(ctx context.Context, c ext.Credentials) (ext.Principal, error) {
 	if c.Username == "" {
 		return ext.Principal{}, ext.ErrUnauthenticated
 	}
-	if err := p.a.Verify(c.Username, c.Password); err != nil {
+	if err := p.a.VerifyFrom(auth.ClientFrom(ctx), c.Username, c.Password); err != nil {
 		return ext.Principal{}, err
 	}
 	return ext.Principal{ID: c.Username, Name: c.Username, Roles: []string{"admin"}}, nil
