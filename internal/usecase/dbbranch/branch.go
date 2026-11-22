@@ -68,7 +68,11 @@ func replicaList(nodes []string) string {
 // budget on record).
 func (s *Service) nodes(ctx context.Context) ([]domain.Node, error) {
 	if s.Nodes == nil {
-		return []domain.Node{{Name: s.Node, LastSeen: s.Clock(), System: domain.NodeSystem{Distro: s.Distro}}}, nil
+		n := domain.Node{Name: s.Node, LastSeen: s.Clock(), System: domain.NodeSystem{Distro: s.Distro}}
+		if s.HostMemory != nil {
+			n.MemoryMB, n.ArcMaxMB = s.HostMemory()
+		}
+		return []domain.Node{n}, nil
 	}
 	return s.Nodes.ListNodes(ctx)
 }
@@ -246,7 +250,7 @@ func (s *Service) markFailed(ctx context.Context, br domain.Branch, cause error)
 	return s.saveBranch(context.WithoutCancel(ctx), br)
 }
 
-func (s *Service) transitionBranch(ctx context.Context, name domain.Name, check func(domain.Branch) error, to domain.BranchStatus) (domain.Branch, error) {
+func (s *Service) transitionBranch(ctx context.Context, name domain.Name, check func(domain.Branch) error, to domain.BranchStatus, guards ...func(context.Context, domain.Branch) error) (domain.Branch, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	br, err := s.Store.GetBranch(ctx, name)
@@ -258,6 +262,11 @@ func (s *Service) transitionBranch(ctx context.Context, name domain.Name, check 
 	}
 	if err := check(br); err != nil {
 		return br, err
+	}
+	for _, g := range guards {
+		if err := g(ctx, br); err != nil {
+			return br, err
+		}
 	}
 	br.Status = to
 	return br, s.Store.PutBranch(ctx, br)

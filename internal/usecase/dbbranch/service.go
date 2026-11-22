@@ -57,6 +57,10 @@ type Service struct {
 	Distro string
 	// Nodes lists the cluster members. Nil on a single node.
 	Nodes domain.NodeStore
+	// HostMemory reports this machine's memory and ZFS ARC cap in MB, for
+	// placement on a single node (a cluster's nodes report them in their
+	// heartbeats). Nil: unknown, and the memory budget is not enforced.
+	HostMemory func() (memoryMB, arcMaxMB uint64)
 	// DownAfter is how long without a heartbeat marks a node down.
 	DownAfter time.Duration
 	Ports     PortRange

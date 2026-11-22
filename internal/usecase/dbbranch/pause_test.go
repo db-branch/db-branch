@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/usecase/dbbranch"
 )
 
 func TestPauseBranch_正常停止してデータを残したまま一時停止にする(t *testing.T) {
@@ -182,5 +183,67 @@ func TestDeleteBranch_一時停止中のブランチも消せる(t *testing.T) {
 	}
 	if _, err := e.store.GetBranch(ctx, name("x")); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("deleted: %v", err)
+	}
+}
+
+// 1024MB * 3/4 = 768MB = 2 branches of 128+256MB.
+func (e *env) smallHost() { e.svc.HostMemory = func() (uint64, uint64) { return 1024, 0 } }
+
+func TestCreateBranch_単一ノードでもホストのメモリ予算を超えるブランチは作れない(t *testing.T) {
+	e := newEnv(t)
+	e.withBase(t)
+	e.smallHost()
+	e.withBranch(t, "a")
+	e.withBranch(t, "b")
+	_, err := e.svc.CreateBranch(ctx, dbbranch.CreateBranchRequest{Name: name("c"), Base: name("prod")}, nil)
+	if !errors.Is(err, domain.ErrNoCapacity) {
+		t.Fatalf("err = %v, want ErrNoCapacity", err)
+	}
+}
+
+func TestCreateBranch_一時停止中のブランチはメモリ予算に数えない(t *testing.T) {
+	e := newEnv(t)
+	e.withBase(t)
+	e.smallHost()
+	e.withBranch(t, "a")
+	e.withBranch(t, "b")
+	if _, err := e.svc.PauseBranch(ctx, name("a"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.CreateBranch(ctx, dbbranch.CreateBranchRequest{Name: name("c"), Base: name("prod")}, nil); err != nil {
+		t.Fatalf("a paused branch frees its slot: %v", err)
+	}
+}
+
+func TestResumeBranch_メモリ不足時にErrNoCapacityで拒否し一時停止のまま残す(t *testing.T) {
+	e := newEnv(t)
+	e.withBase(t)
+	e.smallHost()
+	e.withBranch(t, "a")
+	e.withBranch(t, "b")
+	if _, err := e.svc.PauseBranch(ctx, name("a"), nil); err != nil {
+		t.Fatal(err)
+	}
+	e.withBranch(t, "c")
+	e.j.entries = nil
+	_, err := e.svc.ResumeBranch(ctx, name("a"), nil)
+	if !errors.Is(err, domain.ErrNoCapacity) {
+		t.Fatalf("err = %v, want ErrNoCapacity", err)
+	}
+	got, _ := e.store.GetBranch(ctx, name("a"))
+	if got.Status != domain.BranchPaused {
+		t.Errorf("status = %s, want paused", got.Status)
+	}
+	for _, en := range e.j.entries {
+		if en == "start branch-a" {
+			t.Errorf("the server must not start: %q", e.j.entries)
+		}
+	}
+	// Making room lets it resume.
+	if _, err := e.svc.PauseBranch(ctx, name("b"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.ResumeBranch(ctx, name("a"), nil); err != nil {
+		t.Fatalf("with room: %v", err)
 	}
 }

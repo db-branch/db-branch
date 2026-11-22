@@ -99,12 +99,32 @@ func (n Node) BranchBudgetMB() float64 {
 	return max(budget, 0)
 }
 
-// Choose returns the chosen node's name.
-func (p Placement) Choose() (string, error) {
+// running counts the branches whose server holds memory, by node. A paused
+// branch keeps its data but runs nothing, so it takes no memory budget.
+func (p Placement) running() map[string]int {
 	count := map[string]int{}
 	for _, b := range p.Branches {
-		count[b.Node]++
+		if b.Status != BranchPaused {
+			count[b.Node]++
+		}
 	}
+	return count
+}
+
+// NodeFits reports whether the named node is up and has memory left for one
+// more running branch (a paused branch resuming on it, for example).
+func (p Placement) NodeFits(name string) bool {
+	for _, n := range p.Nodes {
+		if n.Name == name {
+			return p.fits(n, p.running()[name])
+		}
+	}
+	return false
+}
+
+// Choose returns the chosen node's name.
+func (p Placement) Choose() (string, error) {
+	count := p.running()
 	nodes := map[string]Node{}
 	for _, n := range p.Nodes {
 		nodes[n.Name] = n
