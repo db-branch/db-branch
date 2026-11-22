@@ -252,11 +252,12 @@ type failingRevocations struct{ err error }
 func (f failingRevocations) Revoke(string, time.Time, time.Time) error { return f.err }
 func (failingRevocations) Revoked(string) bool                         { return false }
 
-func TestConsole_ログアウトが他ノードに記録できなければ503で知らせクラスタ更新中は従来どおり204(t *testing.T) {
+func TestConsole_ログアウトが他ノードに記録できなければ503でセッションを残し_クラスタ更新中は従来どおり204(t *testing.T) {
 	for _, tc := range []struct {
-		err  error
-		want int
-	}{{errors.New("no leader"), 503}, {domain.ErrClusterUpgrading, 204}} {
+		err         error
+		want        int
+		stillSignin int
+	}{{errors.New("no leader"), 503, 200}, {domain.ErrClusterUpgrading, 204, 401}} {
 		f := newFixture(t)
 		f.srv.Auth.Revocations = failingRevocations{err: tc.err}
 		cookie, csrf := login(t, f)
@@ -264,8 +265,8 @@ func TestConsole_ログアウトが他ノードに記録できなければ503で
 		if resp.StatusCode != tc.want {
 			t.Errorf("%v: logout = %d, want %d", tc.err, resp.StatusCode, tc.want)
 		}
-		if after, _ := send(t, f.srv.Handler(false), "GET", "/v1/auth/session", nil, withSession(cookie, "")); after.StatusCode != 401 {
-			t.Errorf("%v: session after logout = %d, want 401 (ended on this node)", tc.err, after.StatusCode)
+		if after, _ := send(t, f.srv.Handler(false), "GET", "/v1/auth/session", nil, withSession(cookie, "")); after.StatusCode != tc.stillSignin {
+			t.Errorf("%v: session after logout = %d, want %d", tc.err, after.StatusCode, tc.stillSignin)
 		}
 	}
 }

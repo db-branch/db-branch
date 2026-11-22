@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/db-branch/db-branch/internal/domain"
 )
 
 var (
@@ -423,17 +425,32 @@ func (s *Service) Session(token string) (Session, error) {
 }
 
 // Logout ends a session. It is recorded in Revocations so that every node
-// refuses the cookie. The session always ends on this node; the error says
-// the shared record could not be written (domain.ErrClusterUpgrading while a
-// node is below protocol 24, or a failed write), so the caller can tell the
-// user that other nodes may still accept the cookie.
+// refuses the cookie, and the record outlives any renewed copy of the token
+// (a renewal keeps the session id and moves the expiry out by at most one TTL).
+//
+// If the shared record cannot be written the session is left as it was and the
+// error is returned, so the caller can retry: ending it on this node alone
+// would make a retry impossible while other nodes still accept the cookie.
+// The exception is domain.ErrClusterUpgrading (a node below protocol 24): the
+// session then ends on this node only, as it did before the shared list.
 func (s *Service) Logout(token string) error {
 	sess, err := s.Session(token)
 	if err != nil {
 		return nil
 	}
 	now := s.Clock()
+	until := sess.ExpiresAt
+	if renewed := now.Add(s.ttl()); renewed.After(until) {
+		until = renewed
+	}
+	var shared error
+	if s.Revocations != nil { // outside the lock: this may wait for the cluster
+		if shared = s.Revocations.Revoke(sess.id, until, now); shared != nil && !errors.Is(shared, domain.ErrClusterUpgrading) {
+			return shared
+		}
+	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.revoked == nil {
 		s.revoked = map[string]time.Time{}
 	}
@@ -442,12 +459,8 @@ func (s *Service) Logout(token string) error {
 			delete(s.revoked, id)
 		}
 	}
-	s.revoked[sess.id] = sess.ExpiresAt
-	s.mu.Unlock()
-	if s.Revocations != nil { // outside the lock: this may wait for the cluster
-		return s.Revocations.Revoke(sess.id, sess.ExpiresAt, now)
-	}
-	return nil
+	s.revoked[sess.id] = until
+	return shared
 }
 
 // ChangePassword sets a new password, which ends every session; the caller

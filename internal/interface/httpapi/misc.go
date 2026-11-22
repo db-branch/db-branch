@@ -363,18 +363,16 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	var revokeErr error
 	if sess, ok := s.current(r); ok {
-		revokeErr = s.Auth.Logout(sess.Token)
+		// Any failure but a cluster still upgrading (where the logout holds on
+		// this node only, as it always did) leaves the session open: the
+		// cookie may still work on other nodes, so keep it and let the caller retry.
+		if err := s.Auth.Logout(sess.Token); err != nil && !errors.Is(err, domain.ErrClusterUpgrading) {
+			writeError(w, http.StatusServiceUnavailable, "logout_not_recorded", "the logout could not be recorded for every node; the session is still open, try again")
+			return
+		}
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
-	// While the cluster upgrades the logout holds on this node only (as it
-	// always did). Any other failure is reported: the cookie may still work
-	// on other nodes, so the caller should retry.
-	if revokeErr != nil && !errors.Is(revokeErr, domain.ErrClusterUpgrading) {
-		writeError(w, http.StatusServiceUnavailable, "logout_not_recorded", "signed out here, but the logout could not be recorded for the other nodes; try again")
-		return
-	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
