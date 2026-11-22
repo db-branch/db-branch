@@ -37,10 +37,7 @@ func attachRuntimeModules(a *App, cfg config.Config, log *slog.Logger) (engines,
 	catalogs := map[domain.Engine]modcatalog.Source{}
 	offer = func() { offerModuleRuntimes(a, catalogs) }
 	loader := runtimemodule.Loader{AllowUnsigned: cfg.AllowUnsignedRuntimes}
-	clustered := false
-	if cc, err := LoadClusterConfig(cfg); err == nil && cc != nil {
-		clustered = true
-	}
+	clustered := isClustered(cfg)
 	for _, r := range loader.LoadAll() {
 		if r.Err != nil {
 			log.Error("runtime module not loaded", "engine", r.Engine, "err", r.Err)

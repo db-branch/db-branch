@@ -204,6 +204,8 @@ func (s ModuleStore) Commit(stageDir, engine string, upgrade bool) error {
 		return err
 	}
 
+	s.sweepBackups(root)
+
 	dest := filepath.Join(root, engine)
 	_, statErr := os.Lstat(dest)
 	if !upgrade {
@@ -222,7 +224,10 @@ func (s ModuleStore) Commit(stageDir, engine string, upgrade bool) error {
 			}
 			return err
 		}
-		return syncDir(root)
+		// The module is in place; a failed directory sync must not be reported
+		// as a failed commit (the caller would drop the newly trusted key).
+		_ = syncDir(root)
+		return nil
 	}
 	if statErr != nil {
 		if errors.Is(statErr, os.ErrNotExist) {
@@ -246,6 +251,20 @@ func (s ModuleStore) Commit(stageDir, engine string, upgrade bool) error {
 		return err
 	}
 	return s.commitUpgradeFallback(root, cleanStage, dest)
+}
+
+// sweepBackups removes .old-* backups that an earlier upgrade could not delete.
+// The caller holds the store lock, so no upgrade is using one.
+func (s ModuleStore) sweepBackups(root string) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".old-") {
+			_ = s.removeAllFn()(filepath.Join(root, e.Name()))
+		}
+	}
 }
 
 func (s ModuleStore) commitUpgradeFallback(root, stageDir, dest string) error {

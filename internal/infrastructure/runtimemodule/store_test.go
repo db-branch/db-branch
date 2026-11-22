@@ -477,3 +477,19 @@ func TestModuleStoreCommit_入れ替え後の旧ディレクトリ削除に失�
 		})
 	}
 }
+
+func TestModuleStoreCommit_前回の入れ替えで残った古いバックアップを次のコミットで掃除する(t *testing.T) {
+	env := newStoreEnv(t)
+	leftover := filepath.Join(env.root, ".old-deadbeef")
+	if err := os.MkdirAll(filepath.Join(leftover, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mod := env.stageVersion(t, "clickhouse", "0.1.0")
+	defer mod.Cleanup()
+	if err := env.store.Commit(mod.StageDir, "clickhouse", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(leftover); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("残骸 %s が残っている: %v", leftover, err)
+	}
+}

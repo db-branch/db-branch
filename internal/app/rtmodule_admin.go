@@ -61,10 +61,7 @@ func (n Node) RuntimeModules(cfg config.Config, prompter rtmodule.TrustPrompter)
 		usage:         runtimeUsageChecker{cfg: cfg},
 		prompter:      prompter,
 		restarter:     nodeRestarter{fn: n.Restart},
-		clustered: func() bool {
-			cc, err := LoadClusterConfig(cfg)
-			return err == nil && cc != nil
-		},
+		clustered:     func() bool { return isClustered(cfg) },
 	})
 }
 
@@ -350,4 +347,11 @@ func (u runtimeUsageChecker) InUse(ctx context.Context, engine domain.Engine) ([
 func runtimeEngine(raw string) domain.Engine {
 	eng, _, _ := strings.Cut(raw, "@")
 	return domain.Engine(eng)
+}
+
+// isClustered reports whether this node is a cluster member. An unreadable
+// cluster config counts as clustered: warning too often beats not warning.
+func isClustered(cfg config.Config) bool {
+	cc, err := LoadClusterConfig(cfg)
+	return err != nil || cc != nil
 }
