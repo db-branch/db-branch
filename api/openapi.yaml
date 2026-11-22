@@ -1993,6 +1993,49 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/cluster/nodes/{name}:
+    delete:
+      tags: [cluster]
+      operationId: removeClusterNode
+      summary: Remove a node from the cluster
+      x-dbb-action: cluster.remove
+      x-dbb-token-scopes: [full]
+      description: |-
+        Takes a failed or retired node out of the cluster: out of the Raft configuration and out of the node list. The leader does it (a follower forwards the request). The leader itself cannot be removed (run it on another node), and a voter is not removed when the voters left would not have a healthy majority (`409 conflict`).
+
+        While the node still holds the origin of a base, a copy of a base or a branch, the request is refused with `409 in_use` listing them. With `force=true` the records of those are forgotten (branches on the node, bases whose origin was on it, the node's entries in other bases' copies); the data on the node is not touched. A base whose origin was on the node stays (`409 in_use`) while branches on other nodes derive from it. The removal can be repeated after a failure.
+
+        **Action:** `cluster.remove`. Needs a console session of an admin, the local socket, or a `full` token.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: The node name.
+          schema: {type: string}
+        - name: force
+          in: query
+          required: false
+          description: Forget the records of what the node still holds instead of refusing.
+          schema: {type: boolean, default: false}
+      responses:
+        '200':
+          description: The node is removed; what a forced removal forgot.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ClusterNodeRemoval'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: 'not_found: no such node.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: 'not_clustered, conflict (the leader itself, or no healthy majority would be left) or in_use (the node still holds bases or branches).'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503': {$ref: '#/components/responses/Unavailable'}
   /v1/metrics:
     get:
       tags: [monitoring]
@@ -4334,6 +4377,7 @@ components:
         mode:
           type: string
           enum: [single, cluster]
+        self: {type: string, description: The name of the node that answered.}
         leader: {type: string}
         protocol:
           type: integer
@@ -4342,7 +4386,7 @@ components:
         nodes:
           type: array
           items: {$ref: '#/components/schemas/ClusterNode'}
-      required: [mode, leader, protocol, service_ids, nodes]
+      required: [mode, self, leader, protocol, service_ids, nodes]
       example:
         mode: cluster
         leader: node1
@@ -4384,6 +4428,15 @@ components:
         token: {type: string, description: Join token. A new one invalidates the previous.}
       required: [token]
       example: {token: <join token>}
+    ClusterNodeRemoval:
+      type: object
+      properties:
+        branches: {type: array, items: {type: string}, description: Branches whose records were forgotten (they lived on the node).}
+        bases: {type: array, items: {type: string}, description: Bases whose records were forgotten (their origin was on the node).}
+        replicas: {type: array, items: {type: string}, description: Bases that kept a copy on the node (the reference was forgotten).}
+        orphaned: {type: array, items: {type: string}, description: 'Forgotten bases that still have copies on other nodes (those datasets stay on disk there, unmanaged).'}
+      required: [branches, bases, replicas, orphaned]
+      example: {branches: [], bases: [], replicas: [], orphaned: []}
     Capabilities:
       type: object
       properties:

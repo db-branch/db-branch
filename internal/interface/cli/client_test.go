@@ -1213,3 +1213,73 @@ func TestRuntimeコマンド_このプロセスが知らないエンジンの判
 		t.Errorf("branch create --runtime: %d %q", code, errOut)
 	}
 }
+
+func TestClusterRemove_ノードを外して掃除した内訳を表示する(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["DELETE /v1/cluster/nodes/n3"] = map[string]any{"branches": []any{}, "bases": []any{}, "replicas": []any{}}
+	code, out, errOut := runAPI(t, api, "cluster", "remove", "n3")
+	if code != 0 || !strings.Contains(out, "Removed node n3") || strings.Contains(out, "Forgot") {
+		t.Fatalf("%d %q %q", code, out, errOut)
+	}
+	api.answers["DELETE /v1/cluster/nodes/n3?force=true"] = map[string]any{"branches": []any{"b1", "b2"}, "bases": []any{"origin"}, "replicas": []any{"copied"}, "orphaned": []any{"origin"}}
+	code, out, errOut = runAPI(t, api, "cluster", "remove", "n3", "--force")
+	for _, want := range []string{"Removed node n3", "branches: b1, b2", "bases: origin", "copies of bases: copied", "Copies of origin remain on other nodes"} {
+		if code != 0 || !strings.Contains(out, want) {
+			t.Errorf("force lacks %q: %d %q %q", want, code, out, errOut)
+		}
+	}
+}
+
+func TestClusterRemove_拒否されたら失敗で終わる(t *testing.T) {
+	api := newFakeAPI()
+	api.errors["DELETE /v1/cluster/nodes/n3"] = errors.New("in_use: node n3 still holds bases")
+	if code, _, errOut := runAPI(t, api, "cluster", "remove", "n3"); code == 0 || !strings.Contains(errOut, "still holds") {
+		t.Fatalf("%d %q", code, errOut)
+	}
+}
+
+func TestClusterLeave_このノード自身を外す(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["GET /v1/cluster"] = map[string]any{"mode": "cluster", "self": "n2", "leader": "n1"}
+	api.answers["DELETE /v1/cluster/nodes/n2"] = map[string]any{"branches": []any{}, "bases": []any{}, "replicas": []any{}}
+	if code, out, errOut := runAPI(t, api, "cluster", "leave"); code != 0 || !strings.Contains(out, "Removed node n2") {
+		t.Fatalf("%d %q %q", code, out, errOut)
+	}
+	api.answers["DELETE /v1/cluster/nodes/n2?force=true"] = api.answers["DELETE /v1/cluster/nodes/n2"]
+	if code, _, errOut := runAPI(t, api, "cluster", "leave", "--force"); code != 0 {
+		t.Fatalf("force: %d %q", code, errOut)
+	}
+}
+
+func TestClusterLeave_リーダーと単一ノードでは外さない(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["GET /v1/cluster"] = map[string]any{"mode": "cluster", "self": "n1", "leader": "n1"}
+	if code, _, errOut := runAPI(t, api, "cluster", "leave"); code == 0 || !strings.Contains(errOut, "leads the cluster") {
+		t.Fatalf("leader: %d %q", code, errOut)
+	}
+	api.answers["GET /v1/cluster"] = map[string]any{"mode": "single", "self": "n1", "leader": "n1"}
+	if code, _, errOut := runAPI(t, api, "cluster", "leave"); code == 0 || !strings.Contains(errOut, "not in a cluster") {
+		t.Fatalf("single: %d %q", code, errOut)
+	}
+	for _, r := range api.requests {
+		if strings.HasPrefix(r, "DELETE") {
+			t.Fatalf("nothing may be deleted: %v", api.requests)
+		}
+	}
+}
+
+func TestClusterLeave_自分の名前を返さない古いエージェントでは外さない(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["GET /v1/cluster"] = map[string]any{"mode": "cluster", "leader": "n1"}
+	if code, _, errOut := runAPI(t, api, "cluster", "leave"); code == 0 || !strings.Contains(errOut, "does not report its name") {
+		t.Fatalf("%d %q", code, errOut)
+	}
+}
+
+func TestClusterRemove_ノード名はパスとしてエスケープする(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["DELETE /v1/cluster/nodes/a%2Fb%3Fc"] = map[string]any{}
+	if code, _, errOut := runAPI(t, api, "cluster", "remove", "a/b?c"); code != 0 {
+		t.Fatalf("%d %q (requests %v)", code, errOut, api.requests)
+	}
+}

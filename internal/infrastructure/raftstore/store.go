@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"time"
 
@@ -191,6 +192,27 @@ func (s *Store) Promote(_ context.Context, id string) error {
 // Demote makes a voter a non-voter (leader only); it returns once committed.
 func (s *Store) Demote(_ context.Context, id string) error {
 	return s.raft.DemoteVoter(raft.ServerID(id), 0, 10*time.Second).Error()
+}
+
+// RemoveServer takes a member out of the Raft configuration (leader only); it
+// returns once committed. A node that is not a member is not an error, so a
+// removal can be run again.
+func (s *Store) RemoveServer(_ context.Context, id string) error {
+	if !s.IsLeader() {
+		return domain.ErrNoLeader
+	}
+	f := s.raft.GetConfiguration()
+	if err := f.Error(); err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(f.Configuration().Servers, func(srv raft.Server) bool { return string(srv.ID) == id }) {
+		return nil
+	}
+	err := s.raft.RemoveServer(raft.ServerID(id), 0, 10*time.Second).Error()
+	if errors.Is(err, raft.ErrNotLeader) || errors.Is(err, raft.ErrLeadershipLost) {
+		return fmt.Errorf("%w: %v", domain.ErrNoLeader, err)
+	}
+	return err
 }
 
 // IsLeader reports whether this node currently leads.

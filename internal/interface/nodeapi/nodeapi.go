@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -136,6 +137,8 @@ func reply(w http.ResponseWriter, err error) {
 		w.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, domain.ErrNoLeader):
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	case errors.Is(err, domain.ErrNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, domain.ErrRolloutRunning):
 		http.Error(w, err.Error(), http.StatusLocked) // 409 means "already exists" to Forward
 	case errors.Is(err, domain.ErrAlreadyExists):
@@ -211,6 +214,10 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err := s.checkMember(r.Context(), c); err != nil {
+		reply(w, err)
+		return
+	}
 	idx, err := s.Store.ApplyAt(r.Context(), c)
 	if err != nil {
 		reply(w, err)
@@ -218,6 +225,24 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(applyResponse{Index: idx})
+}
+
+// checkMember makes the leader refuse the heartbeat (put_node) of a node that
+// is not in the Raft configuration: a node taken out of the cluster that still
+// runs would otherwise bring its record back. A node is added to the
+// configuration (join) before it first reports itself.
+func (s *Server) checkMember(ctx context.Context, c raftstore.Command) error {
+	if c.Op != "put_node" || c.Node == nil || !s.Store.IsLeader() {
+		return nil
+	}
+	servers, err := s.Store.Servers(ctx)
+	if err != nil || len(servers) == 0 {
+		return nil // cannot tell: do not refuse
+	}
+	if !slices.ContainsFunc(servers, func(sv membership.Server) bool { return sv.ID == c.Node.Name }) {
+		return fmt.Errorf("node %s is not a member of the cluster: %w", c.Node.Name, domain.ErrNotFound)
+	}
+	return nil
 }
 
 // lazyWriter sends the 200 header with the first byte of the stream, so an

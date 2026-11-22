@@ -188,3 +188,94 @@ func TestStore_AddNonvoter_同名別アドレスは拒否し同アドレスは�
 		t.Errorf("after idempotent retry: voters=%d non=%d, want 2, 0", v, n)
 	}
 }
+
+func TestStore_RemoveServerで構成からノードを外せる(t *testing.T) {
+	c := growingCluster(t, 3)
+	c.joinAll(t)
+	if err := c.stores[0].RemoveServer(context.Background(), "node2"); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := c.stores[0].Servers(context.Background())
+	if err != nil || len(servers) != 2 {
+		t.Fatalf("servers = %v, %v", servers, err)
+	}
+	for _, s := range servers {
+		if s.ID == "node2" {
+			t.Fatal("node2 is still a member")
+		}
+	}
+	// A second removal of the same node changes nothing and does not fail.
+	if err := c.stores[0].RemoveServer(context.Background(), "node2"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStore_RemoveServerはリーダー以外ではErrNoLeader(t *testing.T) {
+	c := growingCluster(t, 2)
+	c.joinAll(t)
+	eventually(t, func() bool { return len(serversOf(c.stores[1])) == 2 })
+	err := c.stores[1].RemoveServer(context.Background(), "node0")
+	if !errors.Is(err, domain.ErrNoLeader) {
+		t.Fatalf("err = %v, want ErrNoLeader", err)
+	}
+}
+
+func serversOf(s *raftstore.Store) []membership.Server {
+	out, _ := s.Servers(context.Background())
+	return out
+}
+
+type removalCatalog struct{ *raftstore.Store }
+
+func (c removalCatalog) SetReplicaNodes(ctx context.Context, base domain.Name, nodes []string) error {
+	return c.SetBaseReplicaNodes(ctx, base, &nodes)
+}
+
+func TestRemover_実際のRaftで故障ノードを外し記録を掃除する(t *testing.T) {
+	c := growingCluster(t, 3)
+	c.joinAll(t)
+	ctx := context.Background()
+	l := c.stores[0]
+	for i, s := range c.stores {
+		if err := l.PutNode(ctx, domain.Node{Name: fmt.Sprintf("node%d", i), Address: s.APIAddress(), LastSeen: time.Now(), Protocol: raftstore.Protocol}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// node2 died: its heartbeat is old. It holds a copy of "prod" and a branch.
+	if err := l.PutNode(ctx, domain.Node{Name: "node2", LastSeen: time.Now().Add(-time.Hour), Protocol: raftstore.Protocol}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.PutBase(ctx, domain.Base{Name: name("prod"), Node: "node0", Snapshots: []domain.BaseSnapshot{{Name: "s1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.AddReplica(ctx, name("prod"), "s1", "node2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.PutBranch(ctx, domain.Branch{Name: name("dead"), Base: name("prod"), Node: "node2"}); err != nil {
+		t.Fatal(err)
+	}
+	r := membership.Remover{Roster: l, Catalog: removalCatalog{l}, Self: "node0", Clock: time.Now, DownAfter: 30 * time.Second}
+
+	if _, err := r.Remove(ctx, "node2", false); !errors.Is(err, domain.ErrInUse) {
+		t.Fatalf("without force: %v", err)
+	}
+	rep, err := r.Remove(ctx, "node2", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Branches) != 1 || len(rep.Replicas) != 1 || len(rep.Bases) != 0 {
+		t.Fatalf("report = %+v", rep)
+	}
+	servers, _ := l.Servers(ctx)
+	nodes, _ := l.ListNodes(ctx)
+	base, _ := l.GetBase(ctx, name("prod"))
+	branches, _ := l.ListBranches(ctx)
+	if len(servers) != 2 || len(nodes) != 2 || base.HoldsAny("node2") || len(branches) != 0 {
+		t.Fatalf("servers=%v nodes=%v base=%+v branches=%v", servers, nodes, base, branches)
+	}
+	eventually(t, func() bool { n, _ := c.stores[1].ListNodes(ctx); return len(n) == 2 })
+	// The same removal run again finds nothing left.
+	if _, err := r.Remove(ctx, "node2", true); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("again: %v", err)
+	}
+}

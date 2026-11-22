@@ -553,6 +553,7 @@ GET  /v1/runtimes/available?engine=mysql
 | `GET` | `/v1/cluster` | 200 | `cluster.get` |
 | `GET` | `/v1/cluster/nodes` | 200 一覧 | `cluster.get` |
 | `GET` | `/v1/cluster/nodes/{node}` | 200 | `cluster.get` |
+| `DELETE` | `/v1/cluster/nodes/{name}` | 200 外した内訳（`?force=true` で、残る記録を忘れて外す） | `cluster.remove` |
 
 ```json
 GET /v1/cluster

@@ -19,6 +19,7 @@ import (
 	"github.com/db-branch/db-branch/internal/interface/httpapi"
 	"github.com/db-branch/db-branch/internal/usecase/auth"
 	"github.com/db-branch/db-branch/internal/usecase/dbbranch"
+	"github.com/db-branch/db-branch/internal/usecase/membership"
 	"github.com/db-branch/db-branch/internal/usecase/operation"
 	"github.com/db-branch/db-branch/pkg/ext"
 )
@@ -38,6 +39,15 @@ type fakeCluster struct {
 	n2NoCheckpoints bool
 	// principals are the principal headers that reached the other node.
 	principals []string
+	// removals records RemoveNode calls ("node force").
+	removals   []string
+	removeErr  error
+	removeDone membership.RemoveReport
+}
+
+func (f *fakeCluster) RemoveNode(_ context.Context, node string, force bool) (membership.RemoveReport, error) {
+	f.removals = append(f.removals, fmt.Sprintf("%s %v", node, force))
+	return f.removeDone, f.removeErr
 }
 
 func (f *fakeCluster) AddRuntime(_ context.Context, ref domain.RuntimeRef) error {
@@ -98,7 +108,7 @@ func TestCluster_ノードとリーダーを返す(t *testing.T) {
 		{Name: "n2", Host: "192.0.2.11", Down: true, LastSeen: seen},
 	}}}
 	resp, body := f.do(t, "GET", "/v1/cluster", nil)
-	if resp.StatusCode != 200 || body["leader"] != "n1" || body["mode"] != "cluster" || body["protocol"] != 3.0 {
+	if resp.StatusCode != 200 || body["leader"] != "n1" || body["mode"] != "cluster" || body["protocol"] != 3.0 || body["self"] != "node1" {
 		t.Fatalf("%d %v", resp.StatusCode, body)
 	}
 	nodes := body["nodes"].([]any)
@@ -920,5 +930,58 @@ func TestHTTPAPI_Connectionヘッダ悪用でReverseProxy経由の転送先Princ
 	}
 	if got := n2Sink.actions(); len(got) != 0 {
 		t.Errorf("receiving node duplicated audit: %v", got)
+	}
+}
+
+func TestClusterRemoveNode_リーダーならその場でノードを外し掃除の内訳を返す(t *testing.T) {
+	f := newFixture(t)
+	fc := &fakeCluster{status: httpapi.ClusterStatus{Mode: "cluster", Leader: "node1"}, removeDone: membership.RemoveReport{Branches: []string{"b1"}}}
+	f.srv.Cluster = fc
+	resp, body := f.do(t, "DELETE", "/v1/cluster/nodes/n3?force=true", nil)
+	if resp.StatusCode != 200 || fmt.Sprint(body["branches"]) != "[b1]" {
+		t.Fatalf("%d %v", resp.StatusCode, body)
+	}
+	if len(fc.removals) != 1 || fc.removals[0] != "n3 true" || len(fc.forwarded) != 0 {
+		t.Fatalf("removals=%v forwarded=%v", fc.removals, fc.forwarded)
+	}
+	f.do(t, "DELETE", "/v1/cluster/nodes/n4", nil)
+	if fc.removals[1] != "n4 false" {
+		t.Fatalf("force must default to false: %v", fc.removals)
+	}
+}
+
+func TestClusterRemoveNode_フォロワーはリーダーへ転送する(t *testing.T) {
+	f := newFixture(t)
+	fc := &fakeCluster{status: httpapi.ClusterStatus{Mode: "cluster", Leader: "n2"}}
+	f.srv.Cluster = fc
+	f.do(t, "DELETE", "/v1/cluster/nodes/n3?force=true", nil)
+	if len(fc.removals) != 0 || len(fc.forwarded) != 1 || !strings.HasPrefix(fc.forwarded[0], "n2 DELETE /v1/cluster/nodes/n3 via=node1") {
+		t.Fatalf("removals=%v forwarded=%v", fc.removals, fc.forwarded)
+	}
+}
+
+func TestClusterRemoveNode_失敗の種類をエラーコードで返す(t *testing.T) {
+	cases := []struct {
+		name    string
+		cluster *fakeCluster
+		status  int
+		code    string
+	}{
+		{"単一ノード", nil, 409, "not_clustered"},
+		{"残存ベースあり", &fakeCluster{status: httpapi.ClusterStatus{Leader: "node1"}, removeErr: domain.ErrInUse}, 409, "in_use"},
+		{"クォーラム割れ", &fakeCluster{status: httpapi.ClusterStatus{Leader: "node1"}, removeErr: domain.ErrConflict}, 409, "conflict"},
+		{"未知のノード", &fakeCluster{status: httpapi.ClusterStatus{Leader: "node1"}, removeErr: domain.ErrNotFound}, 404, "not_found"},
+		{"リーダー不在", &fakeCluster{status: httpapi.ClusterStatus{Leader: ""}}, 503, "no_leader"},
+		{"状態を読めない", &fakeCluster{err: errors.New("down")}, 500, "internal"},
+	}
+	for _, c := range cases {
+		f := newFixture(t)
+		if c.cluster != nil {
+			f.srv.Cluster = c.cluster
+		}
+		resp, body := f.do(t, "DELETE", "/v1/cluster/nodes/n3", nil)
+		if resp.StatusCode != c.status || errCode(body) != c.code {
+			t.Errorf("%s: %d %v", c.name, resp.StatusCode, body)
+		}
 	}
 }

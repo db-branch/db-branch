@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -628,5 +629,21 @@ func TestFSM_migrate_branch_ownerで所有者を原子的に移行しput_branch�
 	}
 	if got = g.State().Branches["x"]; got.Owner != "token:abc" || got.OwnerName != "ci" {
 		t.Errorf("after restore = %+v", got)
+	}
+}
+
+func TestProtocol_未使用の版を予約せず新機能は現行より大きい版を割り当てる(t *testing.T) {
+	src, err := os.ReadFile("fsm.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(src), "reserved for") {
+		t.Fatal("fsm.go reserves protocol numbers; new features take the next number above Protocol instead")
+	}
+	// Every protocol a domain constant names is one this binary speaks.
+	for _, p := range []int{domain.ProtocolBranchRuntime, domain.ProtocolBranchPause, domain.ProtocolRuntimeModules, domain.ProtocolModuleForget, domain.ProtocolBranchOwnerID} {
+		if p > raftstore.Protocol {
+			t.Fatalf("protocol %d is above Protocol %d", p, raftstore.Protocol)
+		}
 	}
 }
