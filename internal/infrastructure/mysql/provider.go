@@ -83,10 +83,17 @@ func (m *Server) quiesce(ctx context.Context, s domain.Server, mode domain.StopM
 
 // verifyShutdown checks the error log says the last stop completed: a
 // "Shutdown complete" after the last time the server started or came up.
+// MySQL 5.6/5.7 do not log "starting as process", so InnoDB's start-up
+// line ("Initializing buffer pool", never logged while stopping) is also
+// checked to catch crashes before "ready for connections".
 func (m *Server) verifyShutdown(_ context.Context, s domain.Server) error {
 	b, _ := os.ReadFile(m.errLog(s))
 	log := string(b)
-	up := max(strings.LastIndex(log, "ready for connections"), strings.LastIndex(log, "starting as process"))
+	up := max(
+		strings.LastIndex(log, "ready for connections"),
+		strings.LastIndex(log, "starting as process"),
+		strings.LastIndex(log, "Initializing buffer pool"),
+	)
 	down := strings.LastIndex(log, "Shutdown complete")
 	if down < 0 || down < up {
 		return fmt.Errorf("%w: %s: the error log does not end with a completed shutdown", domain.ErrUncleanShutdown, s.ID)

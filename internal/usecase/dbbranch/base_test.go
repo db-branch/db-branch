@@ -303,3 +303,42 @@ func (r *recordingStorage) Create(ctx context.Context, ds string, props map[stri
 	*r.props = props
 	return r.fakeStorage.Create(ctx, ds, props)
 }
+
+func TestCreateBaseとSnapshotBase_途中で失敗したとき起動済みサーバーを放置しない(t *testing.T) {
+	// CreateBase: Load, UpdateStats, or StopClean failure must stop the base server.
+	for _, op := range []string{"load", "analyze", "stop-clean"} {
+		e := newEnv(t)
+		e.server.failOn = op
+		if _, err := e.svc.CreateBase(ctx, dbbranch.CreateBaseRequest{Name: name("prod"), Runtime: mysql84, Dump: "/d.sql"}, nil); err == nil {
+			t.Fatalf("CreateBase(%s): want error", op)
+		}
+		if e.server.running["base-prod"] {
+			t.Errorf("CreateBase(%s): base server left running: %q", op, e.j.entries)
+		}
+	}
+
+	// SnapshotBase on a stopped base: if UpdateStats or StopClean fails after starting it, stop it again.
+	for _, op := range []string{"analyze", "stop-clean"} {
+		e := newEnv(t)
+		e.withBase(t)
+		e.server.failOn = op
+		if _, err := e.svc.SnapshotBase(ctx, name("prod"), nil); err == nil {
+			t.Fatalf("SnapshotBase(%s): want error", op)
+		}
+		if e.server.running["base-prod"] {
+			t.Errorf("SnapshotBase(%s): stopped base left running: %q", op, e.j.entries)
+		}
+	}
+
+	// SnapshotBase on a running base: if UpdateStats fails, do not start it a second time.
+	er := newEnv(t)
+	er.withBase(t)
+	er.server.running["base-prod"] = true
+	er.server.failOn = "analyze"
+	if _, err := er.svc.SnapshotBase(ctx, name("prod"), nil); err == nil {
+		t.Fatal("SnapshotBase running (analyze): want error")
+	}
+	if er.j.has("start base-prod") {
+		t.Errorf("SnapshotBase restarted an already-running base: %q", er.j.entries)
+	}
+}

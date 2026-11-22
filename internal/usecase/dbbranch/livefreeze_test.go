@@ -368,3 +368,176 @@ func TestReconcile_凍結を解除できなければ再開せず失われたま�
 		t.Errorf("status after the retry = %s", got.Status)
 	}
 }
+
+func TestRecover_BranchReadyでownUserより先にreleaseFreezeが呼ばれる(t *testing.T) {
+	// Case 1: server already running, legacy shared user -> postfreeze must precede ownUser and putLoginRight.
+	z := newZEnv(t)
+	z.branch(t)
+	z.freezing(&freezeProvider{liveFrz: true})
+	br, err := z.store.GetBranch(ctx, name("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	br.User = "branch" // dbbranch.BranchUser
+	if err := z.store.PutBranch(ctx, br); err != nil {
+		t.Fatal(err)
+	}
+	if err := z.sim.SetProps(ctx, live, map[string]string{domain.PropFreeze: "on"}); err != nil {
+		t.Fatal(err)
+	}
+	z.j.entries = nil
+	if err := z.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	post, exec := z.at("postfreeze "), z.at("exec branch-x")
+	if post < 0 || exec < 0 || post > exec {
+		t.Errorf("running branch: want postfreeze before exec (ownUser/putLoginRight), got %q", z.j.entries)
+	}
+
+	// Case 2: server was down -> start < postfreeze < exec (putLoginRight).
+	z2 := newZEnv(t)
+	z2.branch(t)
+	z2.freezing(&freezeProvider{liveFrz: true})
+	if err := z2.sim.SetProps(ctx, live, map[string]string{domain.PropFreeze: "on"}); err != nil {
+		t.Fatal(err)
+	}
+	z2.restart()
+	z2.j.entries = nil
+	if err := z2.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	start2, post2, exec2 := z2.at("start "), z2.at("postfreeze "), z2.at("exec branch-x")
+	if start2 < 0 || post2 < 0 || exec2 < 0 || !(start2 < post2 && post2 < exec2) {
+		t.Errorf("stopped branch: want start < postfreeze < exec, got %q", z2.j.entries)
+	}
+
+	// Case 3: Reconcile on a lost branch whose server was down -> start < postfreeze < exec.
+	z3 := newZEnv(t)
+	z3.branch(t)
+	z3.freezing(&freezeProvider{liveFrz: true})
+	br3, _ := z3.store.GetBranch(ctx, name("x"))
+	br3.Status = domain.BranchLost
+	if err := z3.store.PutBranch(ctx, br3); err != nil {
+		t.Fatal(err)
+	}
+	if err := z3.sim.SetProps(ctx, live, map[string]string{domain.PropFreeze: "on"}); err != nil {
+		t.Fatal(err)
+	}
+	z3.restart()
+	z3.j.entries = nil
+	if err := z3.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	start3, post3, exec3 := z3.at("start "), z3.at("postfreeze "), z3.at("exec branch-x")
+	if start3 < 0 || post3 < 0 || exec3 < 0 || !(start3 < post3 && post3 < exec3) {
+		t.Errorf("Reconcile stopped lost branch: want start < postfreeze < exec, got %q", z3.j.entries)
+	}
+
+	// Case 4: Recover skips ownUser/putLoginRight when releaseFreeze fails (prevents deadlock on frozen server).
+	z4 := newZEnv(t)
+	z4.branch(t)
+	z4.freezing(&freezeProvider{liveFrz: true, postErr: errors.New("still frozen")})
+	br4, _ := z4.store.GetBranch(ctx, name("x"))
+	br4.User = "branch"
+	_ = z4.store.PutBranch(ctx, br4)
+	_ = z4.sim.SetProps(ctx, live, map[string]string{domain.PropFreeze: "on"})
+	z4.j.entries = nil
+	if err := z4.svc.Recover(ctx); err == nil {
+		t.Fatal("Case 4: want error when PostFreeze fails")
+	}
+	if z4.at("exec branch-x") >= 0 {
+		t.Errorf("Case 4: ran ownUser/putLoginRight while still frozen: %q", z4.j.entries)
+	}
+
+	// Case 5: Recover on a running frozen recorded branch with missing history module still releases freeze.
+	z5 := newZEnv(t)
+	z5.branch(t)
+	z5.freezing(&freezeProvider{liveFrz: true})
+	br5, _ := z5.store.GetBranch(ctx, name("x"))
+	br5.Record = true
+	// Record is fixed at creation, so replace the stored branch instead of updating it.
+	_ = z5.store.DeleteBranch(ctx, name("x"))
+	_ = z5.store.PutBranch(ctx, br5)
+	_ = z5.sim.SetProps(ctx, live, map[string]string{domain.PropFreeze: "on"})
+	z5.svc.ServerOptions = nil // causes ErrRecordRequired in branchSpec
+	z5.j.entries = nil
+	if err := z5.svc.Recover(ctx); err == nil {
+		t.Fatal("Case 5: want ErrRecordRequired")
+	}
+	if z5.at("postfreeze ") < 0 || z5.freezeIntent(t) != "" {
+		t.Errorf("Case 5: freeze was not released on running branch despite ErrRecordRequired: intent=%q journal=%q", z5.freezeIntent(t), z5.j.entries)
+	}
+
+	// Case 6: retryRecorded releases leftover freeze before putLoginRight once the module returns.
+	z6 := newZEnv(t)
+	z6.options()
+	z6.branch(t)
+	z6.freezing(&freezeProvider{liveFrz: true})
+	br6, _ := z6.store.GetBranch(ctx, name("x"))
+	br6.Record = true
+	br6.Status = domain.BranchFailed
+	br6.Error = "this branch records its changes (decided when it was created) and does not start without recording: missing"
+	_ = z6.store.DeleteBranch(ctx, name("x"))
+	_ = z6.store.PutBranch(ctx, br6)
+	_ = z6.sim.SetProps(ctx, live, map[string]string{domain.PropFreeze: "on"})
+	z6.restart()
+	z6.j.entries = nil
+	if err := z6.svc.Recover(ctx); err != nil {
+		t.Fatalf("Case 6: Recover = %v", err)
+	}
+	start6, post6, exec6 := z6.at("start "), z6.at("postfreeze "), z6.at("exec branch-x")
+	if start6 < 0 || post6 < 0 || exec6 < 0 || !(start6 < post6 && post6 < exec6) {
+		t.Errorf("Case 6 retryRecorded: want start < postfreeze < exec, got %q", z6.j.entries)
+	}
+}
+
+// A server started only to put its login right is stopped again when that
+// work fails, so a failed recovery leaves no process behind.
+func TestRecover_起動した復旧がfreeze解除かログイン修復で失敗したらサーバーを停止する(t *testing.T) {
+	recordedFailed := func(z *zenv) {
+		br, _ := z.store.GetBranch(ctx, name("x"))
+		br.Record = true
+		br.Status = domain.BranchFailed
+		br.Error = "this branch records its changes (decided when it was created) and does not start without recording: missing"
+		_ = z.store.DeleteBranch(ctx, name("x"))
+		_ = z.store.PutBranch(ctx, br)
+	}
+	lost := func(z *zenv) {
+		br, _ := z.store.GetBranch(ctx, name("x"))
+		br.Status = domain.BranchLost
+		_ = z.store.PutBranch(ctx, br)
+	}
+	recover := func(z *zenv) error { return z.svc.Recover(ctx) }
+	reconcile := func(z *zenv) error { return z.svc.Reconcile(ctx) }
+	cases := []struct {
+		name  string
+		setup func(*zenv)
+		run   func(*zenv) error
+		prov  *freezeProvider
+		fail  string
+	}{
+		{"retryRecorded freeze解除失敗", recordedFailed, recover, &freezeProvider{liveFrz: true, postErr: errors.New("frozen")}, ""},
+		{"retryRecorded ログイン修復失敗", recordedFailed, recover, &freezeProvider{liveFrz: true}, "exec"},
+		{"reconcile freeze解除失敗", lost, reconcile, &freezeProvider{liveFrz: true, postErr: errors.New("frozen")}, ""},
+		{"reconcile ログイン修復失敗", lost, reconcile, &freezeProvider{liveFrz: true}, "exec"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			z := newZEnv(t)
+			z.options()
+			z.branch(t)
+			z.freezing(c.prov)
+			c.setup(z)
+			_ = z.sim.SetProps(ctx, live, map[string]string{domain.PropFreeze: "on"})
+			z.restart()
+			z.server.failOn = c.fail
+			z.j.entries = nil
+			if err := c.run(z); err == nil {
+				t.Fatal("want an error")
+			}
+			if z.at("start ") < 0 || z.at("stop branch-x immediate") < 0 {
+				t.Errorf("want the started server stopped, got %q", z.j.entries)
+			}
+		})
+	}
+}

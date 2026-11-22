@@ -305,15 +305,24 @@ func (s *Service) continueRestore(ctx context.Context, brp *domain.Branch, in re
 			return err
 		}
 	}
+	started := false
 	if running, _ := srv.Running(ctx, spec); !running {
 		if err := srv.Start(ctx, spec); err != nil {
 			return err
 		}
+		started = true
+	}
+	stopIfStarted := func() {
+		if started {
+			_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
+		}
 	}
 	if err := s.putLoginRight(ctx, br, srv, spec); err != nil {
+		stopIfStarted()
 		return err
 	}
 	if err := s.clearIntent(ctx, br.Name); err != nil {
+		stopIfStarted()
 		return err
 	}
 	s.collectLogged(ctx, br.Name)
@@ -350,7 +359,7 @@ func (s *Service) finishRestore(ctx context.Context, br domain.Branch, in restor
 	if hookErr != nil && s.Logf != nil {
 		s.Logf("branch %s: a module's work after the restore failed: %v", br.Name, hookErr)
 	}
-	return s.stopServer(ctx, srv, maint)
+	return s.stopServer(context.WithoutCancel(ctx), srv, maint)
 }
 
 // stopServer stops cleanly, or at once when that is not possible.
@@ -518,11 +527,29 @@ func (s *Service) retryRecorded(ctx context.Context, br domain.Branch) error {
 	if !br.Record || !strings.HasPrefix(br.Error, ErrRecordRequired.Error()) {
 		return nil
 	}
-	if err := s.ensureRunning(ctx, br); err != nil {
+	srv, spec, started, err := s.startServerIfDown(ctx, br)
+	if err != nil {
+		return err
+	}
+	stopIfStarted := func() {
+		if started {
+			_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
+		}
+	}
+	if err := s.releaseFreeze(ctx, br); err != nil {
+		stopIfStarted()
+		return err
+	}
+	if err := s.putLoginRight(ctx, br, srv, spec); err != nil {
+		stopIfStarted()
 		return err
 	}
 	br.Status, br.Error = domain.BranchReady, ""
-	return s.Store.PutBranch(ctx, br)
+	if err := s.Store.PutBranch(ctx, br); err != nil {
+		stopIfStarted()
+		return err
+	}
+	return nil
 }
 
 // resetBySwap decides how to reset: by rolling back when the live dataset has

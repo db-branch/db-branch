@@ -57,9 +57,10 @@ func (s *Service) doPause(ctx context.Context, br domain.Branch, report Reporter
 // keepRunning puts a branch whose pause failed back to ready (and running):
 // the data is untouched, so there is nothing to mark failed.
 func (s *Service) keepRunning(ctx context.Context, br domain.Branch, cause error) (domain.Branch, error) {
-	err := s.ensureRunning(ctx, br)
+	wctx := context.WithoutCancel(ctx)
+	err := s.ensureRunning(wctx, br)
 	br.Status = domain.BranchReady
-	return br, errors.Join(cause, err, s.Store.PutBranch(ctx, br))
+	return br, errors.Join(cause, err, s.Store.PutBranch(wctx, br))
 }
 
 // ResumeBranch starts a paused branch's server again. When it cannot start, the
@@ -76,8 +77,12 @@ func (s *Service) doResume(ctx context.Context, br domain.Branch, report Reporte
 	report.report("starting")
 	if err := s.ensureRunning(ctx, br); err != nil {
 		br.Status, br.Error = domain.BranchPaused, err.Error()
-		return br, errors.Join(err, s.Store.PutBranch(ctx, br))
+		return br, errors.Join(err, s.Store.PutBranch(context.WithoutCancel(ctx), br))
 	}
 	br.Status, br.Error = domain.BranchReady, ""
-	return br, s.Store.PutBranch(ctx, br)
+	if err := s.Store.PutBranch(ctx, br); err != nil {
+		_ = s.stopBranchImmediate(ctx, br)
+		return br, err
+	}
+	return br, nil
 }

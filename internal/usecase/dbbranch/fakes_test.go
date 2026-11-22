@@ -230,6 +230,9 @@ func (f *fakeServer) Exec(_ context.Context, s domain.Server, sql string) error 
 // ExecAs records the SQL like Exec and the login it ran as.
 func (f *fakeServer) ExecAs(ctx context.Context, s domain.Server, user, _, sql string) error {
 	f.ranAs = append(f.ranAs, user)
+	if err := f.fail("exec-as"); err != nil {
+		return err
+	}
 	return f.Exec(ctx, s, sql)
 }
 

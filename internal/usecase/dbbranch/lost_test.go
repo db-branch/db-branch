@@ -185,6 +185,20 @@ func Test失われたブランチまわりのストアや下回りの失敗は�
 			p.origin.server.failOn = "start"
 			return p.origin.svc.Reconcile(ctx)
 		},
+		"reconcile: login": func(p *pair) error {
+			_, _ = p.replica.svc.MarkLost(ctx)
+			p.origin.server.failOn = "exec"
+			return p.origin.svc.Reconcile(ctx)
+		},
+		"recreate: put ready": func(p *pair) error {
+			_, _ = p.replica.svc.MarkLost(ctx)
+			p.replica.svc.Store = &failingStore{Store: p.replica.store, failOn: "put-branch-ready"}
+			_, err := p.replica.svc.RecreateBranch(ctx, name("x"), nil)
+			if p.replica.server.running["branch-x"] {
+				t.Errorf("RecreateBranch left server running after PutBranch failure")
+			}
+			return err
+		},
 		"recreate: list branches": func(p *pair) error {
 			_, _ = p.replica.svc.MarkLost(ctx)
 			p.replica.svc.Store = &failingStore{Store: p.replica.store, failOn: "list-branches"}

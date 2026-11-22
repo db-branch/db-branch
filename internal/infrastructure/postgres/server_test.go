@@ -32,13 +32,18 @@ type fakeSystem struct {
 	initdb     func(dataDir string)
 	// outputs answers a call whose text contains the key with the value on stdout.
 	outputs map[string]string
+	// onCall runs before executing a call (e.g. to cancel ctx mid-command).
+	onCall func(call string)
 }
 
 func (f *fakeSystem) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return f.RunInput(ctx, nil, name, args...)
 }
 
-func (f *fakeSystem) RunInput(_ context.Context, in io.Reader, name string, args ...string) ([]byte, error) {
+func (f *fakeSystem) RunInput(ctx context.Context, in io.Reader, name string, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	parts := []string{name}
 	for _, a := range args {
 		if strings.HasPrefix(a, "/") && strings.Contains(a, "/bin/") {
@@ -48,6 +53,12 @@ func (f *fakeSystem) RunInput(_ context.Context, in io.Reader, name string, args
 	}
 	call := strings.Join(parts, " ")
 	f.calls = append(f.calls, call)
+	if f.onCall != nil {
+		f.onCall(call)
+		if ctx.Err() != nil {
+			return nil, &execx.Error{Command: call, Err: errors.New("signal: killed")}
+		}
+	}
 	if in != nil {
 		b, _ := io.ReadAll(in)
 		f.stdin = append(f.stdin, string(b))
@@ -535,5 +546,193 @@ func TestUpdateStats_全データベースをVACUUM_FREEZE_ANALYZEする(t *test
 	f.sys.failOn = "vacuumdb"
 	if err := f.srv.UpdateStats(ctx, f.spec); err == nil {
 		t.Error("failing vacuumdb: want error")
+	}
+}
+
+func TestStopClean_既に異常停止済みのサーバーに対してverifyShutdownを実行しErrUncleanShutdownを返す(t *testing.T) {
+	for label, mutate := range map[string]func(*fakeSystem){
+		"crashed":     func(s *fakeSystem) { s.state = "in production" },
+		"unit failed": func(s *fakeSystem) { s.stopResult = "signal" },
+		"controldata": func(s *fakeSystem) { s.failOn = "pg_controldata" },
+	} {
+		f := newFixture(t)
+		mutate(f.sys)
+		err := f.srv.Stop(ctx, f.spec, domain.StopClean)
+		if !errors.Is(err, domain.ErrUncleanShutdown) {
+			t.Errorf("%s: Stop(StopClean) = %v, want ErrUncleanShutdown", label, err)
+		}
+		if f.sys.called("systemctl stop") {
+			t.Errorf("%s: should not call systemctl stop on inactive unit: %q", label, f.sys.calls)
+		}
+	}
+
+	// Cleanly stopped previously: succeeds without calling systemctl stop.
+	clean := newFixture(t)
+	if err := clean.srv.Stop(ctx, clean.spec, domain.StopClean); err != nil {
+		t.Fatalf("cleanly stopped: %v", err)
+	}
+	if clean.sys.called("systemctl stop") || !clean.sys.called("pg_controldata") {
+		t.Errorf("cleanly stopped calls = %q", clean.sys.calls)
+	}
+
+	// StopImmediate on a stopped server skips shutdown verification.
+	imm := newFixture(t)
+	imm.sys.state = "in production"
+	imm.sys.stopResult = "signal"
+	if err := imm.srv.Stop(ctx, imm.spec, domain.StopImmediate); err != nil {
+		t.Fatalf("StopImmediate on stopped: %v", err)
+	}
+	if imm.sys.called("pg_controldata") {
+		t.Errorf("StopImmediate should not call pg_controldata: %q", imm.sys.calls)
+	}
+
+	// activating / deactivating states must NOT be treated as stopped.
+	for _, st := range []string{"activating", "deactivating"} {
+		fa := newFixture(t)
+		fa.sys.outputs = map[string]string{"--property=ActiveState": st + "\n"}
+		if err := fa.srv.Stop(ctx, fa.spec, domain.StopImmediate); err != nil {
+			t.Fatalf("%s StopImmediate: %v", st, err)
+		}
+		if !fa.sys.called("systemctl kill --signal=SIGKILL") {
+			t.Errorf("%s StopImmediate did not kill unit: %q", st, fa.sys.calls)
+		}
+
+		fc := newFixture(t)
+		fc.sys.outputs = map[string]string{"--property=ActiveState": st + "\n"}
+		if err := fc.srv.Stop(ctx, fc.spec, domain.StopClean); err != nil {
+			t.Fatalf("%s StopClean: %v", st, err)
+		}
+		if !fc.sys.called("systemctl stop") {
+			t.Errorf("%s StopClean did not stop unit: %q", st, fc.sys.calls)
+		}
+	}
+
+	// Cancelled ctx and systemctl show errors must NOT become nil or ErrUncleanShutdown.
+	fCan := newFixture(t)
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := fCan.srv.Stop(cctx, fCan.spec, domain.StopClean); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled StopClean = %v, want context.Canceled", err)
+	}
+	fShow := newFixture(t)
+	fShow.sys.failOn = "--property=ActiveState"
+	if err := fShow.srv.Stop(ctx, fShow.spec, domain.StopClean); err == nil || errors.Is(err, domain.ErrUncleanShutdown) {
+		t.Errorf("ActiveState error = %v, want non-UncleanShutdown error", err)
+	}
+	fRes := newFixture(t)
+	fRes.sys.failOn = "--property=Result"
+	if err := fRes.srv.Stop(ctx, fRes.spec, domain.StopClean); err == nil || errors.Is(err, domain.ErrUncleanShutdown) {
+		t.Errorf("Result error = %v, want non-UncleanShutdown error", err)
+	}
+	// Cancelled mid-pg_controldata returns context.Canceled, not ErrUncleanShutdown.
+	fCtrl := newFixture(t)
+	ctrlCtx, ctrlCancel := context.WithCancel(ctx)
+	fCtrl.sys.onCall = func(call string) {
+		if strings.Contains(call, "pg_controldata") {
+			ctrlCancel()
+		}
+	}
+	if err := fCtrl.srv.Stop(ctrlCtx, fCtrl.spec, domain.StopClean); !errors.Is(err, context.Canceled) {
+		t.Errorf("mid-controldata cancel = %v, want context.Canceled", err)
+	}
+}
+
+func TestStart_ctxキャンセル時に即座に待機中断し起動途中ユニットを停止する(t *testing.T) {
+	// Cancelled while waiting for postgres to become ready: stops polling right away and stops the unit.
+	f := newFixture(t)
+	f.sys.notReady = 1 << 30
+	f.srv.StartTimeout = time.Minute
+	f.srv.PollInterval = 5 * time.Second
+	cctx, cancel := context.WithCancel(ctx)
+	timer := time.AfterFunc(20*time.Millisecond, cancel)
+	defer timer.Stop()
+
+	begin := time.Now()
+	err := f.srv.Start(cctx, f.spec)
+	elapsed := time.Since(begin)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if elapsed > time.Second {
+		t.Errorf("Start waited %s after cancellation", elapsed)
+	}
+	if !f.sys.called("systemctl stop db-branch-postgres@base-prod.service") {
+		t.Errorf("in-flight unit was not stopped: %q", f.sys.calls)
+	}
+	if f.sys.active {
+		t.Error("unit should no longer be active after cancel")
+	}
+
+	// If graceful stop fails while aborting, falls back to SIGKILL.
+	fk := newFixture(t)
+	fk.sys.notReady = 1 << 30
+	fk.sys.failOn = "systemctl stop"
+	fk.srv.StartTimeout = time.Minute
+	fk.srv.PollInterval = 5 * time.Second
+	kctx, kcancel := context.WithCancel(ctx)
+	ktimer := time.AfterFunc(20*time.Millisecond, kcancel)
+	defer ktimer.Stop()
+	if err := fk.srv.Start(kctx, fk.spec); !errors.Is(err, context.Canceled) {
+		t.Fatalf("fallback err = %v, want context.Canceled", err)
+	}
+	if !fk.sys.called("systemctl kill --signal=SIGKILL db-branch-postgres@base-prod.service") {
+		t.Errorf("expected SIGKILL fallback when stop fails: %q", fk.sys.calls)
+	}
+
+	// Already cancelled before Start: does not start the unit.
+	fPre := newFixture(t)
+	preCtx, preCancel := context.WithCancel(ctx)
+	preCancel()
+	if err := fPre.srv.Start(preCtx, fPre.spec); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-cancelled err = %v, want context.Canceled", err)
+	}
+	if fPre.sys.called("systemctl start") {
+		t.Errorf("started unit despite cancelled ctx: %q", fPre.sys.calls)
+	}
+
+	// Timeout also stops the stuck unit.
+	ft := newFixture(t)
+	ft.sys.notReady = 1 << 30
+	ft.srv.StartTimeout = 10 * time.Millisecond
+	if err := ft.srv.Start(ctx, ft.spec); err == nil {
+		t.Fatal("timeout: want error")
+	}
+	if !ft.sys.called("systemctl stop db-branch-postgres@base-prod.service") || ft.sys.active {
+		t.Errorf("timed-out unit was left running: active=%v calls=%q", ft.sys.active, ft.sys.calls)
+	}
+
+	// Cancelled mid-"systemctl start": preserves context.Canceled and stops the unit.
+	fMid := newFixture(t)
+	midCtx, midCancel := context.WithCancel(ctx)
+	fMid.sys.onCall = func(call string) {
+		if strings.HasPrefix(call, "systemctl start") {
+			fMid.sys.active = true
+			midCancel()
+		}
+	}
+	if err := fMid.srv.Start(midCtx, fMid.spec); !errors.Is(err, context.Canceled) {
+		t.Fatalf("mid-start cancel err = %v, want context.Canceled", err)
+	}
+	if !fMid.sys.called("systemctl stop db-branch-postgres@base-prod.service") || fMid.sys.active {
+		t.Errorf("mid-start cancelled unit left running: active=%v calls=%q", fMid.sys.active, fMid.sys.calls)
+	}
+
+	// StartUpgraded cancelled: preserves context.Canceled, stops unit, and still collects journal excerpt.
+	fUp := newFixture(t)
+	fUp.sys.notReady = 1 << 30
+	fUp.srv.StartTimeout = time.Minute
+	fUp.srv.PollInterval = 5 * time.Second
+	upCtx, upCancel := context.WithCancel(ctx)
+	upTimer := time.AfterFunc(20*time.Millisecond, upCancel)
+	defer upTimer.Stop()
+	upLog, err := fUp.srv.StartUpgraded(upCtx, fUp.spec, domain.Login{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("StartUpgraded cancel err = %v, want context.Canceled", err)
+	}
+	if !strings.Contains(upLog.Excerpt, "FATAL: something") {
+		t.Errorf("StartUpgraded cancel excerpt = %q, want journal output", upLog.Excerpt)
+	}
+	if fUp.sys.active {
+		t.Error("StartUpgraded unit left active after cancel")
 	}
 }

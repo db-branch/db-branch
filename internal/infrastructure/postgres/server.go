@@ -161,6 +161,9 @@ func (p *Server) ready(ctx context.Context, s domain.Server) bool {
 
 // Start starts the unit and waits until postgres accepts connections.
 func (p *Server) Start(ctx context.Context, s domain.Server) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("start %s: %w", s.ID, err)
+	}
 	if p.CheckOwner != nil {
 		if err := p.CheckOwner(s.DataDir); err != nil {
 			return err
@@ -169,20 +172,85 @@ func (p *Server) Start(ctx context.Context, s domain.Server) error {
 	if err := p.writeConfig(s); err != nil {
 		return err
 	}
-	if _, err := p.Run.Run(ctx, "systemctl", "start", unit(s)); err != nil {
+	waitCtx, cancel := context.WithTimeout(ctx, p.StartTimeout)
+	defer cancel()
+	if _, err := p.Run.Run(waitCtx, "systemctl", "start", unit(s)); err != nil {
+		if ctx.Err() != nil || waitCtx.Err() != nil {
+			return p.abortStart(ctx, s)
+		}
 		return fmt.Errorf("start %s: %w: %s", s.ID, err, p.journal(ctx, s))
 	}
-	deadline := time.Now().Add(p.StartTimeout)
-	for !p.ready(ctx, s) {
-		if p.exited(ctx, s) {
-			return domain.StartFailure(s.ID, p.journal(ctx, s))
+	for !p.ready(waitCtx, s) {
+		if ctx.Err() != nil || waitCtx.Err() != nil {
+			return p.abortStart(ctx, s)
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not become ready within %s: %s", s.ID, p.StartTimeout, p.journal(ctx, s))
+		if p.exited(waitCtx, s) {
+			return domain.StartFailure(s.ID, p.journalFresh(ctx, s))
 		}
-		time.Sleep(p.PollInterval)
+		if err := sleepContext(waitCtx, p.PollInterval); err != nil {
+			return p.abortStart(ctx, s)
+		}
 	}
 	return nil
+}
+
+func (p *Server) abortStart(ctx context.Context, s domain.Server) error {
+	if err := ctx.Err(); err != nil {
+		p.stopAborted(ctx, s)
+		return fmt.Errorf("start %s: %w", s.ID, err)
+	}
+	j := p.journalFresh(ctx, s)
+	p.stopAborted(ctx, s)
+	return fmt.Errorf("%s did not become ready within %s: %s", s.ID, p.StartTimeout, j)
+}
+
+func (p *Server) journalFresh(ctx context.Context, s domain.Server) string {
+	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return p.journal(logCtx, s)
+}
+
+func (p *Server) runTimeout(base context.Context, d time.Duration, name string, args ...string) error {
+	c, cancel := context.WithTimeout(base, d)
+	defer cancel()
+	_, err := p.Run.Run(c, name, args...)
+	return err
+}
+
+// stopAborted stops a unit whose start was cancelled or timed out, using a
+// fresh context per command so one slow stop cannot starve SIGKILL/reset-failed.
+func (p *Server) stopAborted(ctx context.Context, s domain.Server) {
+	base := context.WithoutCancel(ctx)
+	if err := p.runTimeout(base, 30*time.Second, "systemctl", "stop", unit(s)); err != nil {
+		_ = p.runTimeout(base, 10*time.Second, "systemctl", "kill", "--signal=SIGKILL", unit(s))
+		_ = p.runTimeout(base, 10*time.Second, "systemctl", "stop", unit(s))
+	}
+	_ = p.runTimeout(base, 10*time.Second, "systemctl", "reset-failed", unit(s))
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+func (p *Server) activeState(ctx context.Context, s domain.Server) (string, error) {
+	out, err := p.Run.Run(ctx, "systemctl", "show", "--property=ActiveState", "--value", unit(s))
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // exited reports whether the unit has stopped for good, so there is nothing
@@ -190,8 +258,7 @@ func (p *Server) Start(ctx context.Context, s domain.Server) error {
 func (p *Server) exited(ctx context.Context, s domain.Server) bool {
 	// is-active exits non-zero for a stopped unit, and the runner then
 	// returns no output; show prints the state whatever it is.
-	out, err := p.Run.Run(ctx, "systemctl", "show", "--property=ActiveState", "--value", unit(s))
-	st := strings.TrimSpace(string(out))
+	st, err := p.activeState(ctx, s)
 	return err == nil && (st == "failed" || st == "inactive")
 }
 
@@ -210,8 +277,18 @@ func (p *Server) Running(ctx context.Context, s domain.Server) (bool, error) {
 // KillSignal), confirmed by the control file saying "shut down", so a
 // snapshot afterwards starts without recovery.
 func (p *Server) Stop(ctx context.Context, s domain.Server, mode domain.StopMode) error {
-	if ok, _ := p.Running(ctx, s); !ok {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	state, err := p.activeState(ctx, s)
+	if err != nil {
+		return fmt.Errorf("check %s: %w", s.ID, err)
+	}
+	if state == "inactive" || state == "failed" {
+		if mode == domain.StopImmediate {
+			return nil
+		}
+		return p.verifyStopped(ctx, s)
 	}
 	if mode == domain.StopImmediate {
 		_, _ = p.Run.Run(ctx, "systemctl", "kill", "--signal=SIGKILL", unit(s))
@@ -220,14 +297,28 @@ func (p *Server) Stop(ctx context.Context, s domain.Server, mode domain.StopMode
 		return nil
 	}
 	if _, err := p.Run.Run(ctx, "systemctl", "stop", unit(s)); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("stop %s: %w", s.ID, ctx.Err())
+		}
 		return fmt.Errorf("stop %s: %w", s.ID, err)
 	}
-	result, _ := p.Run.Run(ctx, "systemctl", "show", "--property=Result", "--value", unit(s))
-	name, args := p.tool(s, "pg_controldata", s.DataDir)
-	control, err := p.Run.Run(ctx, name, args...)
-	state := controlState(string(control))
-	if err != nil || strings.TrimSpace(string(result)) != "success" || state != "shut down" {
-		return fmt.Errorf("%w: %s (result=%s, cluster state=%q): %v", domain.ErrUncleanShutdown, s.ID, strings.TrimSpace(string(result)), state, err)
+	return p.verifyStopped(ctx, s)
+}
+
+// verifyStopped confirms a stopped unit finished a clean shutdown.
+func (p *Server) verifyStopped(ctx context.Context, s domain.Server) error {
+	result, err := p.Run.Run(ctx, "systemctl", "show", "--property=Result", "--value", unit(s))
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("check %s shutdown result: %w", s.ID, err)
+	}
+	if err := p.verifyShutdown(ctx, s); err != nil {
+		return err
+	}
+	if res := strings.TrimSpace(string(result)); res != "success" {
+		return fmt.Errorf("%w: %s (result=%s)", domain.ErrUncleanShutdown, s.ID, res)
 	}
 	return nil
 }

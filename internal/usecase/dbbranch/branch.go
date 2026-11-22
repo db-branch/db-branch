@@ -118,7 +118,11 @@ func (s *Service) CreateBranch(ctx context.Context, req CreateBranchRequest, rep
 		return br, s.fail(ctx, br, err)
 	}
 	br.Status = domain.BranchReady
-	return br, s.Store.PutBranch(ctx, br)
+	if err := s.Store.PutBranch(ctx, br); err != nil {
+		_ = s.stopBranchImmediate(ctx, br)
+		return br, err
+	}
+	return br, nil
 }
 
 func (s *Service) reserveBranch(ctx context.Context, req CreateBranchRequest) (domain.Branch, error) {
@@ -186,10 +190,17 @@ func (s *Service) buildBranch(ctx context.Context, br *domain.Branch, initSQL st
 	if err := srv.PrepareClone(ctx, spec); err != nil {
 		return err
 	}
+	started := false
+	defer func() {
+		if started {
+			_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
+		}
+	}()
 	report.report("starting")
 	if err := srv.Start(ctx, spec); err != nil {
 		return err
 	}
+	started = true
 	report.report("init_sql")
 	if err := srv.CreateUser(ctx, spec, br.User, br.Password); err != nil {
 		return err
@@ -204,12 +215,21 @@ func (s *Service) buildBranch(ctx context.Context, br *domain.Branch, initSQL st
 	if err := srv.Stop(ctx, spec, domain.StopClean); err != nil {
 		return err
 	}
+	started = false
 	report.report("snapshotting")
 	if err := s.Storage.Snapshot(ctx, domain.Snapshot{Dataset: ds, Name: ResetSnapshot}); err != nil {
 		return err
 	}
 	report.report("starting")
 	return srv.Start(ctx, spec)
+}
+
+func (s *Service) stopBranchImmediate(ctx context.Context, br domain.Branch) error {
+	srv, err := s.server(br.Runtime)
+	if err != nil {
+		return nil
+	}
+	return srv.Stop(context.WithoutCancel(ctx), domain.Server{ID: branchServerID(br.Name), Runtime: br.Runtime}, domain.StopImmediate)
 }
 
 // fail marks the branch failed with cause and returns cause.
@@ -219,7 +239,7 @@ func (s *Service) fail(ctx context.Context, br domain.Branch, cause error) error
 
 func (s *Service) markFailed(ctx context.Context, br domain.Branch, cause error) error {
 	br.Status, br.Error = domain.BranchFailed, cause.Error()
-	return s.Store.PutBranch(ctx, br)
+	return s.Store.PutBranch(context.WithoutCancel(ctx), br)
 }
 
 func (s *Service) transitionBranch(ctx context.Context, name domain.Name, check func(domain.Branch) error, to domain.BranchStatus) (domain.Branch, error) {
@@ -297,11 +317,16 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 		return br, s.fail(ctx, br, err)
 	}
 	if err := s.putLoginRight(ctx, br, srv, spec); err != nil {
+		_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
 		return br, s.fail(ctx, br, err)
 	}
 	now := s.Clock()
 	br.Status, br.ResetAt, br.Error = domain.BranchReady, &now, ""
-	return br, s.Store.PutBranch(ctx, br)
+	if err := s.Store.PutBranch(ctx, br); err != nil {
+		_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
+		return br, err
+	}
+	return br, nil
 }
 
 // DeleteBranch removes the branch's server, dataset and record. A lost
@@ -385,20 +410,33 @@ func (s *Service) Recover(ctx context.Context) error {
 		}
 		switch br.Status {
 		case domain.BranchReady:
-			started, err := s.startIfDown(ctx, br)
+			srv, spec, started, err := s.startServerIfDown(ctx, br)
 			if errors.Is(err, ErrRecordRequired) {
 				// Say why it is down; the next start retries (resumeFailedRestore).
 				err = errors.Join(err, s.markFailed(ctx, br, err))
 			}
 			if err != nil {
-				errs = append(errs, err)
-			} else {
-				errs = append(errs, s.ownUser(ctx, br))
-				if !started {
-					errs = append(errs, s.hardenRunning(ctx, br))
+				if s.branchRunning(ctx, br) {
+					err = errors.Join(err, s.releaseFreeze(ctx, br))
 				}
+				errs = append(errs, err)
+				break
 			}
-			errs = append(errs, s.releaseFreeze(ctx, br))
+			// Release any leftover live freeze before running writes (ownUser/putLoginRight).
+			if err := s.releaseFreeze(ctx, br); err != nil {
+				if started {
+					_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
+				}
+				errs = append(errs, err)
+				break
+			}
+			errs = append(errs, s.ownUser(ctx, br))
+			if err := s.putLoginRight(ctx, br, srv, spec); err != nil {
+				if started {
+					_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
+				}
+				errs = append(errs, err)
+			}
 		case domain.BranchResetting:
 			_, err := s.doReset(ctx, br, nil)
 			errs = append(errs, err)
@@ -417,49 +455,51 @@ func (s *Service) Recover(ctx context.Context) error {
 		case domain.BranchDeleting:
 			errs = append(errs, s.doDelete(ctx, br, nil))
 		case domain.BranchProvisioning:
-			errs = append(errs, s.markFailed(ctx, br, errors.New("interrupted by an agent restart; delete and create it again")))
+			errs = append(errs, s.stopBranchImmediate(ctx, br), s.markFailed(ctx, br, errors.New("interrupted by an agent restart; delete and create it again")))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// hardenRunning puts the login of a branch right when the agent starts and
-// finds the branch's server running already.
-func (s *Service) hardenRunning(ctx context.Context, br domain.Branch) error {
+func (s *Service) branchRunning(ctx context.Context, br domain.Branch) bool {
 	srv, err := s.server(br.Runtime)
 	if err != nil {
-		return err
+		return false
 	}
-	spec, err := s.branchSpec(ctx, br, s.branchDataset(br.Name), false, false)
-	if err != nil {
-		return err
-	}
-	return s.putLoginRight(ctx, br, srv, spec)
+	ok, _ := srv.Running(ctx, domain.Server{ID: branchServerID(br.Name), Runtime: br.Runtime})
+	return ok
 }
 
 func (s *Service) ensureRunning(ctx context.Context, br domain.Branch) error {
-	_, err := s.startIfDown(ctx, br)
-	return err
+	srv, spec, started, err := s.startServerIfDown(ctx, br)
+	if err != nil || !started {
+		return err
+	}
+	if err := s.putLoginRight(ctx, br, srv, spec); err != nil {
+		_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
+		return err
+	}
+	return nil
 }
 
-// startIfDown starts the branch's server when it is not running (and puts the
-// login right then), and says whether it did.
-func (s *Service) startIfDown(ctx context.Context, br domain.Branch) (started bool, err error) {
-	srv, err := s.server(br.Runtime)
+// startServerIfDown starts the branch's server when it is not running and
+// returns its server handle, spec and whether it was started.
+func (s *Service) startServerIfDown(ctx context.Context, br domain.Branch) (srv domain.DBServer, spec domain.Server, started bool, err error) {
+	srv, err = s.server(br.Runtime)
 	if err != nil {
-		return false, err
+		return nil, spec, false, err
 	}
-	spec, err := s.branchSpec(ctx, br, s.branchDataset(br.Name), false, false)
+	spec, err = s.branchSpec(ctx, br, s.branchDataset(br.Name), false, false)
 	if err != nil {
-		return false, err
+		return nil, spec, false, err
 	}
 	if ok, _ := srv.Running(ctx, spec); ok {
-		return false, nil
+		return srv, spec, false, nil
 	}
 	if err := srv.Start(ctx, spec); err != nil {
-		return false, err
+		return nil, spec, false, err
 	}
-	return true, s.putLoginRight(ctx, br, srv, spec)
+	return srv, spec, true, nil
 }
 
 // putLoginRight makes the branch's login what clients get now (see

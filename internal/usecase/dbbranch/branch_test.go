@@ -351,3 +351,111 @@ func TestSetLimits_メモリとポートの範囲を動かしながら変えら�
 		t.Errorf("memory = %d", e.server.memory["branch-x"])
 	}
 }
+
+func TestCreateBranch_initSQL失敗時およびRecoverのProvisioning時に起動済みDBプロセスが停止される(t *testing.T) {
+	// CreateBranch: CreateUser, InitSQL (ExecAs), or StopClean failure must not leave the DB running.
+	for _, failOp := range []string{"exec", "exec-as", "stop-clean"} {
+		e := newEnv(t)
+		e.withBase(t)
+		e.server.failOn = failOp
+		_, err := e.svc.CreateBranch(ctx, dbbranch.CreateBranchRequest{
+			Name: name("x"), Base: name("prod"), InitSQL: "UPDATE users SET a = 1",
+		}, nil)
+		if err == nil {
+			t.Fatalf("%s: want error", failOp)
+		}
+		if e.server.running["branch-x"] {
+			t.Errorf("%s: DB server left running after CreateBranch failure (journal=%q)", failOp, e.j.entries)
+		}
+	}
+
+	// Recover: a BranchProvisioning branch whose server outlived an agent crash must be stopped.
+	e := newEnv(t)
+	e.withBase(t)
+	_ = e.store.PutBranch(ctx, domain.Branch{Name: name("leaked"), Runtime: mysql84, Status: domain.BranchProvisioning})
+	e.server.running["branch-leaked"] = true
+	if err := e.svc.Recover(ctx); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	if e.server.running["branch-leaked"] {
+		t.Errorf("provisioning branch server still running after Recover: %q", e.j.entries)
+	}
+	b, _ := e.store.GetBranch(ctx, name("leaked"))
+	if b.Status != domain.BranchFailed {
+		t.Errorf("status = %s, want failed", b.Status)
+	}
+
+	// ResetBranch: putLoginRight failure after Start must stop the server before marking failed.
+	er := newEnv(t)
+	er.withBase(t)
+	er.withBranch(t, "rx")
+	er.server.failOn = "exec"
+	if _, err := er.svc.ResetBranch(ctx, name("rx"), nil); err == nil {
+		t.Fatal("ResetBranch: want error")
+	}
+	if er.server.running["branch-rx"] {
+		t.Errorf("ResetBranch left DB running after login failure: %q", er.j.entries)
+	}
+
+	// CreateBranch: PutBranch failure after buildBranch must stop the newly started server.
+	ep := newEnv(t)
+	ep.withBase(t)
+	ep.svc.Store = &failingStore{Store: ep.store, failOn: "put-branch-ready"}
+	if _, err := ep.svc.CreateBranch(ctx, dbbranch.CreateBranchRequest{Name: name("px"), Base: name("prod")}, nil); !errors.Is(err, errStore) {
+		t.Fatalf("CreateBranch(put-branch-ready) = %v, want errStore", err)
+	}
+	if ep.server.running["branch-px"] {
+		t.Errorf("CreateBranch left DB running after PutBranch failure: %q", ep.j.entries)
+	}
+
+	// ResumeBranch (ensureRunning): putLoginRight failure after Start must stop the server.
+	ep2 := newEnv(t)
+	ep2.withBase(t)
+	ep2.withBranch(t, "p2")
+	if _, err := ep2.svc.PauseBranch(ctx, name("p2"), nil); err != nil {
+		t.Fatal(err)
+	}
+	ep2.server.failOn = "exec"
+	if _, err := ep2.svc.ResumeBranch(ctx, name("p2"), nil); err == nil {
+		t.Fatal("ResumeBranch: want error")
+	}
+	if ep2.server.running["branch-p2"] {
+		t.Errorf("ResumeBranch left DB running after login failure: %q", ep2.j.entries)
+	}
+
+	// Recover: provisioning branch with unsupported engine still marks failed without panicking.
+	eu := newEnv(t)
+	_ = eu.store.PutBranch(ctx, domain.Branch{Name: name("unsup"), Runtime: domain.RuntimeRef{Engine: domain.Postgres, Version: "17.2"}, Status: domain.BranchProvisioning})
+	if err := eu.svc.Recover(ctx); err != nil {
+		t.Fatalf("Recover unsupported provisioning: %v", err)
+	}
+	if u, _ := eu.store.GetBranch(ctx, name("unsup")); u.Status != domain.BranchFailed {
+		t.Errorf("unsupported provisioning status = %s, want failed", u.Status)
+	}
+
+	// ResetBranch / ResumeBranch: PutBranch failure after Start must stop the server.
+	erPut := newEnv(t)
+	erPut.withBase(t)
+	erPut.withBranch(t, "rput")
+	erPut.svc.Store = &failingStore{Store: erPut.store, failOn: "put-branch-ready"}
+	if _, err := erPut.svc.ResetBranch(ctx, name("rput"), nil); !errors.Is(err, errStore) {
+		t.Fatalf("ResetBranch(put-branch-ready) = %v, want errStore", err)
+	}
+	if erPut.server.running["branch-rput"] {
+		t.Errorf("ResetBranch left server running after PutBranch failure: %q", erPut.j.entries)
+	}
+
+	epPut := newEnv(t)
+	epPut.withBase(t)
+	epPut.withBranch(t, "pput")
+	if _, err := epPut.svc.PauseBranch(ctx, name("pput"), nil); err != nil {
+		t.Fatal(err)
+	}
+	epPut.svc.Store = &failingStore{Store: epPut.store, failOn: "put-branch-ready"}
+	if _, err := epPut.svc.ResumeBranch(ctx, name("pput"), nil); !errors.Is(err, errStore) {
+		t.Fatalf("ResumeBranch(put-branch-ready) = %v, want errStore", err)
+	}
+	if epPut.server.running["branch-pput"] {
+		t.Errorf("ResumeBranch left server running after PutBranch failure: %q", epPut.j.entries)
+	}
+}
