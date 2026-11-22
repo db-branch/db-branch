@@ -119,12 +119,17 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 // and only a name in clear removes it.
 func (s *Server) secretSafeValues(scope string, in map[string]string, clear []string) (map[string]string, error) {
 	types := map[string]string{}
+	found := false
 	for _, sc := range s.Settings.Scopes() {
 		if sc.Name == scope {
+			found = true
 			for _, d := range sc.Settings {
 				types[d.Key] = d.Type
 			}
 		}
+	}
+	if !found {
+		return in, nil // Put answers "not found"
 	}
 	out := map[string]string{}
 	for k, v := range in {
@@ -137,7 +142,9 @@ func (s *Server) secretSafeValues(scope string, in map[string]string, clear []st
 		if types[k] != "secret" {
 			return nil, fmt.Errorf("%w: %q is not a secret setting", settings.ErrInvalid, k)
 		}
-		out[k] = ""
+		if _, typed := out[k]; !typed { // a new value wins over a clear
+			out[k] = ""
+		}
 	}
 	return out, nil
 }

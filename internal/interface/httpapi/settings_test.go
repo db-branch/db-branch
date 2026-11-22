@@ -95,9 +95,11 @@ func secretFixture(t *testing.T) *fixture {
 
 func settingOf(t *testing.T, body map[string]any, key string) map[string]any {
 	t.Helper()
-	for _, s := range body["items"].([]any)[0].(map[string]any)["settings"].([]any) {
-		if s.(map[string]any)["key"] == key {
-			return s.(map[string]any)
+	for _, sc := range body["items"].([]any) {
+		for _, s := range sc.(map[string]any)["settings"].([]any) {
+			if s.(map[string]any)["key"] == key {
+				return s.(map[string]any)
+			}
 		}
 	}
 	t.Fatalf("no setting %s in %v", key, body)
@@ -162,5 +164,34 @@ func TestSettings_setting_updatedイベントに平文のSecretを含めない(t
 	ev := <-sub.Events()
 	if ev.Type != "setting.updated" || strings.Contains(fmt.Sprint(ev.Data), "TOPSECRET") {
 		t.Errorf("event = %+v", ev)
+	}
+}
+
+func TestSettings_clearの境界(t *testing.T) {
+	f := secretFixture(t)
+	f.do(t, "PUT", "/v1/settings/core", map[string]any{"values": map[string]string{"license.key": "OLD"}})
+	// A new value sent with the same key in clear wins.
+	f.do(t, "PUT", "/v1/settings/core", map[string]any{"values": map[string]string{"license.key": "NEW"}, "clear": []string{"license.key"}})
+	if v, _ := f.srv.Settings.Values(context.Background(), "core"); v["license.key"] != "NEW" {
+		t.Errorf("value = %q", v["license.key"])
+	}
+	// An unknown scope is not found, with or without clear.
+	if resp, _ := f.do(t, "PUT", "/v1/settings/ghost", map[string]any{"clear": []string{"license.key"}}); resp.StatusCode != 404 {
+		t.Errorf("unknown scope: %d", resp.StatusCode)
+	}
+}
+
+func TestSettings_モジュールのsecretもマスクされる(t *testing.T) {
+	f := newFixture(t)
+	f.srv.Settings = &settings.Service{
+		Store: &filestore.Store{Path: filepath.Join(t.TempDir(), "s.json")},
+		Modules: func() map[string][]ext.Setting {
+			return map[string][]ext.Setting{"auth": {{Key: "oidc.secret", Label: "Secret", Type: "secret"}}}
+		},
+	}
+	f.do(t, "PUT", "/v1/settings/auth", map[string]any{"values": map[string]string{"oidc.secret": "MODSECRET"}})
+	_, body := f.do(t, "GET", "/v1/settings", nil)
+	if strings.Contains(fmt.Sprint(body), "MODSECRET") || settingOf(t, body, "oidc.secret")["secret_set"] != true {
+		t.Errorf("module secret = %v", body)
 	}
 }

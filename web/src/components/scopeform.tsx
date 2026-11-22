@@ -21,9 +21,10 @@ export function ScopeForm({ scope, bare }: { scope: SettingScope; bare?: boolean
   const [cleared, setCleared] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const key = JSON.stringify(initial);
+  // secret_set is part of the key: saving a secret changes only that.
+  const key = JSON.stringify([initial, scope.settings.map((s) => !!s.secret_set)]);
   useEffect(() => {
-    setValues(JSON.parse(key));
+    setValues(JSON.parse(key)[0]);
     setCleared([]);
   }, [key]);
   const change = settingsChange(scope.settings, values, cleared);
@@ -34,6 +35,8 @@ export function ScopeForm({ scope, bare }: { scope: SettingScope; bare?: boolean
     try {
       await api.putSettings(scope.scope, change.values, change.clear);
       setCleared([]);
+      // A saved secret is not kept in the field (it is write-only).
+      setValues((v) => ({ ...v, ...Object.fromEntries(scope.settings.filter((s) => s.type === "secret").map((s) => [s.key, ""])) }));
       setError(null);
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
@@ -53,7 +56,7 @@ export function ScopeForm({ scope, bare }: { scope: SettingScope; bare?: boolean
           placeholder={s.secret_set ? t("Set") : s.default ? t("default") : t("none")}
           onChange={(v) => setValues({ ...values, [s.key]: editedValue(s, v) })}
           clearable={!!s.secret_set}
-          clearing={cleared.includes(s.key)}
+          clearing={cleared.includes(s.key) && !values[s.key]}
           onClear={(on) => setCleared(on ? [...cleared, s.key] : cleared.filter((k) => k !== s.key))}
         />
       ) : s.type === "text" ? (
