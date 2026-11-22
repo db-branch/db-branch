@@ -12,6 +12,7 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/infrastructure/notifier"
 	"github.com/db-branch/db-branch/internal/infrastructure/uploads"
+	"github.com/db-branch/db-branch/internal/usecase/dbbranch"
 	"github.com/db-branch/db-branch/internal/usecase/notify"
 	"github.com/db-branch/db-branch/internal/usecase/operation"
 )
@@ -100,6 +101,18 @@ func newNotifier(st notify.State, allowPrivateIPs bool, downAfter time.Duration)
 
 // maxCheckpoints follows the branch.max_checkpoints setting.
 var maxCheckpoints = newInt64(domain.DefaultMaxCheckpoints)
+
+// Resource limits follow the branch.refquota_gb, branch.max_per_user and
+// branch.max_ttl settings.
+var refQuotaGB, maxPerUser, maxBranchTTL = newInt64(0), newInt64(0), newInt64(0)
+
+func resourceLimits() dbbranch.Limits {
+	return dbbranch.Limits{
+		RefQuotaBytes:      uint64(refQuotaGB.Load()) << 30,
+		MaxBranchesPerUser: int(maxPerUser.Load()),
+		MaxTTL:             time.Duration(maxBranchTTL.Load()),
+	}
+}
 
 // pruneSnapshots follows the base.prune_snapshots setting.
 var pruneSnapshots = newBool(true)

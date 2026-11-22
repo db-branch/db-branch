@@ -188,13 +188,18 @@ func New(cfg config.Config) (*App, error) {
 		AutoPrune: pruneSnapshots.Load,
 		// Checkpoints rename, promote and label ZFS datasets: only this node's own ZFS.
 		MaxCheckpoints: func() int { return int(maxCheckpoints.Load()) },
-		Pool:           pool,
-		Node:           hostname(),
-		Distro:         distro,
-		Ports:          dbbranch.PortRange{Min: cfg.Ports.Min, Max: cfg.Ports.Max},
-		MemoryMB:       cfg.Branch.MemoryMB,
-		Clock:          time.Now,
-		Password:       Password,
+		ResourceLimits: resourceLimits,
+		PoolSpace: func(ctx context.Context) (uint64, uint64, error) {
+			size, free := poolStats(ctx, pool)
+			return size, free, nil
+		},
+		Pool:     pool,
+		Node:     hostname(),
+		Distro:   distro,
+		Ports:    dbbranch.PortRange{Min: cfg.Ports.Min, Max: cfg.Ports.Max},
+		MemoryMB: cfg.Branch.MemoryMB,
+		Clock:    time.Now,
+		Password: Password,
 	}
 	if cfg.Storage == "" {
 		a.branches.Lineage = zfs.New(run)

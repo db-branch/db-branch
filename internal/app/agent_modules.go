@@ -43,6 +43,12 @@ func coreSettings(cfg config.Config) []ext.Setting {
 			Help: "The most checkpoints you take yourself that one branch may hold, over all its lines of history. The checkpoints taken automatically before a restore are not counted and never block a restore: the newest five are kept, older ones are deleted. Each checkpoint keeps the data it protects, so it uses disk space as the branch changes. 0: none."},
 		{Key: "branch.default_ttl", Label: "Default TTL", Type: "duration", Default: "",
 			Help: "Expiry for branches created without one, e.g. 72h. Empty: no expiry."},
+		{Key: "branch.refquota_gb", Label: "Largest branch size (GB)", Type: "int", Default: "0",
+			Help: "Most data one branch may reference (ZFS refquota), set on branches created from now on. A branch that reaches it gets write errors; the others and the pool are unaffected. 0: no limit."},
+		{Key: "branch.max_per_user", Label: "Branches per user", Type: "int", Default: "0",
+			Help: "The most branches one signed-in user may have at once. 0: no limit."},
+		{Key: "branch.max_ttl", Label: "Longest branch TTL", Type: "duration", Default: "",
+			Help: "No branch may live longer than this from creation or extension; a branch created without a TTL gets it. e.g. 168h. Empty: no limit."},
 		{Key: "ports.min", Label: "First branch port", Type: "int", Default: strconv.Itoa(cfg.Ports.Min)},
 		{Key: "ports.max", Label: "Last branch port", Type: "int", Default: strconv.Itoa(cfg.Ports.Max)},
 		{Key: "console.session_ttl", Label: "Console session", Type: "duration", Default: auth.DefaultSessionTTL.String(),
@@ -96,6 +102,8 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 		Checks: map[string]func(string) error{
 			"zfs.arc_max":            arc.ctl.Check,
 			"branch.max_checkpoints": settings.NonNegativeInt,
+			"branch.refquota_gb":     settings.NonNegativeInt,
+			"branch.max_per_user":    settings.NonNegativeInt,
 			"backup.dir":             backupdir.ValidatePath,
 			"notify.slack_url":       checkNotifyURL,
 			"notify.webhook_url":     checkNotifyURL,
@@ -164,6 +172,14 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 			if n, err := strconv.Atoi(v["branch.max_checkpoints"]); err == nil && n >= 0 {
 				maxCheckpoints.Store(int64(n))
 			}
+			if n, err := strconv.Atoi(v["branch.refquota_gb"]); err == nil && n >= 0 {
+				refQuotaGB.Store(int64(n))
+			}
+			if n, err := strconv.Atoi(v["branch.max_per_user"]); err == nil && n >= 0 {
+				maxPerUser.Store(int64(n))
+			}
+			d, _ = time.ParseDuration(v["branch.max_ttl"])
+			maxBranchTTL.Store(int64(max(d, 0)))
 			pruneSnapshots.Store(v["base.prune_snapshots"] != "false")
 			updateAutoCheck.Store(v["update.auto_check"] == "true")
 			if d, err := time.ParseDuration(v["backup.interval"]); err == nil && d >= 0 {

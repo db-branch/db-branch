@@ -187,6 +187,9 @@ func (s *Service) LoadBase(ctx context.Context, name domain.Name, dump string, r
 	if dump == "" {
 		return errors.New("no dump to load")
 	}
+	if err := s.checkPoolRoom(ctx); err != nil {
+		return err
+	}
 	base, err := s.transitionBase(ctx, name, domain.BaseReady, domain.BaseMaintenance)
 	if err != nil {
 		return err

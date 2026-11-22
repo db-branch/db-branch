@@ -14,6 +14,8 @@ var (
 	ErrAlreadyExists = errors.New("already exists")
 	// ErrConflict is returned when an operation does not fit the current status.
 	ErrConflict = errors.New("conflict")
+	// ErrQuotaExceeded is returned when a configured limit (branches per user) is reached.
+	ErrQuotaExceeded = errors.New("quota exceeded")
 	// ErrInvalidTTL is returned for a non-positive TTL extension.
 	ErrInvalidTTL = errors.New("invalid ttl")
 	// ErrInUse is returned when deleting something others still depend on.

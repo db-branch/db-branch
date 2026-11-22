@@ -172,6 +172,9 @@ func (s *Service) CreateCheckpoint(ctx context.Context, n domain.Name, name stri
 	if err := br.CanCheckpoint(); err != nil {
 		return domain.Checkpoint{}, err
 	}
+	if err := s.checkPoolRoom(ctx); err != nil {
+		return domain.Checkpoint{}, err
+	}
 	lines, err := s.family(ctx, n)
 	if err != nil {
 		return domain.Checkpoint{}, err

@@ -57,6 +57,11 @@ type Service struct {
 	Distro string
 	// Nodes lists the cluster members. Nil on a single node.
 	Nodes domain.NodeStore
+	// ResourceLimits are the operator's resource limits (settings). Nil: none.
+	ResourceLimits func() Limits
+	// PoolSpace reports the ZFS pool's size and free bytes, for the guard that
+	// refuses new data when the pool is nearly full. Nil: no guard.
+	PoolSpace func(ctx context.Context) (size, free uint64, err error)
 	// HostMemory reports this machine's memory and ZFS ARC cap in MB, for
 	// placement on a single node (a cluster's nodes report them in their
 	// heartbeats). Nil: unknown, and the memory budget is not enforced.

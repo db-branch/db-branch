@@ -136,6 +136,18 @@ func (s *Service) reserveBranch(ctx context.Context, req CreateBranchRequest) (d
 	if _, err := s.Store.GetBranch(ctx, req.Name); err == nil {
 		return domain.Branch{}, fmt.Errorf("branch %s: %w", req.Name, domain.ErrAlreadyExists)
 	}
+	lim := s.resourceLimits()
+	ttl, err := lim.checkTTL(req.TTL)
+	if err != nil {
+		return domain.Branch{}, err
+	}
+	req.TTL = ttl
+	if err := s.checkBranchCount(ctx, req.Owner, lim); err != nil {
+		return domain.Branch{}, err
+	}
+	if err := s.checkPoolRoom(ctx); err != nil {
+		return domain.Branch{}, err
+	}
 	node, err := s.PlaceBranch(ctx, req)
 	if err != nil {
 		return domain.Branch{}, err
@@ -189,6 +201,9 @@ func (s *Service) buildBranch(ctx context.Context, br *domain.Branch, initSQL st
 	}
 	// A clone takes the properties of its new parent, not of its origin.
 	if err := s.applyEngineProps(ctx, br.Runtime, ds); err != nil {
+		return err
+	}
+	if err := s.applyQuota(ctx, ds); err != nil {
 		return err
 	}
 	spec, err := s.branchSpec(ctx, *br, ds, false, true)
@@ -382,6 +397,11 @@ func (s *Service) ExtendBranch(ctx context.Context, name domain.Name, ttl time.D
 	}
 	if br.Status == domain.BranchDeleting {
 		return br, fmt.Errorf("%w: branch %s is %s", domain.ErrConflict, br.Name, br.Status)
+	}
+	if ttl > 0 {
+		if _, err := s.resourceLimits().checkTTL(ttl); err != nil {
+			return br, err
+		}
 	}
 	if err := br.Extend(s.Clock(), ttl); err != nil {
 		return br, err

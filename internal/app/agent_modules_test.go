@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/infrastructure/filestore"
@@ -73,5 +74,31 @@ func TestWireModulesAndSettings_backupDirの危険なパスを拒否する(t *te
 	wire()
 	if got, _ := backupPath.Load().(string); got != "" {
 		t.Errorf("backupPath after clear = %q, want empty", got)
+	}
+}
+
+func TestResourceLimits_設定値がサービスの上限に変換され既定は無制限(t *testing.T) {
+	refQuotaGB.Store(0)
+	maxPerUser.Store(0)
+	maxBranchTTL.Store(0)
+	if got := resourceLimits(); got != (dbbranch.Limits{}) {
+		t.Errorf("default = %+v, want no limit", got)
+	}
+	refQuotaGB.Store(2)
+	maxPerUser.Store(5)
+	maxBranchTTL.Store(int64(48 * time.Hour))
+	t.Cleanup(func() { refQuotaGB.Store(0); maxPerUser.Store(0); maxBranchTTL.Store(0) })
+	want := dbbranch.Limits{RefQuotaBytes: 2 << 30, MaxBranchesPerUser: 5, MaxTTL: 48 * time.Hour}
+	if got := resourceLimits(); got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+	keys := map[string]string{}
+	for _, s := range coreSettings(config.Default()) {
+		keys[s.Key] = s.Default
+	}
+	for _, k := range []string{"branch.refquota_gb", "branch.max_per_user", "branch.max_ttl"} {
+		if _, ok := keys[k]; !ok {
+			t.Errorf("setting %s is not declared", k)
+		}
 	}
 }
