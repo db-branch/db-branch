@@ -190,3 +190,50 @@ func TestPersonal_トークンや匿名では作れない(t *testing.T) {
 		t.Errorf("no name: %v", err)
 	}
 }
+
+func TestAuthenticate_Settle未設定の単一ノードでは存在しないトークンを待たずに401を返す(t *testing.T) {
+	s, _ := newService(t)
+	s.Settle = 0
+	lag := &lagging{TokenStore: s.Store, calls: -100}
+	s.Store = lag
+	start := time.Now()
+	_, err := s.Authenticate(ctx, ext.Credentials{Token: "dbb_zz_x"})
+	if !errors.Is(err, ext.ErrUnauthenticated) || lag.calls != -99 || time.Since(start) > 500*time.Millisecond {
+		t.Errorf("err %v calls %d", err, lag.calls)
+	}
+}
+
+type blocking struct {
+	domain.TokenStore
+	entered chan struct{}
+}
+
+func (b *blocking) ListTokens(context.Context) ([]domain.APIToken, error) {
+	b.entered <- struct{}{}
+	return nil, nil
+}
+
+func TestAuthenticate_未着トークンの待機は同時数に上限があり超えた分は即時401(t *testing.T) {
+	s, _ := newService(t)
+	s.Settle = 3 * time.Second
+	b := &blocking{TokenStore: s.Store, entered: make(chan struct{}, 1000)}
+	s.Store = b
+	c, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan struct{})
+	for i := 0; i < token.MaxSettlers; i++ {
+		go func() { _, _ = s.Authenticate(c, ext.Credentials{Token: "dbb_zz_x"}); done <- struct{}{} }()
+	}
+	for len(b.entered) < token.MaxSettlers {
+		time.Sleep(time.Millisecond)
+	}
+	start := time.Now()
+	_, err := s.Authenticate(ctx, ext.Credentials{Token: "dbb_zz_x"})
+	if !errors.Is(err, ext.ErrUnauthenticated) || time.Since(start) > time.Second {
+		t.Errorf("err %v after %v", err, time.Since(start))
+	}
+	cancel()
+	for i := 0; i < token.MaxSettlers; i++ {
+		<-done
+	}
+}

@@ -3,6 +3,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -20,7 +22,7 @@ var (
 	ErrInvalidCredentials = errors.New("invalid username or password")
 	ErrNoSession          = errors.New("no valid session")
 	ErrNoCredentials      = errors.New("admin password not set")
-	ErrWeakPassword       = errors.New("password must be at least 12 characters")
+	ErrWeakPassword       = errors.New("password must be 12 to 256 bytes")
 )
 
 // RateLimitedError is returned while logins are locked out after repeated failures.
@@ -40,7 +42,34 @@ const (
 	maxFailures    = 5
 	lockout        = time.Minute
 	minPasswordLen = 12
+	// MaxPasswordLen bounds what is hashed: argon2 cost grows with input.
+	MaxPasswordLen = 256
+	// MaxHashing caps the password hashes running at once (each is slow and
+	// memory-hungry), so a flood of logins cannot exhaust the agent.
+	MaxHashing = 4
+	// MaxTrackedClients bounds the failure records kept per client address.
+	MaxTrackedClients = 4096
 )
+
+type clientKey struct{}
+
+// WithClient names the caller (its address) for login rate limiting.
+func WithClient(ctx context.Context, client string) context.Context {
+	return context.WithValue(ctx, clientKey{}, client)
+}
+
+// ClientFrom returns the caller named by WithClient ("" if none).
+func ClientFrom(ctx context.Context) string {
+	c, _ := ctx.Value(clientKey{}).(string)
+	return c
+}
+
+// failure is one client's run of wrong passwords.
+type failure struct {
+	count       int
+	last        time.Time
+	lockedUntil time.Time
+}
 
 // Credentials is the stored admin password. Generation increases on every
 // change so sessions created before it stop working on every node.
@@ -97,8 +126,9 @@ type Service struct {
 
 	mu          sync.Mutex
 	revoked     map[string]time.Time // session id -> expiry, after logout
-	failures    int
-	lockedUntil time.Time
+	clients     map[string]*failure  // by client address
+	hashing     chan struct{}        // semaphore for password hashes
+	hashingOnce sync.Once
 }
 
 func (s *Service) ttl() time.Duration {
@@ -143,26 +173,44 @@ func (s *Service) setPassword(password string, mustChange bool) error {
 }
 
 func (s *Service) verify(c Credentials, password string) bool {
+	if len(password) > MaxPasswordLen {
+		return false
+	}
+	s.hashingOnce.Do(func() { s.hashing = make(chan struct{}, MaxHashing) })
+	s.hashing <- struct{}{}
+	defer func() { <-s.hashing }()
 	return subtle.ConstantTimeCompare(s.Hasher.Hash(password, c.Salt), c.Hash) == 1
 }
 
 // Login checks the admin password and starts a session.
 func (s *Service) Login(user, password string) (Session, error) {
-	if err := s.Verify(user, password); err != nil {
+	return s.LoginFrom("", user, password)
+}
+
+// LoginFrom is Login with failures counted against client.
+func (s *Service) LoginFrom(client, user, password string) (Session, error) {
+	if err := s.VerifyFrom(client, user, password); err != nil {
 		return Session{}, err
 	}
 	return s.Begin(user, user, nil)
 }
 
-// Verify checks the admin password, locking logins out for a while after
-// repeated failures.
-func (s *Service) Verify(user, password string) error {
+// Verify is VerifyFrom for a caller with no address (the node itself).
+func (s *Service) Verify(user, password string) error { return s.VerifyFrom("", user, password) }
+
+// TrackedClients is how many clients have failure records (for tests).
+func (s *Service) TrackedClients() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := s.Clock()
-	if now.Before(s.lockedUntil) {
-		return &RateLimitedError{RetryAfter: s.lockedUntil.Sub(now)}
-	}
+	return len(s.clients)
+}
+
+// VerifyFrom checks the admin password, locking out the calling client (not
+// everyone) for a while after repeated failures. The attempt is counted
+// before the password is hashed (and forgiven on success), so concurrent
+// guesses cannot outrun the limit; the hash runs outside the lock, a few at
+// a time.
+func (s *Service) VerifyFrom(client, user, password string) error {
 	c, err := s.Store.Load()
 	if errors.Is(err, ErrNoCredentials) {
 		return ErrInvalidCredentials
@@ -170,15 +218,83 @@ func (s *Service) Verify(user, password string) error {
 	if err != nil {
 		return err
 	}
+	if retry := s.reserve(client); retry > 0 {
+		return &RateLimitedError{RetryAfter: retry}
+	}
 	if user != AdminUser || !s.verify(c, password) {
-		s.failures++
-		if s.failures >= maxFailures {
-			s.failures, s.lockedUntil = 0, now.Add(lockout)
-		}
 		return ErrInvalidCredentials
 	}
-	s.failures = 0
+	s.mu.Lock()
+	if f := s.clients[client]; f != nil && !s.Clock().Before(f.lockedUntil) {
+		delete(s.clients, client)
+	}
+	s.mu.Unlock()
 	return nil
+}
+
+// overflowClient is the shared record for clients beyond MaxTrackedClients
+// when nothing can be dropped: better a shared limit than unbounded memory.
+const overflowClient = "\x00overflow"
+
+// reserve counts one attempt for client. It returns how long the client is
+// locked out (0 if the attempt may go on).
+func (s *Service) reserve(client string) time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.Clock()
+	if s.clients == nil {
+		s.clients = map[string]*failure{}
+	}
+	f := s.clients[client]
+	if f == nil {
+		if len(s.clients) >= MaxTrackedClients {
+			s.pruneClients(now)
+		}
+		if len(s.clients) >= MaxTrackedClients {
+			client = overflowClient
+			f = s.clients[client]
+		}
+		if f == nil {
+			f = &failure{}
+			s.clients[client] = f
+		}
+	}
+	f.last = now
+	if now.Before(f.lockedUntil) {
+		return f.lockedUntil.Sub(now)
+	}
+	if f.count >= maxFailures {
+		f.count, f.lockedUntil = 0, now.Add(lockout)
+		return lockout
+	}
+	f.count++
+	return 0
+}
+
+// pruneClients drops records that no longer matter; if that frees nothing it
+// drops the oldest quarter that are not locked out, so the map stays bounded.
+func (s *Service) pruneClients(now time.Time) {
+	type kv struct {
+		k string
+		t time.Time
+	}
+	var open []kv
+	for k, f := range s.clients {
+		switch {
+		case now.Before(f.lockedUntil):
+		case now.Sub(f.last) > lockout:
+			delete(s.clients, k)
+		default:
+			open = append(open, kv{k, f.last})
+		}
+	}
+	if len(s.clients) < MaxTrackedClients {
+		return
+	}
+	sort.Slice(open, func(i, j int) bool { return open[i].t.Before(open[j].t) })
+	for _, e := range open[:(len(open)+3)/4] {
+		delete(s.clients, e.k)
+	}
 }
 
 // Begin starts a session for someone already authenticated (by Verify or a
@@ -324,7 +440,7 @@ func (s *Service) ChangePassword(token, current, next string) (Session, error) {
 	if !s.verify(c, current) {
 		return Session{}, ErrInvalidCredentials
 	}
-	if len(next) < minPasswordLen {
+	if len(next) < minPasswordLen || len(next) > MaxPasswordLen {
 		return Session{}, ErrWeakPassword
 	}
 	if err := s.SetPassword(next); err != nil {

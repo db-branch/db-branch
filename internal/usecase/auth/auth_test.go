@@ -1,9 +1,13 @@
 package auth_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -382,5 +386,171 @@ func TestMustChange_管理者以外のセッションには付けない(t *testi
 	}
 	if other.MustChange {
 		t.Error("only the admin session is asked to change the password")
+	}
+}
+
+func TestVerifyFrom_特定IPの5回失敗は別IPの正規ログインをブロックしない(t *testing.T) {
+	s, _, _ := newService(t)
+	for i := 0; i < 5; i++ {
+		_ = s.VerifyFrom("203.0.113.9", "admin", "wrong")
+	}
+	var rl *auth.RateLimitedError
+	if err := s.VerifyFrom("203.0.113.9", "admin", "correct horse battery"); !errors.As(err, &rl) {
+		t.Errorf("same client: %v, want RateLimitedError", err)
+	}
+	if err := s.VerifyFrom("198.51.100.1", "admin", "correct horse battery"); err != nil {
+		t.Errorf("other client: %v", err)
+	}
+}
+
+func TestVerifyFrom_失敗の記録は上限を超えて増えない(t *testing.T) {
+	s, c, _ := newService(t)
+	for i := 0; i < auth.MaxTrackedClients*2; i++ {
+		_ = s.VerifyFrom(fmt.Sprintf("10.%d.%d.1", i/256, i%256), "admin", "wrong")
+		c.now = c.now.Add(time.Second)
+	}
+	if n := s.TrackedClients(); n > auth.MaxTrackedClients {
+		t.Errorf("tracked = %d", n)
+	}
+}
+
+type countingHasher struct {
+	sha
+	calls atomic.Int32
+}
+
+func (h *countingHasher) Hash(p string, salt []byte) []byte {
+	h.calls.Add(1)
+	return h.sha.Hash(p, salt)
+}
+
+func TestVerify_極端に長いパスワードはハッシュせず拒否する(t *testing.T) {
+	s, _, _ := newService(t)
+	h := &countingHasher{}
+	s.Hasher = h
+	if err := s.Verify("admin", strings.Repeat("a", auth.MaxPasswordLen+1)); !errors.Is(err, auth.ErrInvalidCredentials) || h.calls.Load() != 0 {
+		t.Errorf("err %v hashes %d", err, h.calls.Load())
+	}
+	s.Hasher = sha{}
+	sess, _ := s.Login("admin", "correct horse battery")
+	if _, err := s.ChangePassword(sess.Token, "correct horse battery", strings.Repeat("a", auth.MaxPasswordLen+1)); !errors.Is(err, auth.ErrWeakPassword) {
+		t.Error("too long new password accepted")
+	}
+}
+
+type gate struct {
+	sha
+	in      chan struct{}
+	release chan struct{}
+}
+
+func (g *gate) Hash(p string, salt []byte) []byte {
+	g.in <- struct{}{}
+	<-g.release
+	return g.sha.Hash(p, salt)
+}
+
+func TestVerify_Argon2計算中もSession検証がブロックされない(t *testing.T) {
+	s, _, _ := newService(t)
+	sess, err := s.Login("admin", "correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &gate{in: make(chan struct{}, 16), release: make(chan struct{})}
+	s.Hasher = g
+	done := make(chan struct{})
+	go func() { _ = s.VerifyFrom("a", "admin", "wrong"); close(done) }()
+	<-g.in
+	ok := make(chan error, 1)
+	go func() { _, err := s.Session(sess.Token); ok <- err }()
+	select {
+	case err := <-ok:
+		if err != nil {
+			t.Errorf("session: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("Session blocked while a password hash was running")
+	}
+	close(g.release)
+	<-done
+}
+
+func TestVerify_同時ハッシュ数は上限があり超えた分は待たされる(t *testing.T) {
+	s, _, _ := newService(t)
+	g := &gate{in: make(chan struct{}, 64), release: make(chan struct{})}
+	s.Hasher = g
+	var wg sync.WaitGroup
+	for i := 0; i < auth.MaxHashing+3; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = s.VerifyFrom(fmt.Sprint(i), "admin", "x") }()
+	}
+	for i := 0; i < auth.MaxHashing; i++ {
+		<-g.in
+	}
+	time.Sleep(50 * time.Millisecond)
+	if len(g.in) != 0 {
+		t.Errorf("%d hashes beyond the cap running", len(g.in))
+	}
+	close(g.release)
+	wg.Wait()
+}
+
+func TestClient_コンテキストで呼び出し元を運ぶ(t *testing.T) {
+	if got := auth.ClientFrom(auth.WithClient(context.Background(), "203.0.113.9")); got != "203.0.113.9" {
+		t.Errorf("client = %q", got)
+	}
+	if got := auth.ClientFrom(context.Background()); got != "" {
+		t.Errorf("client = %q, want empty", got)
+	}
+}
+
+func TestVerifyFrom_全員が新しい失敗でも記録は上限を超えず古い方から捨てる(t *testing.T) {
+	s, _, _ := newService(t)
+	for i := 0; i < auth.MaxTrackedClients+10; i++ {
+		_ = s.VerifyFrom(fmt.Sprintf("c%d", i), "admin", "wrong")
+	}
+	if n := s.TrackedClients(); n > auth.MaxTrackedClients {
+		t.Errorf("tracked = %d", n)
+	}
+}
+
+func TestVerifyFrom_同一IPの並行試行でも5回を超えてハッシュしない(t *testing.T) {
+	s, _, _ := newService(t)
+	h := &countingHasher{}
+	s.Hasher = h
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = s.VerifyFrom("203.0.113.9", "admin", "wrong") }()
+	}
+	wg.Wait()
+	if n := h.calls.Load(); n != 5 {
+		t.Errorf("hashes = %d, want 5", n)
+	}
+}
+
+func TestVerifyFrom_記録が満杯でもロック中のクライアントは残る(t *testing.T) {
+	s, _, _ := newService(t)
+	for i := 0; i < 6; i++ {
+		_ = s.VerifyFrom("attacker", "admin", "wrong")
+	}
+	for i := 0; i < auth.MaxTrackedClients*2; i++ {
+		_ = s.VerifyFrom(fmt.Sprintf("c%d", i), "admin", "wrong")
+	}
+	var rl *auth.RateLimitedError
+	if err := s.VerifyFrom("attacker", "admin", "correct horse battery"); !errors.As(err, &rl) {
+		t.Errorf("lock lost: %v", err)
+	}
+}
+
+func TestVerifyFrom_全記録がロック中なら新規クライアントは共有枠にまとめ記録を増やさない(t *testing.T) {
+	s, _, _ := newService(t)
+	for i := 0; i < auth.MaxTrackedClients+50; i++ {
+		for j := 0; j < 6; j++ {
+			_ = s.VerifyFrom(fmt.Sprintf("c%d", i), "admin", "wrong")
+		}
+	}
+	if n := s.TrackedClients(); n > auth.MaxTrackedClients+1 {
+		t.Errorf("tracked = %d", n)
 	}
 }

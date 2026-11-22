@@ -224,3 +224,22 @@ func TestConsole_初期パスワードのままでもログアウトはできる
 		t.Errorf("logout: %d", resp.StatusCode)
 	}
 }
+
+func TestLogin_特定IPの連続失敗は別IPからの正規ログインを止めない(t *testing.T) {
+	f := newFixture(t)
+	h := f.srv.Handler(false)
+	from := func(addr, pw string) int {
+		resp, _ := send(t, h, "POST", "/v1/auth/login", map[string]any{"username": "admin", "password": pw},
+			func(r *http.Request) { r.RemoteAddr = addr })
+		return resp.StatusCode
+	}
+	for i := 0; i < 5; i++ {
+		from("203.0.113.9:4000", "wrong")
+	}
+	if got := from("203.0.113.9:4001", "correct horse battery"); got != http.StatusTooManyRequests {
+		t.Errorf("attacker address: %d, want 429", got)
+	}
+	if got := from("198.51.100.1:5000", "correct horse battery"); got != http.StatusOK {
+		t.Errorf("other address: %d, want 200", got)
+	}
+}

@@ -331,6 +331,9 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	if svc, err := a.Branches(); err == nil {
 		if st, ok := svc.Store.(domain.TokenStore); ok {
 			tokens := &token.Service{Store: st, Clock: time.Now}
+			if cl != nil {
+				tokens.Settle = 2 * time.Second // a token made on another node may not have arrived yet
+			}
 			srv.Tokens, srv.TokenAuth = tokens, tokens
 		}
 	}
