@@ -2620,7 +2620,7 @@ paths:
       x-dbb-action: setting.read
       x-dbb-token-scopes: [full]
       description: |-
-        Lists every scope with its settings, current values and defaults. Secret settings (the licence key, the open-branch password, webhook secrets) are not returned.
+        Lists every scope with its settings, current values and defaults. Secret settings (the licence key, the open-branch password, webhook secrets) are write-only: their `value` is always empty and `secret_set` says whether one is stored.
 
         **Action:** `setting.read`. Needs a console session of an admin, the local socket, or a `full` token.
       responses:
@@ -2656,7 +2656,7 @@ paths:
       x-dbb-action: setting.write
       x-dbb-token-scopes: [full]
       description: |-
-        Changes values in a scope and returns the scope. Send only the keys to change.
+        Changes values in a scope and returns the scope. Send only the keys to change. A secret setting sent empty (or left out) keeps its value; to remove one, list its key in `clear`.
 
         **Action:** `setting.write`. Needs a console session of an admin, the local socket, or a `full` token.
       parameters:
@@ -4689,7 +4689,8 @@ components:
           type: string
           enum: [string, int, bool, duration, secret]
         default: {type: string}
-        value: {type: string, description: The current value. `secret` settings are not returned.}
+        value: {type: string, description: The current value. Always empty for `secret` settings.}
+        secret_set: {type: boolean, description: Only on `secret` settings. Whether a value is stored (other than the default).}
         translations:
           type: object
           additionalProperties:
@@ -4735,8 +4736,11 @@ components:
         values:
           type: object
           additionalProperties: {type: string}
-          description: Setting keys and new values. Send only the keys to change.
-      required: [values]
+          description: Setting keys and new values. Send only the keys to change. An empty secret keeps its value.
+        clear:
+          type: array
+          items: {type: string}
+          description: Secret setting keys to remove.
       additionalProperties: false
       example:
         values: {branch.default_ttl: 72h, backup.interval: 12h}

@@ -11,6 +11,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Fixed
 
 - The console's Modules page no longer marks free modules (for example ProxySQL) as **Paid** when the licence covers every module. The badge now shows for modules the server reports as needing a licence, and, for a licence that names its modules, for the modules it names.
+- Secret settings (the licence key, the open-branch password, webhook secrets) are now write-only. `GET /v1/settings` and the `setting.updated` event return an empty `value` and `secret_set` instead of the secret. A secret sent empty keeps its value; list its key in `clear` of `PUT /v1/settings/{scope}` (or `db-branch settings set <scope> --clear <key>`) to remove it. Text settings in the console keep trailing spaces and newlines.
 
 ### Removed
 

@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -77,3 +78,89 @@ func (brokenSettings) GetSettings(_ context.Context, _ string) (map[string]strin
 	return nil, errors.New("raft down")
 }
 func (brokenSettings) PutSettings(context.Context, string, map[string]string) error { return nil }
+
+func secretFixture(t *testing.T) *fixture {
+	t.Helper()
+	f := newFixture(t)
+	f.srv.Settings = &settings.Service{
+		Store: &filestore.Store{Path: filepath.Join(t.TempDir(), "s.json")},
+		Core: []ext.Setting{
+			{Key: "license.key", Label: "License key", Type: "secret"},
+			{Key: "branch.open_password", Label: "Open password", Type: "secret", Default: "dbbranch"},
+			{Key: "name", Label: "Name", Type: "string"},
+		},
+	}
+	return f
+}
+
+func settingOf(t *testing.T, body map[string]any, key string) map[string]any {
+	t.Helper()
+	for _, s := range body["items"].([]any)[0].(map[string]any)["settings"].([]any) {
+		if s.(map[string]any)["key"] == key {
+			return s.(map[string]any)
+		}
+	}
+	t.Fatalf("no setting %s in %v", key, body)
+	return nil
+}
+
+func TestSettings_GETレスポンスでSecret型設定値が平文返却されずsecret_setフラグで返る(t *testing.T) {
+	f := secretFixture(t)
+	f.do(t, "PUT", "/v1/settings/core", map[string]any{"values": map[string]string{"license.key": "TOPSECRET", "name": "plain"}})
+	resp, body := f.do(t, "GET", "/v1/settings", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if strings.Contains(fmt.Sprint(body), "TOPSECRET") {
+		t.Errorf("secret leaked: %v", body)
+	}
+	if s := settingOf(t, body, "license.key"); s["value"] != "" || s["secret_set"] != true {
+		t.Errorf("set secret = %v", s)
+	}
+	if s := settingOf(t, body, "branch.open_password"); s["value"] != "" || s["secret_set"] != false {
+		t.Errorf("default-only secret = %v", s)
+	}
+	if s := settingOf(t, body, "name"); s["value"] != "plain" {
+		t.Errorf("plain setting = %v", s)
+	} else if _, ok := s["secret_set"]; ok {
+		t.Errorf("non-secret has secret_set: %v", s)
+	}
+}
+
+func TestSettings_PUT時に空または未指定のSecret型は既存値を保持し明示クリアで削除できる(t *testing.T) {
+	f := secretFixture(t)
+	f.do(t, "PUT", "/v1/settings/core", map[string]any{"values": map[string]string{"license.key": "TOPSECRET"}})
+	stored := func() string {
+		v, _ := f.srv.Settings.Values(context.Background(), "core")
+		return v["license.key"]
+	}
+	f.do(t, "PUT", "/v1/settings/core", map[string]any{"values": map[string]string{"license.key": "", "name": "x"}})
+	f.do(t, "PUT", "/v1/settings/core", map[string]any{"values": map[string]string{"name": "y"}})
+	if stored() != "TOPSECRET" {
+		t.Fatalf("secret lost: %q", stored())
+	}
+	resp, body := f.do(t, "PUT", "/v1/settings/core", map[string]any{"clear": []string{"license.key"}})
+	if resp.StatusCode != 200 || stored() != "" {
+		t.Errorf("clear: %d %q", resp.StatusCode, stored())
+	}
+	if s := body["settings"].([]any)[0].(map[string]any); s["secret_set"] != false {
+		t.Errorf("answer after clear = %v", s)
+	}
+	// Clearing a non-secret or unknown key is refused.
+	for _, key := range []string{"name", "ghost"} {
+		if resp, _ := f.do(t, "PUT", "/v1/settings/core", map[string]any{"clear": []string{key}}); resp.StatusCode != 400 {
+			t.Errorf("clear %s: %d", key, resp.StatusCode)
+		}
+	}
+}
+
+func TestSettings_setting_updatedイベントに平文のSecretを含めない(t *testing.T) {
+	f := secretFixture(t)
+	sub := f.srv.Bus.Subscribe(0)
+	defer sub.Close()
+	f.do(t, "PUT", "/v1/settings/core", map[string]any{"values": map[string]string{"license.key": "TOPSECRET"}})
+	ev := <-sub.Events()
+	if ev.Type != "setting.updated" || strings.Contains(fmt.Sprint(ev.Data), "TOPSECRET") {
+		t.Errorf("event = %+v", ev)
+	}
+}

@@ -249,6 +249,8 @@ func (a *App) settingsCommand() *cobra.Command {
 						Key     string `json:"key"`
 						Value   string `json:"value"`
 						Default string `json:"default"`
+						// SecretSet: a secret's value is never returned, only whether one is stored.
+						SecretSet *bool `json:"secret_set"`
 					} `json:"settings"`
 				} `json:"items"`
 			}
@@ -262,16 +264,23 @@ func (a *App) settingsCommand() *cobra.Command {
 			fmt.Fprintln(tw, "SCOPE\tKEY\tVALUE\tDEFAULT")
 			for _, sc := range out.Items {
 				for _, s := range sc.Settings {
+					if s.SecretSet != nil && *s.SecretSet {
+						s.Value = "(set)"
+					}
 					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", sc.Scope, s.Key, orDash(&s.Value), orDash(&s.Default))
 				}
 			}
 			return tw.Flush()
 		},
 	}
+	var clear []string
 	set := &cobra.Command{
-		Use: "set <scope> <key>=<value>...", Short: "Change settings (scope: core or a module; an empty value restores the default)",
-		Args: cobra.MinimumNArgs(2),
+		Use: "set <scope> <key>=<value>...", Short: "Change settings (scope: core or a module; an empty value restores the default, except for a secret: remove it with --clear <key>)",
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) < 2 && len(clear) == 0 {
+				return errors.New("give key=value or --clear <key>")
+			}
 			values := map[string]string{}
 			for _, kv := range args[1:] {
 				k, v, ok := strings.Cut(kv, "=")
@@ -284,9 +293,14 @@ func (a *App) settingsCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return c.Do(cmd.Context(), "PUT", "/v1/settings/"+args[0], map[string]any{"values": values}, nil)
+			body := map[string]any{"values": values}
+			if len(clear) > 0 {
+				body["clear"] = clear
+			}
+			return c.Do(cmd.Context(), "PUT", "/v1/settings/"+args[0], body, nil)
 		},
 	}
+	set.Flags().StringSliceVar(&clear, "clear", nil, "remove a secret setting (repeatable)")
 	cmd.AddCommand(show, set)
 	return cmd
 }

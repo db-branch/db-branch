@@ -3,6 +3,7 @@ import { api, Setting, SettingScope } from "../api";
 import { ErrorLine } from "./ui";
 import { language, t } from "../lib/i18n";
 import { groupSettings } from "../lib/scopegroups";
+import { editedValue, hasChange, initialValue, settingsChange } from "../lib/settingsform";
 
 // A setting's label and help in the console language: a module's own
 // translation, else the console dictionary (core settings), else English.
@@ -10,22 +11,29 @@ const settingLabel = (s: Setting) => s.translations?.[language()]?.label || t(s.
 const settingHelp = (s: Setting) => s.translations?.[language()]?.help || t(s.help ?? "");
 
 // ScopeForm edits one scope; only changed values are sent, and an emptied
-// field returns to the default (shown as placeholder). Settings are grouped
+// field returns to the default (shown as placeholder). A secret is write-only:
+// its field starts empty, an empty one keeps the stored value, and "Clear"
+// removes it. Settings are grouped
 // into collapsible sections by the first segment of their keys.
 export function ScopeForm({ scope, bare }: { scope: SettingScope; bare?: boolean }) {
-  const initial = Object.fromEntries(scope.settings.map((s) => [s.key, s.value]));
+  const initial = Object.fromEntries(scope.settings.map((s) => [s.key, initialValue(s)]));
   const [values, setValues] = useState<Record<string, string>>(initial);
+  const [cleared, setCleared] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const key = JSON.stringify(initial);
-  useEffect(() => setValues(JSON.parse(key)), [key]);
-  const changed = Object.fromEntries(Object.entries(values).filter(([k, v]) => v !== initial[k]));
-  const dirty = Object.keys(changed).length > 0;
+  useEffect(() => {
+    setValues(JSON.parse(key));
+    setCleared([]);
+  }, [key]);
+  const change = settingsChange(scope.settings, values, cleared);
+  const dirty = hasChange(change);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await api.putSettings(scope.scope, changed);
+      await api.putSettings(scope.scope, change.values, change.clear);
+      setCleared([]);
       setError(null);
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
@@ -41,9 +49,12 @@ export function ScopeForm({ scope, bare }: { scope: SettingScope; bare?: boolean
       </span>
       {s.type === "secret" ? (
         <Secret
-          value={values[s.key] === s.default ? "" : values[s.key]}
-          placeholder={s.default ? t("default") : t("none")}
-          onChange={(v) => setValues({ ...values, [s.key]: v.trim() || s.default })}
+          value={values[s.key] ?? ""}
+          placeholder={s.secret_set ? t("Set") : s.default ? t("default") : t("none")}
+          onChange={(v) => setValues({ ...values, [s.key]: editedValue(s, v) })}
+          clearable={!!s.secret_set}
+          clearing={cleared.includes(s.key)}
+          onClear={(on) => setCleared(on ? [...cleared, s.key] : cleared.filter((k) => k !== s.key))}
         />
       ) : s.type === "text" ? (
         <textarea
@@ -51,7 +62,7 @@ export function ScopeForm({ scope, bare }: { scope: SettingScope; bare?: boolean
           rows={3}
           value={values[s.key] === s.default ? "" : values[s.key]}
           placeholder={s.default || t("none")}
-          onChange={(e) => setValues({ ...values, [s.key]: e.target.value.trim() || s.default })}
+          onChange={(e) => setValues({ ...values, [s.key]: editedValue(s, e.target.value) })}
         />
       ) : s.type === "bool" ? (
         <input type="checkbox" checked={(values[s.key] || s.default) === "true"} onChange={(e) => setValues({ ...values, [s.key]: String(e.target.checked) })} />
@@ -104,8 +115,23 @@ export function Chevron(): ReactNode {
   );
 }
 
-// Secret is a masked input (keys, passwords) with a button to show it.
-function Secret({ value, placeholder, onChange }: { value: string; placeholder: string; onChange: (v: string) => void }) {
+// Secret is a masked input (keys, passwords) with a button to show it. A
+// stored secret is never shown; "Clear" marks it for removal.
+export function Secret({
+  value,
+  placeholder,
+  onChange,
+  clearable,
+  clearing,
+  onClear,
+}: {
+  value: string;
+  placeholder: string;
+  onChange: (v: string) => void;
+  clearable: boolean;
+  clearing: boolean;
+  onClear: (on: boolean) => void;
+}) {
   const [shown, setShown] = useState(false);
   return (
     <span className="secret">
@@ -121,6 +147,11 @@ function Secret({ value, placeholder, onChange }: { value: string; placeholder: 
       <button type="button" className="text-button" onClick={() => setShown(!shown)} aria-pressed={shown} title={shown ? t("Hide") : t("Show")}>
         {shown ? t("Hide") : t("Show")}
       </button>
+      {clearable && (
+        <button type="button" className="text-button" onClick={() => onClear(!clearing)} aria-pressed={clearing}>
+          {clearing ? t("Will be cleared") : t("Clear")}
+        </button>
+      )}
     </span>
   );
 }
