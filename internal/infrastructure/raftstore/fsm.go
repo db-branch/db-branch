@@ -51,6 +51,10 @@ type State struct {
 	// ClusterID is the cluster's anonymous identifier (see
 	// domain.ClusterIDStore); empty until the leader draws one.
 	ClusterID string `json:"cluster_id,omitempty"`
+	// RevokedSessions are the console sessions that were logged out (id ->
+	// expiry in unix seconds); a record goes once the session would have
+	// expired. An older node drops it, and then forgets the logouts.
+	RevokedSessions map[string]int64 `json:"revoked_sessions,omitempty"`
 }
 
 func newState() State {
@@ -82,6 +86,11 @@ type Command struct {
 	IDs *domain.ServiceIDs `json:"service_ids,omitempty"`
 	// ClusterID is the payload of init_cluster_id.
 	ClusterID string `json:"cluster_id,omitempty"`
+	// Expires and At (unix seconds) are the payload of revoke_session: when
+	// the session would have expired, and the time of the logout, which
+	// decides (the same on every node) which old records go.
+	Expires int64 `json:"expires,omitempty"`
+	At      int64 `json:"at,omitempty"`
 	// Nodes is the replica list of set_base_replica_nodes; absent (null)
 	// means every node, [] means the base's own node only.
 	Nodes *[]string `json:"nodes"`
@@ -139,7 +148,11 @@ type BranchOwner struct {
 // immutable principal ID and records its display OwnerName. Older nodes do not
 // know migrate_branch_owner, so the command waits for protocol 23 everywhere
 // (domain.ProtocolBranchOwnerID).
-const Protocol = 23
+//
+// 24: revoke_session records a logged-out console session, so every node
+// refuses its cookie. Older nodes do not know revoke_session, so the command
+// waits for protocol 24 everywhere (domain.ProtocolSessionRevocation).
+const Protocol = 24
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a
@@ -164,6 +177,7 @@ var opProtocol = map[string]int{
 	"init_cluster_id":      17,
 	"delete_module":        22,
 	"migrate_branch_owner": domain.ProtocolBranchOwnerID,
+	"revoke_session":       domain.ProtocolSessionRevocation,
 }
 
 // Needs returns the protocol the command requires (0 for unknown commands).
@@ -202,6 +216,11 @@ func PutBranch(b domain.Branch) Command  { return Command{Op: "put_branch", Bran
 func DeleteBranch(n domain.Name) Command { return Command{Op: "delete_branch", Name: n.String()} }
 func MigrateBranchOwner(n domain.Name, owner, ownerName string) Command {
 	return Command{Op: "migrate_branch_owner", BranchOwner: &BranchOwner{Name: n.String(), Owner: owner, OwnerName: ownerName}}
+}
+
+// RevokeSession records session id as logged out until expires (at is now).
+func RevokeSession(id string, expires, at time.Time) Command {
+	return Command{Op: "revoke_session", Name: id, Expires: expires.Unix(), At: at.Unix()}
 }
 func PutNode(n domain.Node) Command     { return Command{Op: "put_node", Node: &n} }
 func DeleteNode(name string) Command    { return Command{Op: "delete_node", Name: name} }
@@ -389,6 +408,8 @@ func (c Command) complete() bool {
 		return c.IDs != nil && c.IDs.Valid()
 	case "init_cluster_id":
 		return domain.ValidClusterID(c.ClusterID)
+	case "revoke_session":
+		return c.Name != "" && c.Expires > 0
 	case "migrate_branch_owner":
 		return c.BranchOwner != nil && c.BranchOwner.Name != "" && c.BranchOwner.Owner != "" && c.BranchOwner.OwnerName != ""
 	}
@@ -579,6 +600,18 @@ func (f *FSM) apply(c Command) error {
 		b.Owner = c.BranchOwner.Owner
 		b.OwnerName = c.BranchOwner.OwnerName
 		s.Branches[c.BranchOwner.Name] = b
+	case "revoke_session":
+		for id, exp := range s.RevokedSessions {
+			if exp <= c.At {
+				delete(s.RevokedSessions, id)
+			}
+		}
+		if c.Expires > c.At {
+			if s.RevokedSessions == nil {
+				s.RevokedSessions = map[string]int64{}
+			}
+			s.RevokedSessions[c.Name] = c.Expires
+		}
 	case "delete_branch":
 		delete(s.Branches, c.Name)
 	case "put_node":
@@ -695,7 +728,21 @@ func (f *FSM) State() State {
 		admin := *f.state.Admin
 		out.Admin = &admin
 	}
+	for k, v := range f.state.RevokedSessions {
+		if out.RevokedSessions == nil {
+			out.RevokedSessions = map[string]int64{}
+		}
+		out.RevokedSessions[k] = v
+	}
 	return out
+}
+
+// SessionRevoked reports whether console session id was logged out.
+func (f *FSM) SessionRevoked(id string) bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	_, ok := f.state.RevokedSessions[id]
+	return ok
 }
 
 type snapshot struct{ data []byte }

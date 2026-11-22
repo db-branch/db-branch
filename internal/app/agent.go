@@ -49,7 +49,11 @@ type AgentOptions struct {
 }
 
 func authService(cfg config.Config) *auth.Service {
-	return &auth.Service{Store: authfile.Store{Path: filepath.Join(cfg.DataDir, "auth.json")}, Hasher: authfile.Argon2{}, Clock: time.Now}
+	return &auth.Service{
+		Store: authfile.Store{Path: filepath.Join(cfg.DataDir, "auth.json")}, Hasher: authfile.Argon2{}, Clock: time.Now,
+		// Logouts survive a restart (a cluster replaces this with its own list).
+		Revocations: authfile.NewRevocations(filepath.Join(cfg.DataDir, "revoked-sessions.json")),
+	}
 }
 
 // AdvertiseHost is how clients reach this node.
@@ -167,7 +171,8 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		// through the replicated store.
 		ops.Store, ops.Bus = cl.store, nil
 		// One console password for the whole cluster.
-		srv.Auth = &auth.Service{Store: raftstore.AdminStore{Store: cl.store}, Hasher: authfile.Argon2{}, Clock: time.Now}
+		// A logout on one node holds on all of them.
+		srv.Auth = &auth.Service{Store: raftstore.AdminStore{Store: cl.store}, Hasher: authfile.Argon2{}, Clock: time.Now, Revocations: raftstore.SessionRevocations{Store: cl.store}}
 		srv.OnRuntimesChanged = cl.beatNow
 		cl.runtimes = func(ctx context.Context) []string {
 			refs, _ := a.Runtimes.List(ctx)

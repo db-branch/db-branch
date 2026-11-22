@@ -191,4 +191,7 @@ func TestBranch_DisplayOwnerは表示名があれば優先しプロトコル23�
 	if domain.ProtocolBranchOwnerID != 23 {
 		t.Errorf("ProtocolBranchOwnerID = %d, want 23", domain.ProtocolBranchOwnerID)
 	}
+	if domain.ProtocolSessionRevocation != 24 {
+		t.Errorf("ProtocolSessionRevocation = %d, want 24", domain.ProtocolSessionRevocation)
+	}
 }

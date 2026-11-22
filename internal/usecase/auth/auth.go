@@ -98,6 +98,17 @@ type Hasher interface {
 	Hash(password string, salt []byte) []byte
 }
 
+// Revocations remembers the sessions that were logged out, so that every node
+// (and every restart) refuses their cookies until they would have expired
+// anyway. In a cluster it is replicated; on a single node it is a file.
+type Revocations interface {
+	// Revoke records session id as ended; the record may be dropped once
+	// expires has passed (now is the caller's clock, used to tidy old records).
+	Revoke(id string, expires, now time.Time) error
+	// Revoked reports whether session id was logged out.
+	Revoked(id string) bool
+}
+
 // Session is a logged-in console session.
 type Session struct {
 	Token     string
@@ -116,13 +127,16 @@ type Session struct {
 }
 
 // Service checks passwords and issues signed session tokens. Nothing about
-// sessions is kept in memory but logouts on this node.
+// sessions is stored but logouts (see Revocations).
 type Service struct {
 	Store  Store
 	Hasher Hasher
 	Clock  func() time.Time
 	// TTL is how long a session lasts without use (default DefaultSessionTTL).
 	TTL func() time.Duration
+	// Revocations is the shared list of logged-out sessions. Optional: without
+	// it a logout only holds on this node, until it restarts.
+	Revocations Revocations
 
 	mu          sync.Mutex
 	revoked     map[string]time.Time // session id -> expiry, after logout
@@ -394,6 +408,9 @@ func (s *Service) Session(token string) (Session, error) {
 	s.mu.Lock()
 	_, revoked := s.revoked[p.ID]
 	s.mu.Unlock()
+	if !revoked && s.Revocations != nil {
+		revoked = s.Revocations.Revoked(p.ID)
+	}
 	if p.Gen != c.Generation || !now.Before(exp) || revoked {
 		return Session{}, ErrNoSession
 	}
@@ -405,25 +422,29 @@ func (s *Service) Session(token string) (Session, error) {
 	return Session{Token: token, CSRF: s.issue(c, p).CSRF, User: p.User, Name: p.Name, Roles: p.Roles, ExpiresAt: exp.UTC(), MustChange: c.MustChange && p.User == AdminUser, id: p.ID}, nil
 }
 
-// Logout ends a session on this node. (Tokens are not stored, so another
-// node would still accept it until it expires; the console drops the cookie.)
+// Logout ends a session. It is recorded in Revocations so that every node
+// refuses the cookie; if that cannot be written (a cluster still upgrading)
+// the session still ends on this node.
 func (s *Service) Logout(token string) {
 	sess, err := s.Session(token)
 	if err != nil {
 		return
 	}
+	now := s.Clock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.revoked == nil {
 		s.revoked = map[string]time.Time{}
 	}
-	now := s.Clock()
 	for id, exp := range s.revoked {
 		if !now.Before(exp) {
 			delete(s.revoked, id)
 		}
 	}
 	s.revoked[sess.id] = sess.ExpiresAt
+	s.mu.Unlock()
+	if s.Revocations != nil { // outside the lock: this may wait for the cluster
+		_ = s.Revocations.Revoke(sess.id, sess.ExpiresAt, now)
+	}
 }
 
 // ChangePassword sets a new password, which ends every session; the caller

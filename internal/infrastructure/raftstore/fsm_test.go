@@ -193,7 +193,7 @@ func TestProtocol_すべてのコマンドに必要な版があり最新の版�
 	for _, op := range []string{"put_base", "delete_base", "put_branch", "delete_branch", "put_node", "delete_node",
 		"set_join_secret", "insert_base", "insert_branch", "put_operation", "set_admin", "init_admin", "add_replica",
 		"add_runtime", "remove_runtime", "put_route_user", "delete_route_user", "put_module", "delete_module", "put_settings", "put_token", "delete_token",
-		"put_module_data", "delete_module_data", "start_trial", "set_base_refresh", "record_base_refresh_run", "clear_base_refresh", "set_base_replica_nodes", "remove_replica", "set_base_anonymous", "init_service_ids", "init_cluster_id", "migrate_branch_owner"} {
+		"put_module_data", "delete_module_data", "start_trial", "set_base_refresh", "record_base_refresh_run", "clear_base_refresh", "set_base_replica_nodes", "remove_replica", "set_base_anonymous", "init_service_ids", "init_cluster_id", "migrate_branch_owner", "revoke_session"} {
 		n := raftstore.Command{Op: op}.Needs()
 		if n < 1 || n > raftstore.Protocol {
 			t.Errorf("%s needs %d", op, n)
@@ -645,5 +645,41 @@ func TestProtocol_未使用の版を予約せず新機能は現行より大き�
 		if p > raftstore.Protocol {
 			t.Fatalf("protocol %d is above Protocol %d", p, raftstore.Protocol)
 		}
+	}
+}
+
+func TestFSM_revoke_sessionはログアウト済みセッションを記録し期限切れの記録を片付けスナップショットに残る(t *testing.T) {
+	if got := raftstore.RevokeSession("s1", time.Unix(2000, 0), time.Unix(1000, 0)).Needs(); got != domain.ProtocolSessionRevocation {
+		t.Fatalf("Needs() = %d, want %d", got, domain.ProtocolSessionRevocation)
+	}
+	f := raftstore.NewFSM()
+	apply(t, f, raftstore.RevokeSession("old", time.Unix(1500, 0), time.Unix(1000, 0)))
+	apply(t, f, raftstore.RevokeSession("s1", time.Unix(5000, 0), time.Unix(2000, 0))) // prunes "old"
+	if f.SessionRevoked("old") {
+		t.Error("expired record kept")
+	}
+	if !f.SessionRevoked("s1") || f.SessionRevoked("other") {
+		t.Error("s1 must be revoked and only s1")
+	}
+	// Already-expired sessions need no record.
+	apply(t, f, raftstore.RevokeSession("late", time.Unix(1000, 0), time.Unix(2000, 0)))
+	if f.SessionRevoked("late") {
+		t.Error("record for an expired session")
+	}
+	// Survives a snapshot; State() hands out copies.
+	snap, _ := f.Snapshot()
+	var buf bytes.Buffer
+	_ = snap.Persist(&sink{Buffer: &buf})
+	g := raftstore.NewFSM()
+	if err := g.Restore(io.NopCloser(&buf)); err != nil || !g.SessionRevoked("s1") {
+		t.Errorf("after restore: %v", err)
+	}
+	f.State().RevokedSessions["s1"] = 0
+	if !f.SessionRevoked("s1") {
+		t.Error("State shares the revocation map")
+	}
+	// Without its data the command fails cleanly.
+	if _, ok := f.Apply(&raft.Log{Data: []byte(`{"op":"revoke_session"}`)}).(error); !ok {
+		t.Error("revoke_session without data must fail")
 	}
 }

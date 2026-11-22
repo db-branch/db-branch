@@ -554,3 +554,47 @@ func TestVerifyFrom_全記録がロック中なら新規クライアントは共
 		t.Errorf("tracked = %d", n)
 	}
 }
+
+// memRevocations stands in for the cluster-wide (or on-disk) revocation list.
+type memRevocations struct {
+	ids     map[string]time.Time
+	failErr error
+}
+
+func (m *memRevocations) Revoke(id string, expires, _ time.Time) error {
+	if m.failErr != nil {
+		return m.failErr
+	}
+	if m.ids == nil {
+		m.ids = map[string]time.Time{}
+	}
+	m.ids[id] = expires
+	return nil
+}
+
+func (m *memRevocations) Revoked(id string) bool { _, ok := m.ids[id]; return ok }
+
+func TestLogout_失効を共有の記録に残し別のノードでも使えなくする(t *testing.T) {
+	shared := &memRevocations{}
+	a, _, st := newService(t)
+	a.Revocations = shared
+	b := &auth.Service{Store: st, Hasher: sha{}, Clock: a.Clock, Revocations: shared}
+	sess, _ := a.Login("admin", "correct horse battery")
+	if _, err := b.Session(sess.Token); err != nil {
+		t.Fatalf("before logout: %v", err)
+	}
+	a.Logout(sess.Token)
+	if _, err := b.Session(sess.Token); !errors.Is(err, auth.ErrNoSession) {
+		t.Errorf("other node after logout: %v", err)
+	}
+}
+
+func TestLogout_共有の記録に書けなくてもこのノードでは失効させる(t *testing.T) {
+	s, _, _ := newService(t)
+	s.Revocations = &memRevocations{failErr: errors.New("cluster upgrading")}
+	sess, _ := s.Login("admin", "correct horse battery")
+	s.Logout(sess.Token)
+	if _, err := s.Session(sess.Token); !errors.Is(err, auth.ErrNoSession) {
+		t.Errorf("after failed shared revoke: %v", err)
+	}
+}

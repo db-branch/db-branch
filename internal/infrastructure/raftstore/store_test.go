@@ -902,3 +902,27 @@ func TestStore_migrate_branch_ownerは全ノードがプロトコル23になる�
 		t.Errorf("branch after migrate = %+v", b)
 	}
 }
+
+func TestSessionRevocations_ログアウトは全ノードがプロトコル24になるまで書かれず_なれば全ノードに届く(t *testing.T) {
+	if raftstore.Protocol < domain.ProtocolSessionRevocation {
+		t.Fatalf("Protocol = %d, below domain.ProtocolSessionRevocation (%d)", raftstore.Protocol, domain.ProtocolSessionRevocation)
+	}
+	cl := newCluster(t, 1)
+	l := cl.leader(t)
+	rev := raftstore.SessionRevocations{Store: l}
+	now := time.Now()
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: domain.ProtocolSessionRevocation - 1})
+	if err := rev.Revoke("s1", now.Add(time.Hour), now); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("with an old node: %v, want ErrClusterUpgrading", err)
+	}
+	if rev.Revoked("s1") {
+		t.Fatal("revoked while upgrading")
+	}
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: domain.ProtocolSessionRevocation})
+	if err := rev.Revoke("s1", now.Add(time.Hour), now); err != nil {
+		t.Fatal(err)
+	}
+	if !rev.Revoked("s1") || rev.Revoked("s2") {
+		t.Error("s1 must be revoked and only s1")
+	}
+}

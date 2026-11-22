@@ -10,6 +10,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- Console logout now ends the session on every node and survives a restart (GA audit R-01). Logged-out session ids are replicated in the cluster state (`revoke_session`, Raft Protocol 24; until every node is at 24 a logout holds only on the node that took it, as before) and, on a single node, kept in `revoked-sessions.json` next to `auth.json`. Records go once the session would have expired anyway.
+
 - The console's Modules page no longer marks free modules (for example ProxySQL) as **Paid** when the licence covers every module. The badge now shows for modules the server reports as needing a licence, and, for a licence that names its modules, for the modules it names.
 - Secret settings (the licence key, the open-branch password, webhook secrets) are now write-only. `GET /v1/settings` and the `setting.updated` event return an empty `value` and `secret_set` instead of the secret. A secret sent empty keeps its value; list its key in `clear` of `PUT /v1/settings/{scope}` (or `db-branch settings set <scope> --clear <key>`) to remove it. An empty value no longer removes a secret (older `settings set <scope> <key>=` and older console builds did). Text settings in the console keep trailing spaces and newlines.
 
