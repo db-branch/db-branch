@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/db-branch/db-branch/internal/app"
+	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/infrastructure/filestore"
 	"github.com/db-branch/db-branch/internal/interface/cli"
 )
 
@@ -142,5 +144,42 @@ func TestOutboundIP_既定経路のアドレスを返す(t *testing.T) {
 	ip := app.OutboundIP()
 	if parsed := net.ParseIP(ip); parsed == nil || parsed.To4() == nil {
 		t.Errorf("OutboundIP = %q", ip)
+	}
+}
+
+func TestRunAgent_起動時に既存ブランチ所有者を不変IDと表示名へ移行する(t *testing.T) {
+	c := cfg(t)
+	sockDir, err := os.MkdirTemp("", "dbb-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	c.Socket = filepath.Join(sockDir, "a.sock")
+	c.Console.Listen = "127.0.0.1:0"
+	if err := app.SetPool(c, "tank"); err != nil {
+		t.Fatal(err)
+	}
+	st := &filestore.Store{Path: filepath.Join(c.DataDir, "state.json")}
+	t1 := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	if err := st.PutToken(context.Background(), domain.APIToken{ID: "ci01", Name: "ci", Scope: domain.ScopeBranches, CreatedAt: t1}); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := domain.ParseName("feat")
+	base, _ := domain.ParseName("prod")
+	if err := st.PutBranch(context.Background(), domain.Branch{Name: n, Base: base, Status: domain.BranchPaused, Owner: "ci", CreatedAt: t1.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := app.RunAgent(ctx, c, app.AgentOptions{ExpireEvery: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetBranch(context.Background(), n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Owner != "token:ci01" || got.OwnerName != "ci" {
+		t.Errorf("migrated branch = (%q, %q), want (token:ci01, ci)", got.Owner, got.OwnerName)
 	}
 }

@@ -102,7 +102,8 @@ export function Portal() {
       api.session().then((s) => (s.must_change_password ? setSession(null) : enter(s)), () => setSession(null));
     });
   }, []);
-  const me = session ? session.user.name || session.user.id : null;
+  const myId = session ? session.user.id : null;
+  const myName = session ? session.user.name || session.user.id : null;
 
   const caps = useCapabilities(!!session);
   const bases = usePoll<Offer>(
@@ -142,7 +143,7 @@ export function Portal() {
 
   const mine = usePoll<Branch[]>(
     async () => {
-      if (session) return (await api.branches()).filter((b) => b.owner === me);
+      if (session) return (await api.branches()).filter((b) => b.owner === myId);
       const found: Branch[] = [];
       for (const n of local) {
         try {
@@ -212,7 +213,7 @@ export function Portal() {
   const rows = sortBranches(
     [
       ...(mine.data ?? []),
-      ...jobs.filter((j) => !mine.data?.some((b) => b.name === j.name)).map((j) => placeholder(j, me)),
+      ...jobs.filter((j) => !mine.data?.some((b) => b.name === j.name)).map((j) => placeholder(j, myId, myName)),
     ],
     [...jobs.map((j) => j.name), ...(fresh ? [fresh] : [])],
   );
@@ -396,7 +397,7 @@ export function Portal() {
 }
 
 // placeholder stands in for a branch the server has not listed yet.
-function placeholder(j: Job, owner: string | null): Branch {
+function placeholder(j: Job, owner: string | null, ownerName: string | null): Branch {
   return {
     name: j.name,
     status: "provisioning",
@@ -413,6 +414,7 @@ function placeholder(j: Job, owner: string | null): Branch {
     proxy: null,
     operation: null,
     owner,
+    owner_name: ownerName,
     id: j.name,
     access: "private",
     checkpoints: false,

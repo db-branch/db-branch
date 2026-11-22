@@ -55,8 +55,13 @@ func isAdmin(p ext.Principal) bool {
 	return slices.Contains(p.Roles, "admin") || slices.Contains(p.Roles, "scope:"+domain.ScopeFull)
 }
 
-// ownerName is how a principal appears as a branch owner.
-func ownerName(p ext.Principal) string {
+// ownerID is the immutable identifier of a principal as a branch owner.
+func ownerID(p ext.Principal) string {
+	return p.ID
+}
+
+// ownerDisplayName is how a principal is shown for display and branch name prefixes.
+func ownerDisplayName(p ext.Principal) string {
 	if p.Name != "" {
 		return p.Name
 	}
@@ -81,6 +86,27 @@ func (o ownership) branch(ctx context.Context, name string) (domain.Branch, bool
 	return b, err == nil
 }
 
+// canManageBranch reports whether p owns b or shares branches with b's owner
+// (or is an admin). Legacy branches without an owner are admin-only.
+func (s *Server) canManageBranch(ctx context.Context, p ext.Principal, b domain.Branch) bool {
+	if isAdmin(p) {
+		return true
+	}
+	if p.ID == Anonymous.ID || b.Owner == "" {
+		return false
+	}
+	if b.Owner == ownerID(p) {
+		return true
+	}
+	return s.Ext.BranchPolicy != nil && s.Ext.BranchPolicy.SharesBranches(ctx, p, b.Owner)
+}
+
+// canReadBranch reports whether p may read, connect to, or query b: managers
+// of b plus anyone for open branches.
+func (s *Server) canReadBranch(ctx context.Context, p ext.Principal, b domain.Branch) bool {
+	return b.Open() || s.canManageBranch(ctx, p, b)
+}
+
 func (o ownership) Authorize(ctx context.Context, p ext.Principal, action string, r ext.Resource) error {
 	if p.ID == Anonymous.ID {
 		switch action {
@@ -93,24 +119,27 @@ func (o ownership) Authorize(ctx context.Context, p ext.Principal, action string
 		}
 		return fmt.Errorf("%w: log in for %s (without a login: branches from public snapshots, and open branches)", ext.ErrForbidden, action)
 	}
-	if isAdmin(p) || r.Kind != "branch" || r.Name == "" {
-		return nil
-	}
-	switch action {
-	case "branch.read", "branch.create":
+	if isAdmin(p) || r.Kind != "branch" || r.Name == "" || action == "branch.create" {
 		return nil
 	}
 	b, ok := o.branch(ctx, r.Name)
-	if !ok || b.Owner == "" || b.Owner == ownerName(p) {
-		return nil // unknown branches answer 404 in the handler; legacy ones have no owner
+	if !ok {
+		return nil // unknown branches answer 404 in the handler
 	}
-	if (action == "branch.connect" || action == "branch.query") && b.Open() {
-		return nil
+	switch action {
+	case "branch.read", "branch.connect", "branch.query":
+		if o.s.canReadBranch(ctx, p, b) {
+			return nil
+		}
+	default:
+		if o.s.canManageBranch(ctx, p, b) {
+			return nil
+		}
 	}
-	if pol := o.s.Ext.BranchPolicy; pol != nil && pol.SharesBranches(ctx, p, b.Owner) {
-		return nil // e.g. a teammate
+	if b.Owner == "" {
+		return fmt.Errorf("%w: branch %s has no owner (only an admin may manage it)", ext.ErrForbidden, b.Name)
 	}
-	return fmt.Errorf("%w: branch %s belongs to %s", ext.ErrForbidden, b.Name, b.Owner)
+	return fmt.Errorf("%w: branch %s belongs to another user", ext.ErrForbidden, b.Name)
 }
 
 // branchOwner decides the owner and access of a new branch for p: people
@@ -121,11 +150,21 @@ func (s *Server) branchOwner(ctx context.Context, svc Branches, p ext.Principal,
 		return fmt.Errorf("%w: access must be %q or %q", errInvalidAccess, domain.AccessPrivate, domain.AccessOpen)
 	}
 	if p.ID != Anonymous.ID {
+		id, display := ownerID(p), ownerDisplayName(p)
 		switch {
 		case in.Owner == "":
-			in.Owner = ownerName(p)
-		case in.Owner != ownerName(p) && !isAdmin(p):
+			in.Owner = id
+			in.OwnerName = display
+		case in.Owner == id:
+			if !isAdmin(p) || in.OwnerName == "" {
+				in.OwnerName = display
+			}
+		case !isAdmin(p):
 			return fmt.Errorf("%w: only an admin may make a branch for %s", ext.ErrForbidden, in.Owner)
+		default:
+			if in.OwnerName == "" {
+				in.OwnerName = in.Owner
+			}
 		}
 		return nil
 	}
@@ -155,7 +194,7 @@ func (s *Server) branchOwner(ctx context.Context, svc Branches, p ext.Principal,
 	if most := b.Anonymous.MaxBranches; most != nil && perBase[base.String()] >= *most {
 		return fmt.Errorf("%w: %d branches without a login exist from base %s already (the most it allows); try later or log in", domain.ErrConflict, perBase[base.String()], base)
 	}
-	in.Owner, in.Access = Anonymous.Name, domain.AccessOpen
+	in.Owner, in.OwnerName, in.Access = Anonymous.ID, Anonymous.Name, domain.AccessOpen
 	if eff := b.Anonymous.EffectiveTTL(maxTTL); eff > 0 && (*ttl == 0 || *ttl > eff) {
 		*ttl = eff
 	}
@@ -167,7 +206,7 @@ func (s *Server) branchOwner(ctx context.Context, svc Branches, p ext.Principal,
 func anonymousCounts(list []domain.Branch) (int, map[string]int) {
 	total, perBase := 0, map[string]int{}
 	for _, x := range list {
-		if x.Owner == Anonymous.Name {
+		if x.Owner == Anonymous.ID {
 			total++
 			perBase[x.Base.String()]++
 		}
@@ -185,7 +224,7 @@ func (s *Server) userBranchName(p ext.Principal, r *http.Request, in *createBran
 	if _, session := s.current(r); !session || p.ID == Anonymous.ID || isAdmin(p) {
 		return nil
 	}
-	full, err := domain.PrefixedName(ownerName(p), in.Name)
+	full, err := domain.PrefixedName(ownerDisplayName(p), in.Name)
 	if err != nil {
 		return err
 	}
@@ -198,7 +237,7 @@ func branchPrefix(p ext.Principal) string {
 	if p.ID == Anonymous.ID || isAdmin(p) {
 		return ""
 	}
-	return domain.OwnerPrefix(ownerName(p)) + "-"
+	return domain.OwnerPrefix(ownerDisplayName(p)) + "-"
 }
 
 // PublicSettle is how long an anonymous request waits for a snapshot to be

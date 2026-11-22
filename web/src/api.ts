@@ -17,6 +17,7 @@ export type Branch = {
   proxy: { host: string; port: number; user: string } | null;
   operation: { id: string; kind: string } | null;
   owner: string | null;
+  owner_name?: string | null;
   id: string;
   access: "private" | "open";
   // record: the branch was created with its changes recorded (history module).
@@ -26,6 +27,11 @@ export type Branch = {
   // base_runtime: the Base's runtime; runtime differs once the Branch is upgraded.
   base_runtime?: string;
 };
+
+// ownerLabel returns the human-readable owner label, falling back to owner id.
+export function ownerLabel(b: { owner: string | null; owner_name?: string | null }): string | null {
+  return b.owner_name || b.owner;
+}
 
 // Checkpoint is a saved state of a branch. line is the line of history it was
 // taken on (a restore starts a new one); auto marks those taken before a

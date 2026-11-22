@@ -112,7 +112,7 @@ func (f *fakeBranches) CreateBranch(_ context.Context, r dbbranch.CreateBranchRe
 		return domain.Branch{}, f.fail
 	}
 	b := domain.Branch{Name: r.Name, Base: r.Base, Runtime: mysql84, Status: domain.BranchReady, Port: 40001, User: "branch", Password: "pw", CreatedAt: t0,
-		Owner: r.Owner, Access: r.Access, Record: r.Record}
+		Owner: r.Owner, OwnerName: r.OwnerName, Access: r.Access, Record: r.Record}
 	if r.TTL > 0 {
 		exp := t0.Add(r.TTL)
 		b.ExpiresAt = &exp

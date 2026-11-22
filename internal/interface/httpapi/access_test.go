@@ -160,7 +160,7 @@ func TestAccess_転送された要求は元の利用者として扱い二重に�
 	}
 	// On the receiving node: the socket handler with the forwarding headers.
 	sink.events = nil
-	f.branches.branches["here"] = domain.Branch{Name: name("here"), Status: domain.BranchReady}
+	f.branches.branches["here"] = domain.Branch{Name: name("here"), Status: domain.BranchReady, Owner: "sso:bob", OwnerName: "bob"}
 	resp, _ = send(t, f.srv.Handler(true), "POST", "/v1/branches/here/reset", nil, func(r *http.Request) {
 		r.Header.Set("X-Db-Branch-Forwarded", "n9")
 		r.Header.Set("X-Db-Branch-Principal", `{"id":"sso:bob","roles":["viewer"]}`)
@@ -382,7 +382,7 @@ func TestHTTPAPI_正規の転送経路では重複監査抑止とmodules_pending
 	sink := &recordingSink{}
 	f.srv.Ext = ext.Module{AuditSink: sink}
 	f.srv.PendingModules = func() []string { return []string{"auth"} }
-	f.branches.branches["here"] = domain.Branch{Name: name("here"), Status: domain.BranchReady}
+	f.branches.branches["here"] = domain.Branch{Name: name("here"), Status: domain.BranchReady, Owner: "sso:bob", OwnerName: "bob"}
 
 	trustedFwd := func(r *http.Request) {
 		r.Header.Set("X-Db-Branch-Forwarded", "n9")

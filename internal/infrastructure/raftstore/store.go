@@ -55,12 +55,13 @@ type Store struct {
 }
 
 var (
-	_ domain.Store       = (*Store)(nil)
-	_ domain.NodeStore   = (*Store)(nil)
-	_ domain.ModuleStore = (*Store)(nil)
-	_ operation.Store    = (*Store)(nil)
-	_ domain.UpdateStore = (*Store)(nil)
-	_ membership.Members = (*Store)(nil)
+	_ domain.Store               = (*Store)(nil)
+	_ domain.BranchOwnerMigrator = (*Store)(nil)
+	_ domain.NodeStore           = (*Store)(nil)
+	_ domain.ModuleStore         = (*Store)(nil)
+	_ operation.Store            = (*Store)(nil)
+	_ domain.UpdateStore         = (*Store)(nil)
+	_ membership.Members         = (*Store)(nil)
 )
 
 // Open starts the local Raft node. Call Bootstrap on the first node only.
@@ -332,8 +333,17 @@ func (s *Store) ListBranches(context.Context) ([]domain.Branch, error) {
 func (s *Store) PutBranch(ctx context.Context, b domain.Branch) error {
 	if old, ok := s.fsm.State().Branches[b.Name.String()]; ok {
 		b.Record = old.Record
+		if b.OwnerName == "" && old.OwnerName != "" && b.Owner == old.Owner {
+			b.OwnerName = old.OwnerName
+		}
 	}
 	return s.Apply(ctx, PutBranch(b))
+}
+
+// MigrateBranchOwner atomically updates a legacy branch's Owner and OwnerName
+// once every cluster node speaks ProtocolBranchOwnerID.
+func (s *Store) MigrateBranchOwner(ctx context.Context, n domain.Name, owner, ownerName string) error {
+	return s.Apply(ctx, MigrateBranchOwner(n, owner, ownerName))
 }
 
 func (s *Store) DeleteBranch(ctx context.Context, n domain.Name) error {

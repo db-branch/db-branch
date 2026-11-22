@@ -215,7 +215,8 @@ func TestCheckpoint_所有者と管理者だけが操作できる(t *testing.T) 
 		{"t-alice", "POST", "/v1/branches/alices/checkpoints/c1/restore", 202},
 		{"t-alice", "DELETE", "/v1/branches/alices/checkpoints/c1", 204},
 		{"t-full", "POST", "/v1/branches/alices/checkpoints", 201},
-		{"t-bob", "POST", "/v1/branches/legacy/checkpoints", 201},
+		{"t-bob", "POST", "/v1/branches/legacy/checkpoints", 403},
+		{"t-full", "POST", "/v1/branches/legacy/checkpoints", 201},
 		// Without credentials: nothing, not even on an open branch (401: log in).
 		{"", "GET", "/v1/branches/opened/checkpoints", 401},
 		{"", "POST", "/v1/branches/opened/checkpoints", 401},

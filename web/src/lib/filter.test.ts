@@ -50,6 +50,17 @@ describe("filterBranches", () => {
     expect(f({ base: "orders", owner: "carol" })).toEqual(["carol-x"]);
     expect(f({ base: "orders", status: "failed" })).toEqual([]);
   });
+  it("matches owner_name as well as immutable owner id", () => {
+    const withId = [
+      br("alice-report", { owner: "sso:alice", owner_name: "alice@example.com" }),
+      br("ci-run", { owner: "token:abc123", owner_name: "ci" }),
+    ];
+    const run = (over: Partial<Record<string, string>>) => filterBranches(withId, { q: "", status: "", engine: "", base: "", owner: "", ...over }).map((b) => b.name);
+    expect(run({ owner: "alice@example.com" })).toEqual(["alice-report"]);
+    expect(run({ owner: "sso:alice" })).toEqual(["alice-report"]);
+    expect(run({ q: "example.com" })).toEqual(["alice-report"]);
+    expect(run({ q: "token:abc123" })).toEqual(["ci-run"]);
+  });
 });
 
 describe("filterBases", () => {

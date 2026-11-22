@@ -51,10 +51,12 @@ type branchJSON struct {
 	// Proxy is how to reach the branch through this node's proxy, by user name.
 	Proxy     *connectionJSON `json:"proxy"`
 	Operation *opRef          `json:"operation"`
-	// Owner manages the branch; ID is "owner/name" ("name" without an owner).
-	Owner  *string `json:"owner"`
-	ID     string  `json:"id"`
-	Access string  `json:"access"`
+	// Owner is the immutable principal ID who manages the branch; OwnerName is
+	// their display name; ID is "owner/name" ("name" without an owner).
+	Owner     *string `json:"owner"`
+	OwnerName *string `json:"owner_name"`
+	ID        string  `json:"id"`
+	Access    string  `json:"access"`
 	// Record: the branch records its changes, from its creation to its
 	// deletion (the history module records). Fixed when the branch is
 	// created, by `record` or the module's record_all setting at that moment;
@@ -87,11 +89,11 @@ func (s *Server) branchView(ctx context.Context, svc Branches, b domain.Branch) 
 		Base: b.Base.String(), Snapshot: b.Snapshot, Runtime: b.Runtime.String(), Node: s.nodeOf(b.Node),
 		CreatedAt: ts(b.CreatedAt), ExpiresAt: optTS(b.ExpiresAt), ResetAt: optTS(b.ResetAt),
 		Connection: connectionJSON{Host: s.hostOf(b.Node), Port: b.Port, User: b.User},
-		Owner:      optString(b.Owner), ID: b.Name.String(), Access: domain.AccessPrivate, Record: b.Record,
+		Owner:      optString(b.Owner), OwnerName: optString(b.DisplayOwner()), ID: b.Name.String(), Access: domain.AccessPrivate, Record: b.Record,
 	}
-	if b.Owner != "" {
-		// An email owner shows as its local part; owner keeps the address.
-		short, _, _ := strings.Cut(b.Owner, "@")
+	if display := b.DisplayOwner(); display != "" {
+		// An email owner shows as its local part; owner_name keeps the display label.
+		short, _, _ := strings.Cut(display, "@")
 		v.ID = short + "/" + b.Name.String()
 	}
 	if b.Open() {
@@ -130,8 +132,12 @@ func (s *Server) listBranches(w http.ResponseWriter, r *http.Request, svc Branch
 		return
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Name.String() < list[j].Name.String() })
+	p := principalOf(r)
 	out := make([]branchJSON, 0, len(list))
 	for _, b := range list {
+		if !s.canReadBranch(r.Context(), p, b) {
+			continue
+		}
 		out = append(out, s.branchView(r.Context(), svc, b))
 	}
 	writeJSON(w, http.StatusOK, items(out))
@@ -166,14 +172,15 @@ func (s *Server) branchDSN(w http.ResponseWriter, r *http.Request, svc Branches,
 }
 
 type createBranchJSON struct {
-	Owner    string  `json:"owner,omitempty"`
-	Access   string  `json:"access,omitempty"`
-	Name     string  `json:"name"`
-	Base     string  `json:"base"`
-	Snapshot *string `json:"snapshot"`
-	InitSQL  string  `json:"init_sql"`
-	TTL      string  `json:"ttl"`
-	Node     string  `json:"node,omitempty"`
+	Owner     string  `json:"owner,omitempty"`
+	OwnerName string  `json:"owner_name,omitempty"`
+	Access    string  `json:"access,omitempty"`
+	Name      string  `json:"name"`
+	Base      string  `json:"base"`
+	Snapshot  *string `json:"snapshot"`
+	InitSQL   string  `json:"init_sql"`
+	TTL       string  `json:"ttl"`
+	Node      string  `json:"node,omitempty"`
 	// Record asks for the branch's changes to be recorded (needs the history
 	// module, a login, and a MySQL base).
 	Record bool `json:"record,omitempty"`
@@ -238,7 +245,7 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 				return dbbranch.CreateBranchRequest{}, err
 			}
 		}
-		req := dbbranch.CreateBranchRequest{Name: n, Base: base, InitSQL: in.InitSQL, TTL: ttl, Node: in.Node, Owner: in.Owner, Access: in.Access, Record: in.Record}
+		req := dbbranch.CreateBranchRequest{Name: n, Base: base, InitSQL: in.InitSQL, TTL: ttl, Node: in.Node, Owner: in.Owner, OwnerName: in.OwnerName, Access: in.Access, Record: in.Record}
 		if in.Snapshot != nil {
 			req.Snapshot = *in.Snapshot
 		}

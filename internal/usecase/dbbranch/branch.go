@@ -22,8 +22,9 @@ type CreateBranchRequest struct {
 	TTL time.Duration
 	// Node to create the branch on; empty lets PlaceBranch choose.
 	Node string
-	// Owner manages the branch; Access is domain.AccessPrivate ("") or AccessOpen.
-	Owner, Access string
+	// Owner is the principal ID who manages the branch; OwnerName is their
+	// display name; Access is domain.AccessPrivate ("") or AccessOpen.
+	Owner, OwnerName, Access string
 	// Record asks for the branch's changes to be recorded by the history module.
 	Record bool
 	// Runtime, when set, upgrades the new branch to it right after creation
@@ -145,7 +146,7 @@ func (s *Service) reserveBranch(ctx context.Context, req CreateBranchRequest) (d
 	br := domain.Branch{
 		Name: req.Name, Base: base.Name, Snapshot: snap.Name, Runtime: base.Runtime,
 		Status: domain.BranchProvisioning, Port: port, Node: s.Node, User: req.Name.String(), Password: s.Password(),
-		CreatedAt: s.Clock(), InitSQL: req.InitSQL, Owner: req.Owner, Access: domain.AccessPrivate, Record: req.Record,
+		CreatedAt: s.Clock(), InitSQL: req.InitSQL, Owner: req.Owner, OwnerName: req.OwnerName, Access: domain.AccessPrivate, Record: req.Record,
 	}
 	if !br.Record && s.RecordNew != nil {
 		// The one moment it can be decided: never again after this.

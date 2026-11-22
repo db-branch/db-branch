@@ -614,3 +614,40 @@ func TestSnapshot_全項目を欠落なく取得できる(t *testing.T) {
 		t.Error("corrupt state file: want error")
 	}
 }
+
+func TestMigrateBranchOwner_未移行ブランチの所有者IDと表示名を原子的に移行し冪等に保つ(t *testing.T) {
+	s, _ := newStore(t)
+	exp := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	_ = s.PutBranch(ctx, domain.Branch{Name: name("legacy"), Base: name("prod"), Status: domain.BranchReady, Owner: "ci", ExpiresAt: &exp})
+	_ = s.PutBranch(ctx, domain.Branch{Name: name("noowner"), Base: name("prod"), Status: domain.BranchReady})
+
+	if err := s.MigrateBranchOwner(ctx, name("legacy"), "token:abc", "ci"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetBranch(ctx, name("legacy"))
+	if got.Owner != "token:abc" || got.OwnerName != "ci" || got.ExpiresAt == nil || !got.ExpiresAt.Equal(exp) {
+		t.Fatalf("after migrate = %+v", got)
+	}
+	// Already migrated: second call is a no-op and must not overwrite.
+	if err := s.MigrateBranchOwner(ctx, name("legacy"), "token:other", "other"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.GetBranch(ctx, name("legacy")); got.Owner != "token:abc" || got.OwnerName != "ci" {
+		t.Errorf("overwritten migrated branch = %+v", got)
+	}
+	// Empty owner and missing branch are no-ops.
+	if err := s.MigrateBranchOwner(ctx, name("noowner"), "token:x", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.GetBranch(ctx, name("noowner")); got.Owner != "" || got.OwnerName != "" {
+		t.Errorf("empty owner modified = %+v", got)
+	}
+	if err := s.MigrateBranchOwner(ctx, name("missing"), "token:x", "x"); err != nil {
+		t.Fatal(err)
+	}
+	// PutBranch without OwnerName for the same Owner preserves OwnerName.
+	_ = s.PutBranch(ctx, domain.Branch{Name: name("legacy"), Base: name("prod"), Status: domain.BranchPaused, Owner: "token:abc"})
+	if got, _ = s.GetBranch(ctx, name("legacy")); got.Status != domain.BranchPaused || got.OwnerName != "ci" {
+		t.Errorf("PutBranch dropped OwnerName = %+v", got)
+	}
+}

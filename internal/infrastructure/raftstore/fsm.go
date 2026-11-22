@@ -89,8 +89,17 @@ type Command struct {
 	// Anonymous is the limits of set_base_anonymous; the zero value (absent)
 	// means inherit.
 	Anonymous domain.AnonymousLimits `json:"anonymous,omitzero"`
+	// BranchOwner is the payload of migrate_branch_owner.
+	BranchOwner *BranchOwner `json:"branch_owner,omitempty"`
 
 	raw []byte
+}
+
+// BranchOwner is the payload of migrate_branch_owner.
+type BranchOwner struct {
+	Name      string `json:"name"`
+	Owner     string `json:"owner"`
+	OwnerName string `json:"owner_name"`
 }
 
 // Protocol is the cluster protocol this binary speaks. Raise it whenever a
@@ -121,7 +130,12 @@ type Command struct {
 // 22: delete_module removes a recorded module (module forget) once it is no
 // longer wanted. Older nodes do not know delete_module, so the command waits
 // for protocol 22 everywhere (domain.ProtocolModuleForget).
-const Protocol = 22
+//
+// 23: migrate_branch_owner atomically migrates a legacy branch's Owner to an
+// immutable principal ID and records its display OwnerName. Older nodes do not
+// know migrate_branch_owner, so the command waits for protocol 23 everywhere
+// (domain.ProtocolBranchOwnerID).
+const Protocol = 23
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a
@@ -141,10 +155,11 @@ var opProtocol = map[string]int{
 	"set_base_refresh": 11, "record_base_refresh_run": 11, "clear_base_refresh": 11,
 	"put_update_check": 12, "start_rollout": 12, "record_rollout": 12,
 	"set_base_replica_nodes": 13, "remove_replica": 13,
-	"set_base_anonymous": 14,
-	"init_service_ids":   15,
-	"init_cluster_id":    17,
-	"delete_module":      22,
+	"set_base_anonymous":   14,
+	"init_service_ids":     15,
+	"init_cluster_id":      17,
+	"delete_module":        22,
+	"migrate_branch_owner": domain.ProtocolBranchOwnerID,
 }
 
 // Needs returns the protocol the command requires (0 for unknown commands).
@@ -181,9 +196,12 @@ func PutBase(b domain.Base) Command      { return Command{Op: "put_base", Base: 
 func DeleteBase(n domain.Name) Command   { return Command{Op: "delete_base", Name: n.String()} }
 func PutBranch(b domain.Branch) Command  { return Command{Op: "put_branch", Branch: &b} }
 func DeleteBranch(n domain.Name) Command { return Command{Op: "delete_branch", Name: n.String()} }
-func PutNode(n domain.Node) Command      { return Command{Op: "put_node", Node: &n} }
-func DeleteNode(name string) Command     { return Command{Op: "delete_node", Name: name} }
-func SetJoinSecret(hash string) Command  { return Command{Op: "set_join_secret", Name: hash} }
+func MigrateBranchOwner(n domain.Name, owner, ownerName string) Command {
+	return Command{Op: "migrate_branch_owner", BranchOwner: &BranchOwner{Name: n.String(), Owner: owner, OwnerName: ownerName}}
+}
+func PutNode(n domain.Node) Command     { return Command{Op: "put_node", Node: &n} }
+func DeleteNode(name string) Command    { return Command{Op: "delete_node", Name: name} }
+func SetJoinSecret(hash string) Command { return Command{Op: "set_join_secret", Name: hash} }
 
 // InsertBase and InsertBranch fail with ErrAlreadyExists when the name is taken,
 // which makes name reservations race-free across nodes.
@@ -367,6 +385,8 @@ func (c Command) complete() bool {
 		return c.IDs != nil && c.IDs.Valid()
 	case "init_cluster_id":
 		return domain.ValidClusterID(c.ClusterID)
+	case "migrate_branch_owner":
+		return c.BranchOwner != nil && c.BranchOwner.Name != "" && c.BranchOwner.Owner != "" && c.BranchOwner.OwnerName != ""
 	}
 	return true
 }
@@ -542,7 +562,19 @@ func (f *FSM) apply(c Command) error {
 		}
 		s.Rollout = &r
 	case "put_branch":
-		s.Branches[c.Branch.Name.String()] = *c.Branch
+		b := *c.Branch
+		if old, ok := s.Branches[b.Name.String()]; ok && b.OwnerName == "" && old.OwnerName != "" && b.Owner == old.Owner {
+			b.OwnerName = old.OwnerName
+		}
+		s.Branches[b.Name.String()] = b
+	case "migrate_branch_owner":
+		b, ok := s.Branches[c.BranchOwner.Name]
+		if !ok || b.Owner == "" || b.OwnerName != "" {
+			return nil
+		}
+		b.Owner = c.BranchOwner.Owner
+		b.OwnerName = c.BranchOwner.OwnerName
+		s.Branches[c.BranchOwner.Name] = b
 	case "delete_branch":
 		delete(s.Branches, c.Name)
 	case "put_node":

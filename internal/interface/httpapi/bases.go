@@ -345,7 +345,7 @@ func (s *Server) maskBase(w http.ResponseWriter, r *http.Request, svc Branches, 
 	if s.forwardBase(w, r, svc, n) {
 		return
 	}
-	req := dbbranch.MaskRequest{Target: n, Source: source, Snapshot: in.Snapshot, Masker: in.Masker, Rules: in.Rules, By: ownerName(principalOf(r))}
+	req := dbbranch.MaskRequest{Target: n, Source: source, Snapshot: in.Snapshot, Masker: in.Masker, Rules: in.Rules, By: ownerDisplayName(principalOf(r))}
 	s.accepted(w, "base.mask", operation.Target{Resource: "base", Name: n.String()},
 		func(ctx context.Context, report func(string)) error {
 			_, err := svc.MaskBase(ctx, req, report)

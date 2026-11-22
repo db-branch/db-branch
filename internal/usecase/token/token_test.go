@@ -96,7 +96,7 @@ func Test保存先の失敗はエラー(t *testing.T) {
 
 func TestScoped_ブランチ用のトークンはブランチ操作と読み取りだけ(t *testing.T) {
 	p := ext.Principal{ID: "token:x", Roles: []string{"scope:branches"}}
-	for action, ok := range map[string]bool{"branch.create": true, "branch.query": true, "base.read": true, "mcp.use": true,
+	for action, ok := range map[string]bool{"branch.create": true, "branch.query": true, "base.read": true, "base.public": true, "mcp.use": true,
 		"base.delete": false, "runtime.install": false, "token.write": false, "setting.write": false,
 		// Reads that expose secrets or others' access stay with full tokens.
 		"setting.read": false, "token.read": false, "route-user.read": false, "account.token.read": true} {

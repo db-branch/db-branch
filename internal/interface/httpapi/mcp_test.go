@@ -264,6 +264,9 @@ func TestMCP_トークンで接続しブランチを作って使える(t *testin
 func TestMCP_危ない作業の前にチェックポイントを取り失敗したら戻せる(t *testing.T) {
 	httpapi.MCPPoll = time.Millisecond
 	f := checkpointFixture(t)
+	bx := f.branches.branches["x"]
+	bx.Owner, bx.OwnerName = "token:dev", "dev"
+	f.branches.branches["x"] = bx
 	sink := &recordingSink{}
 	f.srv.TokenAuth, f.srv.Ext = &fakeTokens{}, ext.Module{AuditSink: sink}
 	s, err := mcpSession(t, f, "t-branches")
@@ -298,6 +301,9 @@ func TestMCP_危ない作業の前にチェックポイントを取り失敗し�
 func TestMCP_チェックポイントに対応しないストレージでは分かりやすく断る(t *testing.T) {
 	httpapi.MCPPoll = time.Millisecond
 	f := checkpointFixture(t)
+	bx := f.branches.branches["x"]
+	bx.Owner, bx.OwnerName = "token:dev", "dev"
+	f.branches.branches["x"] = bx
 	f.branches.noCheckpoints = true
 	f.branches.cpErr = domain.ErrCheckpointsUnavailable
 	f.srv.TokenAuth = &fakeTokens{}

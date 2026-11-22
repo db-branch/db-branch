@@ -233,8 +233,12 @@ type Branch struct {
 	Node     string `json:"node,omitempty"`
 	User     string `json:"user"`
 	Password string `json:"password"`
-	// Owner is who manages the branch ("" for branches made before owners).
+	// Owner is the immutable principal ID of who manages the branch ("" for
+	// branches made before owners).
 	Owner string `json:"owner,omitempty"`
+	// OwnerName is the display name of the owner (empty for legacy branches
+	// recorded before Owner and OwnerName were separated).
+	OwnerName string `json:"owner_name,omitempty"`
 	// Access says who may connect: AccessPrivate (a random password for the
 	// owner) or AccessOpen (the cluster's shared password, for anyone).
 	Access    string     `json:"access,omitempty"`
@@ -250,6 +254,20 @@ type Branch struct {
 	Error      string     `json:"error,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 	ResetAt    *time.Time `json:"reset_at,omitempty"`
+}
+
+// ProtocolBranchOwnerID is the cluster protocol from which branch owners use
+// immutable principal IDs separately from OwnerName, and migrate_branch_owner
+// is understood by every node.
+const ProtocolBranchOwnerID = 23
+
+// DisplayOwner returns the human-readable owner label: OwnerName when set,
+// otherwise Owner.
+func (b Branch) DisplayOwner() string {
+	if b.OwnerName != "" {
+		return b.OwnerName
+	}
+	return b.Owner
 }
 
 // Expired reports whether the branch's TTL has run out at now.
@@ -351,6 +369,12 @@ type Store interface {
 	// InsertBranch stores a new branch, or fails with ErrAlreadyExists.
 	InsertBranch(ctx context.Context, b Branch) error
 	DeleteBranch(ctx context.Context, name Name) error
+}
+
+// BranchOwnerMigrator atomically migrates a legacy branch's Owner to an
+// immutable principal ID and records its display OwnerName.
+type BranchOwnerMigrator interface {
+	MigrateBranchOwner(ctx context.Context, name Name, owner, ownerName string) error
 }
 
 // StopMode chooses how a database server is stopped.

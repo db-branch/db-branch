@@ -198,6 +198,12 @@ func (c *clusterRuntime) publish(ctx context.Context, srv *httpapi.Server, bus *
 				bus.Publish("operation.updated", *cmd.Operation)
 			case "put_branch", "insert_branch":
 				srv.PublishBranch(ctx, cmd.Branch.Name)
+			case "migrate_branch_owner":
+				if cmd.BranchOwner != nil {
+					if n, err := domain.ParseName(cmd.BranchOwner.Name); err == nil {
+						srv.PublishBranch(ctx, n)
+					}
+				}
 			case "delete_branch":
 				if n, err := domain.ParseName(cmd.Name); err == nil {
 					srv.PublishBranch(ctx, n)
@@ -241,6 +247,7 @@ func (c *clusterRuntime) notifyLoop(ctx context.Context, n *notify.Service, log 
 func (c *clusterRuntime) healthLoop(ctx context.Context, svc *dbbranch.Service, log *slog.Logger) {
 	for {
 		if c.store.IsLeader() {
+			migrateBranchOwners(ctx, svc, log)
 			lost, err := svc.MarkLost(ctx)
 			for _, n := range lost {
 				log.Warn("branch lost with its node", "branch", n.String())

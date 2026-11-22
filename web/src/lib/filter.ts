@@ -1,5 +1,5 @@
 // Search and filters for the lists of branches and bases. Pure.
-import type { Base, Branch } from "../api";
+import { type Base, type Branch, ownerLabel } from "../api";
 
 export type FilterValues = Record<string, string>;
 
@@ -42,8 +42,8 @@ export function filterBranches(list: Branch[], f: FilterValues): Branch[] {
       (!f.status || b.status === f.status) &&
       (!f.engine || engineOf(b.runtime) === f.engine) &&
       (!f.base || b.base === f.base) &&
-      (!f.owner || b.owner === f.owner) &&
-      matches(f.q ?? "", [b.name, b.id, b.owner ?? "", b.base, b.runtime, b.status, b.status_reason ?? "", b.access]),
+      (!f.owner || ownerLabel(b) === f.owner || b.owner === f.owner) &&
+      matches(f.q ?? "", [b.name, b.id, b.owner ?? "", b.owner_name ?? "", b.base, b.runtime, b.status, b.status_reason ?? "", b.access]),
   );
 }
 

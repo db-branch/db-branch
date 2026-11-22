@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { api, Branch } from "../api";
+import { api, Branch, ownerLabel } from "../api";
 import { relative } from "../lib/format";
 import { t } from "../lib/i18n";
 import { BranchName } from "./branchname";
@@ -46,7 +46,7 @@ export function BranchView({
       </button>
       <header className="page-head">
         <h1>
-          <BranchName name={b.name} owner={b.owner} />
+          <BranchName name={b.name} owner={ownerLabel(b)} />
         </h1>
         <Status status={b.status} reason={b.status_reason} />
         {b.access === "open" && (
@@ -79,7 +79,7 @@ export function BranchView({
           </>
         )}
         <dt>{t("Owner")}</dt>
-        <dd className="mono">{b.owner ?? "—"}</dd>
+        <dd className="mono" title={b.owner ?? undefined}>{ownerLabel(b) ?? "—"}</dd>
         <dt>{t("Created")}</dt>
         <dd title={new Date(b.created_at).toLocaleString()}>{relative(b.created_at)}</dd>
         <dt>{t("TTL")}</dt>

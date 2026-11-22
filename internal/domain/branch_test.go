@@ -177,3 +177,18 @@ func TestBase_レプリカ先を限ると起点と指定ノードだけが欲し
 		t.Errorf("RemoveReplica: %v", b.Replicas)
 	}
 }
+
+func TestBranch_DisplayOwnerは表示名があれば優先しプロトコル23が予約されている(t *testing.T) {
+	if got := (domain.Branch{Owner: "sso:alice", OwnerName: "alice@example.com"}).DisplayOwner(); got != "alice@example.com" {
+		t.Errorf("with OwnerName = %q", got)
+	}
+	if got := (domain.Branch{Owner: "admin"}).DisplayOwner(); got != "admin" {
+		t.Errorf("without OwnerName = %q", got)
+	}
+	if got := (domain.Branch{}).DisplayOwner(); got != "" {
+		t.Errorf("empty = %q", got)
+	}
+	if domain.ProtocolBranchOwnerID != 23 {
+		t.Errorf("ProtocolBranchOwnerID = %d, want 23", domain.ProtocolBranchOwnerID)
+	}
+}
