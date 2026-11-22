@@ -76,7 +76,7 @@
 
 ## 開発用
 
-開発ビルド（`-tags dev`）は `internal/app/license_root_dev.go` のルート鍵を使う。テストはローカルの署名鍵でキーを作る。本番の鍵はリポジトリに置かない。
+リリースビルド（タグなし）は `internal/app/prod_license_root.pem`（本番ルートの公開鍵。モジュール側と同じ鍵）を埋め込む。開発ビルド（`-tags dev`）は `internal/app/license_root_dev.go` の開発用ルート鍵を使い、リリースビルドには入らない。テストはローカルの署名鍵でキーを作る。リポジトリに置くのは公開鍵だけで、秘密鍵は置かない。
 
 ## Web サイト（FAQ・料金ページ）に書くこと
 

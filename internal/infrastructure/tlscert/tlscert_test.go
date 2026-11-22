@@ -58,3 +58,20 @@ func TestEnsure_鍵や証明書を書けなければエラー(t *testing.T) {
 		t.Error("unwritable cert.pem: want error")
 	}
 }
+
+func TestEnsure_証明書だけあって鍵が欠けているか壊れていればエラー(t *testing.T) {
+	dir := t.TempDir()
+	if _, _, err := tlscert.Ensure(dir, []string{"node1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "key.pem")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := tlscert.Ensure(dir, []string{"node1"}); err == nil {
+		t.Error("key.pem missing: want error")
+	}
+	_ = os.WriteFile(filepath.Join(dir, "key.pem"), []byte("garbage"), 0o600)
+	if _, _, err := tlscert.Ensure(dir, []string{"node1"}); err == nil {
+		t.Error("key.pem broken: want error")
+	}
+}

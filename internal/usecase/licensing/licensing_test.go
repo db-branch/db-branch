@@ -145,17 +145,35 @@ func TestApply_全モジュールのライセンスは勝手に入れない(t *t
 	}
 }
 
+func TestLicensing_オフラインAPTエラー時でもVerifyとApplyが成功する(t *testing.T) {
+	s, root, mods, set := setup(t)
+	mods.fail = errors.New("apt: cannot reach the repository")
+	key := keyFor(t, root, license.License{ID: "L1", Modules: []string{"auth", "*"}, IssuedAt: t0, Expires: t0.AddDate(1, 0, 0)})
+	r, err := s.Verify(ctx, key)
+	if err != nil || r.State != license.Valid || !r.All || !r.Offline || !slices.Equal(r.Unavailable, []string{"auth"}) {
+		t.Fatalf("verify: %+v %v", r, err)
+	}
+	if _, err := s.Apply(ctx, key); err != nil || set.put["license.key"] != key || len(mods.installed) != 0 {
+		t.Errorf("apply: %v saved %v installed %v", err, set.put, mods.installed)
+	}
+}
+
+func TestVerify_キャンセルされたときはオフライン扱いにせずエラーを返す(t *testing.T) {
+	s, root, mods, _ := setup(t)
+	mods.fail = context.Canceled
+	key := keyFor(t, root, license.License{ID: "L1", Modules: []string{"auth"}, IssuedAt: t0, Expires: t0.AddDate(1, 0, 0)})
+	c, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := s.Verify(c, key); !errors.Is(err, context.Canceled) {
+		t.Errorf("%v", err)
+	}
+}
+
 func TestVerify_ルート鍵がなければ検証できない(t *testing.T) {
 	s, _, _, _ := setup(t)
 	s.Root = nil
 	if _, err := s.Verify(ctx, "x"); !errors.Is(err, licensing.ErrNoRoot) {
 		t.Errorf("%v", err)
-	}
-	s2, root, mods, _ := setup(t)
-	mods.fail = errors.New("apt down")
-	key := keyFor(t, root, license.License{ID: "L1", Modules: []string{"auth"}, IssuedAt: t0, Expires: t0.AddDate(1, 0, 0)})
-	if _, err := s2.Verify(ctx, key); err == nil {
-		t.Error("module list failure")
 	}
 }
 

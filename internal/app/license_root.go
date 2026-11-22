@@ -7,9 +7,8 @@ import (
 )
 
 // licenseRootPEM is the public key licence keys are checked against, set by
-// a build-tagged file (license_root_dev.go with -tags dev). Release builds
-// get the production key once it exists; until then they cannot verify
-// keys in the console (modules still check them themselves).
+// a build-tagged file: license_root_prod.go (production key, the default)
+// or license_root_dev.go (-tags dev, test licences only).
 var licenseRootPEM []byte
 
 func licenseRoot() *ecdsa.PublicKey {

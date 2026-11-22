@@ -62,6 +62,10 @@ type Report struct {
 	// the ones they do not.
 	Modules     []string `json:"modules"`
 	Unavailable []string `json:"unavailable"`
+	// Offline: the package repositories could not be asked, so Modules and
+	// Unavailable are not known (every named module reads as unavailable)
+	// and Apply enabled none; apply the key again once they are reachable.
+	Offline bool `json:"offline,omitempty"`
 	// Enabled are the modules Apply turned on.
 	Enabled []string `json:"enabled"`
 }
@@ -76,9 +80,15 @@ func (s *Service) Verify(ctx context.Context, key string) (Report, error) {
 		return Report{}, err
 	}
 	r := Report{License: l, State: l.State(s.Clock(), s.Nodes()), Modules: []string{}, Unavailable: []string{}, Enabled: []string{}}
+	// Offline (an air-gapped node cannot ask the package repositories): the
+	// key is still valid, so report its modules as not offered rather than
+	// failing the check.
 	available, err := s.Modules.Available(ctx)
 	if err != nil {
-		return r, err
+		if ctx.Err() != nil {
+			return r, err
+		}
+		available, r.Offline = nil, true
 	}
 	for _, m := range l.Modules {
 		switch _, ok := available[m]; {
