@@ -13,6 +13,9 @@ import (
 
 var errNoUploads = errors.New("uploads are not available on this node")
 
+// errRemotePath: a dump given as a path is only accepted on the node's own socket.
+var errRemotePath = errors.New("dump must be an upload (upload:<id>); paths on the node are accepted only through its local socket")
+
 // upload streams a dump (the raw body, ?name=x.sql.gz) to this node's disk,
 // or to ?node=, the node that will use it. It is refused before reading
 // anything when its size is unknown, over the limit, or larger than the
@@ -75,10 +78,15 @@ func (s *Server) uploadRoom(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveDump turns "upload:<id>" into the uploaded file's path on this
-// node; other values are paths already. done removes a used upload.
-func (s *Server) resolveDump(dump string) (path string, done func(), err error) {
+// node; other values are paths already, but only for the node's own socket:
+// over HTTP(S) a path would let a remote caller read any file the agent can.
+// done removes a used upload.
+func (s *Server) resolveDump(r *http.Request, dump string) (path string, done func(), err error) {
 	id, ok := strings.CutPrefix(dump, domain.UploadRef)
 	if !ok {
+		if principalOf(r).ID != LocalPrincipal.ID {
+			return "", nil, errRemotePath
+		}
 		return dump, func() {}, nil
 	}
 	if s.Uploads == nil {
@@ -92,6 +100,10 @@ func (s *Server) resolveDump(dump string) (path string, done func(), err error) 
 }
 
 func (s *Server) failDump(w http.ResponseWriter, err error) {
+	if errors.Is(err, errRemotePath) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	if errors.Is(err, errNoUploads) {
 		writeError(w, http.StatusNotImplemented, "not_implemented", err.Error())
 		return
@@ -116,7 +128,7 @@ func (s *Server) loadBase(w http.ResponseWriter, r *http.Request, svc Branches, 
 		writeError(w, http.StatusBadRequest, "invalid_request", "dump is empty: an upload id (upload:...) or a path on the base's node")
 		return
 	}
-	path, done, err := s.resolveDump(in.Dump)
+	path, done, err := s.resolveDump(r, in.Dump)
 	if err != nil {
 		s.failDump(w, err)
 		return

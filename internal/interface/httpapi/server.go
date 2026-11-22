@@ -391,10 +391,15 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 		c, err := r.Cookie(sessionCookie)
 		if s.publicExt(r) {
 			// A module's public path (e.g. single sign-on): whoever comes,
-			// signed in or not, without the CSRF check (it starts flows).
+			// signed in or not (it starts flows). A valid session is held to
+			// the same CSRF and password-change rules as everywhere else:
+			// the cookie is SameSite=Strict, so legitimate flows carry the token.
 			p := Anonymous
 			if err == nil {
 				if sess, serr := s.Auth.Session(c.Value); serr == nil {
+					if !s.sessionAllowed(w, r, sess) {
+						return
+					}
 					p = ext.Principal{ID: sess.User, Name: sess.Name, Roles: sess.Roles}
 				}
 			}
@@ -415,12 +420,7 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "session expired; log in again")
 			return
 		}
-		if r.Method != http.MethodGet && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(sess.CSRF)) != 1 {
-			writeError(w, http.StatusForbidden, "csrf_failed", "missing or wrong X-CSRF-Token")
-			return
-		}
-		if sess.MustChange && !allowedBeforePasswordChange(r) {
-			writeError(w, http.StatusForbidden, "password_change_required", "set a new password first")
+		if !s.sessionAllowed(w, r, sess) {
 			return
 		}
 		if sess.Renewed {
@@ -429,6 +429,20 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), ctxKey{}, sess)
 		next.ServeHTTP(w, r.WithContext(withPrincipal(ctx, ext.Principal{ID: sess.User, Name: sess.Name, Roles: sess.Roles})))
 	})
+}
+
+// sessionAllowed applies the CSRF check and the initial-password rule to a
+// request made with a session; it answers 403 and returns false otherwise.
+func (s *Server) sessionAllowed(w http.ResponseWriter, r *http.Request, sess auth.Session) bool {
+	if r.Method != http.MethodGet && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(sess.CSRF)) != 1 {
+		writeError(w, http.StatusForbidden, "csrf_failed", "missing or wrong X-CSRF-Token")
+		return false
+	}
+	if sess.MustChange && !allowedBeforePasswordChange(r) {
+		writeError(w, http.StatusForbidden, "password_change_required", "set a new password first")
+		return false
+	}
+	return true
 }
 
 // allowedBeforePasswordChange: what a session with an initial password may do.

@@ -283,7 +283,7 @@ func (s *Server) createBase(w http.ResponseWriter, r *http.Request, svc Branches
 		fail(w, fmt.Errorf("base %s: %w", n, domain.ErrAlreadyExists))
 		return
 	}
-	dump, done, err := s.resolveDump(in.Dump)
+	dump, done, err := s.resolveDump(r, in.Dump)
 	if err != nil {
 		s.failDump(w, err)
 		return
