@@ -130,6 +130,8 @@ type Service struct {
 	// mu serializes check-and-reserve steps (names, ports, status changes).
 	// Long-running work happens outside it; the status acts as the lock.
 	mu sync.Mutex
+	// deletingBases are the bases a DeleteBase is removing (guarded by mu).
+	deletingBases map[domain.Name]bool
 }
 
 // SetLimits changes the server memory and the port range at runtime (from

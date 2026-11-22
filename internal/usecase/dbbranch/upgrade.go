@@ -80,7 +80,7 @@ func (s *Service) switchRuntime(ctx context.Context, br *domain.Branch, in resto
 	if !changed {
 		return nil
 	}
-	return s.Store.PutBranch(ctx, *br)
+	return s.saveBranch(ctx, *br)
 }
 
 // clusterAllowsBranchRuntime: every node knows that a branch may run another
@@ -191,7 +191,7 @@ func (s *Service) settleUpgrade(ctx context.Context, br domain.Branch, req Upgra
 		return nil
 	}
 	br.Status, br.Error = domain.BranchReady, ""
-	return s.Store.PutBranch(ctx, br)
+	return s.saveBranch(ctx, br)
 }
 
 const (
@@ -372,7 +372,7 @@ func (s *Service) doUpgrade(ctx context.Context, br domain.Branch, req UpgradeRe
 
 	prevLegacy := br.LegacyAuth
 	br.Runtime, br.LegacyAuth = req.To, plan.LegacyAuth
-	failure := s.Store.PutBranch(ctx, br)
+	failure := s.saveBranch(ctx, br)
 	var log domain.UpgradeLog
 	var spec domain.Server
 	if failure == nil {
@@ -395,7 +395,7 @@ func (s *Service) doUpgrade(ctx context.Context, br domain.Branch, req UpgradeRe
 		return res, err
 	}
 	br.Status, br.Error = domain.BranchReady, ""
-	if err := s.Store.PutBranch(ctx, br); err != nil {
+	if err := s.saveBranch(ctx, br); err != nil {
 		_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
 		return res, err
 	}
@@ -445,7 +445,7 @@ func (s *Service) rollbackUpgrade(ctx context.Context, br domain.Branch, from do
 	}
 	// The restore intent now carries the rollback; an agent restart finishes it as a restore.
 	br.Status = domain.BranchRestoring
-	if err := s.Store.PutBranch(ctx, br); err != nil {
+	if err := s.saveBranch(ctx, br); err != nil {
 		return br, err
 	}
 	if err := s.clearUpgradeIntent(ctx, br.Name); err != nil {
@@ -481,7 +481,7 @@ func (s *Service) resumeUpgrade(ctx context.Context, br domain.Branch) error {
 		}
 	}
 	br.Status, br.Error = domain.BranchReady, ""
-	return s.Store.PutBranch(ctx, br)
+	return s.saveBranch(ctx, br)
 }
 
 // CreateBranchUpgraded creates a branch and upgrades it right away when the

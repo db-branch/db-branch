@@ -41,6 +41,9 @@ func (s *Service) MarkLost(ctx context.Context) ([]domain.Name, error) {
 		if !ok || b.Status == domain.BranchLost || b.Status == domain.BranchDeleting {
 			continue
 		}
+		if b.Status == domain.BranchPaused || b.Status == domain.BranchFailed {
+			b.LostFrom = b.Status
+		}
 		b.Status = domain.BranchLost
 		b.Error = fmt.Sprintf("node %s stopped answering at %s", n.Name, n.LastSeen.UTC().Format("2006-01-02T15:04:05Z"))
 		if err := s.Store.PutBranch(ctx, b); err != nil {
@@ -141,7 +144,7 @@ func (s *Service) claimLost(ctx context.Context, name domain.Name) (domain.Branc
 	}
 	// The branch is built again from its base snapshot, so it runs the base's runtime.
 	br.Runtime, br.LegacyAuth = s.runtimeOf(ctx, br, ""), false
-	br.Node, br.Port, br.Status, br.Error, br.ResetAt = s.Node, port, domain.BranchProvisioning, "", nil
+	br.Node, br.Port, br.Status, br.Error, br.ResetAt, br.LostFrom = s.Node, port, domain.BranchProvisioning, "", nil, ""
 	return br, s.Store.PutBranch(ctx, br)
 }
 
@@ -177,6 +180,10 @@ func (s *Service) Reconcile(ctx context.Context) error {
 }
 
 func (s *Service) reconcileLost(ctx context.Context, b domain.Branch) error {
+	if b.LostFrom != "" {
+		// It was not running before: nothing to start, only to say what it was.
+		return s.resume(ctx, b.Name)
+	}
 	srv, spec, started, err := s.startServerIfDown(ctx, b)
 	if err != nil {
 		return err
@@ -210,6 +217,13 @@ func (s *Service) resume(ctx context.Context, name domain.Name) error {
 		return err
 	}
 	b.Status, b.Error = domain.BranchReady, ""
+	if b.LostFrom != "" {
+		b.Status = b.LostFrom
+		if b.Status == domain.BranchFailed {
+			b.Error = "failed before its node stopped answering"
+		}
+		b.LostFrom = ""
+	}
 	return s.Store.PutBranch(ctx, b)
 }
 

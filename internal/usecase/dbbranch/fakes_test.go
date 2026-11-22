@@ -158,6 +158,10 @@ type fakeServer struct {
 	running map[string]bool
 	failOn  string
 	sql     map[string][]string
+	// onRemove, when set, runs inside Remove (to hold an operation open).
+	onRemove func()
+	// onStop, when set, runs inside Stop.
+	onStop func()
 	// started are the specs the server was started with, in order.
 	started []domain.Server
 	// ranAs are the logins init SQL ran as (never the admin), in order.
@@ -210,6 +214,9 @@ func (f *fakeServer) Start(_ context.Context, s domain.Server) error {
 func (f *fakeServer) Stop(_ context.Context, s domain.Server, mode domain.StopMode) error {
 	m := map[domain.StopMode]string{domain.StopClean: "clean", domain.StopImmediate: "immediate"}[mode]
 	f.j.add("stop %s %s", s.ID, m)
+	if f.onStop != nil {
+		f.onStop()
+	}
 	if err := f.fail("stop-" + m); err != nil {
 		return err
 	}
@@ -248,6 +255,9 @@ func (f *fakeServer) Load(_ context.Context, s domain.Server, dump string) error
 
 func (f *fakeServer) Remove(_ context.Context, s domain.Server) error {
 	f.j.add("remove %s", s.ID)
+	if f.onRemove != nil {
+		f.onRemove()
+	}
 	f.running[s.ID] = false
 	return f.fail("remove")
 }

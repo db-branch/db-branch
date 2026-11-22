@@ -173,7 +173,7 @@ func (s *Service) RestoreCheckpointWith(ctx context.Context, n domain.Name, name
 	}
 	if err := s.writeIntent(ctx, n, in); err != nil {
 		br.Status = domain.BranchReady
-		return br, errors.Join(err, s.Store.PutBranch(ctx, br))
+		return br, errors.Join(err, s.saveBranch(ctx, br))
 	}
 	return s.runRestore(ctx, br, in, report)
 }
@@ -234,7 +234,7 @@ func (s *Service) runRestore(ctx context.Context, br domain.Branch, in restoreIn
 		now := s.Clock()
 		br.ResetAt = &now
 	}
-	return br, s.Store.PutBranch(ctx, br)
+	return br, s.saveBranch(ctx, br)
 }
 
 // swapped reports whether the live dataset already holds the restored data.
@@ -486,7 +486,7 @@ func (s *Service) abortRestore(ctx context.Context, br domain.Branch, in restore
 		return s.fail(ctx, br, err)
 	}
 	br.Status, br.Error = domain.BranchReady, ""
-	return s.Store.PutBranch(ctx, br)
+	return s.saveBranch(ctx, br)
 }
 
 // resumeRestore finishes a restore the agent was interrupted in.
@@ -501,7 +501,7 @@ func (s *Service) resumeRestore(ctx context.Context, br domain.Branch) error {
 			return err
 		}
 		br.Status, br.Error = domain.BranchReady, ""
-		return s.Store.PutBranch(ctx, br)
+		return s.saveBranch(ctx, br)
 	}
 	_, err = s.runRestore(ctx, br, in, nil)
 	return err
@@ -545,7 +545,7 @@ func (s *Service) retryRecorded(ctx context.Context, br domain.Branch) error {
 		return err
 	}
 	br.Status, br.Error = domain.BranchReady, ""
-	if err := s.Store.PutBranch(ctx, br); err != nil {
+	if err := s.saveBranch(ctx, br); err != nil {
 		stopIfStarted()
 		return err
 	}

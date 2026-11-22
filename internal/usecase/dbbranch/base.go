@@ -334,24 +334,15 @@ func (s *Service) StopBase(ctx context.Context, name domain.Name) error {
 	return srv.Stop(ctx, spec, domain.StopClean)
 }
 
-// DeleteBase removes a base that no branch uses.
+// DeleteBase removes a base that no branch uses. A base in the middle of a
+// snapshot, mask or create is refused, and while the delete runs no branch
+// can be made from the base.
 func (s *Service) DeleteBase(ctx context.Context, name domain.Name) error {
-	base, err := s.Store.GetBase(ctx, name)
+	base, err := s.reserveBaseDelete(ctx, name)
 	if err != nil {
 		return err
 	}
-	if err := s.checkOwner("base", name, base.Node); err != nil {
-		return err
-	}
-	branches, err := s.Store.ListBranches(ctx)
-	if err != nil {
-		return err
-	}
-	for _, b := range branches {
-		if b.Base == name {
-			return fmt.Errorf("%w: base %s is used by branch %s", domain.ErrInUse, name, b.Name)
-		}
-	}
+	defer s.endBaseDelete(name)
 	srv, err := s.server(base.Runtime)
 	if err != nil {
 		return err
@@ -399,4 +390,41 @@ func (s *Service) SetAnonymous(ctx context.Context, name domain.Name, l domain.A
 		return domain.Base{}, err
 	}
 	return s.Store.GetBase(ctx, name)
+}
+
+// reserveBaseDelete checks, under the service lock, that nothing is using the
+// base and marks it as being deleted.
+func (s *Service) reserveBaseDelete(ctx context.Context, name domain.Name) (domain.Base, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	base, err := s.Store.GetBase(ctx, name)
+	if err != nil {
+		return base, err
+	}
+	if err := s.checkOwner("base", name, base.Node); err != nil {
+		return base, err
+	}
+	if base.Status == domain.BaseProvisioning || base.Status == domain.BaseMaintenance || s.deletingBases[name] {
+		return base, fmt.Errorf("%w: base %s is %s", domain.ErrConflict, name, base.Status)
+	}
+	branches, err := s.Store.ListBranches(ctx)
+	if err != nil {
+		return base, err
+	}
+	for _, b := range branches {
+		if b.Base == name {
+			return base, fmt.Errorf("%w: base %s is used by branch %s", domain.ErrInUse, name, b.Name)
+		}
+	}
+	if s.deletingBases == nil {
+		s.deletingBases = map[domain.Name]bool{}
+	}
+	s.deletingBases[name] = true
+	return base, nil
+}
+
+func (s *Service) endBaseDelete(name domain.Name) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.deletingBases, name)
 }
