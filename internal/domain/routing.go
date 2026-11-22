@@ -15,6 +15,9 @@ type RouteUser struct {
 	Name          string `json:"name"`
 	Password      string `json:"password"`
 	DefaultBranch Name   `json:"default_branch"`
+	// Engine is the proxy table the user lives in. It outlives DefaultBranch:
+	// empty (users stored before the field) means MySQL.
+	Engine Engine `json:"engine,omitempty"`
 }
 
 // ErrInvalidRouteUser is returned for a route user that cannot be configured.

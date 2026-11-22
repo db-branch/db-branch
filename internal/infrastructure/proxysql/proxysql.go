@@ -223,8 +223,8 @@ func tableStatements(prefix string, t routing.Tables) []stmt {
 		if r.Apply {
 			apply = 1
 		}
-		out = append(out, stmt{"INSERT INTO " + prefix + "_query_rules (rule_id, active, flagIN, flagOUT, match_pattern, destination_hostgroup, error_msg, apply) VALUES (?, 1, ?, ?, ?, ?, ?, ?)",
-			[]any{r.ID, r.FlagIn, nullInt(r.FlagOut), r.Pattern, nullInt(r.Hostgroup), nullString(r.Error), apply}})
+		out = append(out, stmt{"INSERT INTO " + prefix + "_query_rules (rule_id, active, username, flagIN, flagOUT, match_pattern, destination_hostgroup, error_msg, apply) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)",
+			[]any{r.ID, nullString(r.Username), r.FlagIn, nullInt(r.FlagOut), r.Pattern, nullInt(r.Hostgroup), nullString(r.Error), apply}})
 	}
 	return out
 }

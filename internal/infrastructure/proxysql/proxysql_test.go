@@ -88,7 +88,7 @@ func TestApply_初回は既定の資格情報を乗っ取ってから設定を�
 	all := strings.Join(p.ran, "\n")
 	for _, want := range []string{"127.0.0.1:6032", "127.0.0.1:6132", "mysql-monitor_enabled", "SAVE ADMIN VARIABLES TO DISK",
 		"DELETE FROM mysql_servers", "[1001 192.0.2.10 40001]", "[feature-x pw 1001]",
-		"[1 0 100 db_branch= <nil> <nil> 0]", "[2000000000 100 <nil> db_branch= <nil> " + routing.UnknownBranch + " 1]",
+		"[1 <nil> 0 100 db_branch= <nil> <nil> 0]", "[2000000000 <nil> 100 <nil> db_branch= <nil> " + routing.UnknownBranch + " 1]",
 		"LOAD MYSQL QUERY RULES TO RUNTIME", "SAVE MYSQL USERS TO DISK",
 		"pgsql-monitor_enabled", "INSERT INTO pgsql_servers (hostgroup_id, hostname, port) VALUES (?, ?, ?) [2002 192.0.2.11 40010]",
 		"INSERT INTO pgsql_users", "[pg-x pw2 2002]", "LOAD PGSQL USERS TO RUNTIME", "SAVE PGSQL QUERY RULES TO DISK"} {
@@ -202,5 +202,19 @@ func TestSettings_すべての項目に日本語がある(t *testing.T) {
 		if ja.Label == "" || (s.Help != "" && ja.Help == "") {
 			t.Errorf("%s has no Japanese: %+v", s.Key, ja)
 		}
+	}
+}
+
+func TestStatements_ルールのユーザー名をusernameカラムに入れる(t *testing.T) {
+	c := cfg
+	c.MySQL.Rules = []routing.Rule{{ID: 1, Username: "app", Pattern: "p", FlagOut: 100}}
+	got := ""
+	for _, s := range proxysql.Statements(c, proxysql.Options{}) {
+		if strings.Contains(s.Query(), "INSERT INTO mysql_query_rules") {
+			got = s.Query() + fmt.Sprint(s.Args())
+		}
+	}
+	if !strings.Contains(got, "username") || !strings.Contains(got, "app") {
+		t.Errorf("rule insert: %s", got)
 	}
 }
