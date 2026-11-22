@@ -355,8 +355,15 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		sock.Close()
 		return err
 	}
-	pair, _ := tls.LoadX509KeyPair(certFile, keyFile)
-	srv.TLSCertPEM, _ = os.ReadFile(certFile)
+	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		sock.Close()
+		return fmt.Errorf("console TLS certificate: %w", err)
+	}
+	if srv.TLSCertPEM, err = os.ReadFile(certFile); err != nil {
+		sock.Close()
+		return fmt.Errorf("console TLS certificate: %w", err)
+	}
 	// Start cluster background publishers/heartbeats only after srv and cl are fully wired.
 	if cl != nil {
 		go cl.publish(runCtx, srv, bus)
