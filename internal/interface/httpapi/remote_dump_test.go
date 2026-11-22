@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -72,5 +73,20 @@ func TestHTTPAPI_ExtPublicへのCookie認証POSTでCSRFトークン欠如およ�
 	cap.reset()
 	if resp, body := send(t, g.srv.Handler(false), "GET", "/v1/ext/sso/public/x", nil, withSession(c2, csrf2)); resp.StatusCode != 403 || errCode(body) != "password_change_required" || len(cap.principals()) != 0 {
 		t.Errorf("must change: %d %v seen=%+v", resp.StatusCode, body, cap.principals())
+	}
+}
+
+type localNamedAuth struct{}
+
+func (localNamedAuth) Authenticate(context.Context, ext.Credentials) (ext.Principal, error) {
+	return ext.Principal{ID: httpapi.LocalPrincipal.ID, Roles: []string{"admin"}}, nil
+}
+
+func TestHTTPAPI_モジュールが返したIDがlocalでもリモートからはソケット扱いにならない(t *testing.T) {
+	f, _ := uploadFixture(t)
+	f.srv.Ext = ext.Module{Authenticator: localNamedAuth{}}
+	resp, body := send(t, f.srv.Handler(false), "POST", "/v1/bases/prod/load", map[string]any{"dump": "/etc/passwd"}, bearer("any"))
+	if resp.StatusCode != 401 || errCode(body) != "unauthenticated" {
+		t.Errorf("principal named local over HTTPS: %d %v, want 401", resp.StatusCode, body)
 	}
 }

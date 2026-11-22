@@ -381,7 +381,9 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			// API clients: a module's Authenticator checks the token. No CSRF:
 			// browsers never send this header on their own.
 			p, err := s.authenticator().Authenticate(r.Context(), ext.Credentials{Token: token})
-			if err != nil {
+			if err != nil || p.ID == LocalPrincipal.ID {
+				// The ID "local" is the socket's alone (path dumps, no guard
+				// for local admin): no remote identity may take it.
 				writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid token")
 				return
 			}
@@ -434,6 +436,10 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 // sessionAllowed applies the CSRF check and the initial-password rule to a
 // request made with a session; it answers 403 and returns false otherwise.
 func (s *Server) sessionAllowed(w http.ResponseWriter, r *http.Request, sess auth.Session) bool {
+	if sess.User == LocalPrincipal.ID {
+		writeError(w, http.StatusUnauthorized, "unauthenticated", "session expired; log in again")
+		return false
+	}
 	if r.Method != http.MethodGet && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(sess.CSRF)) != 1 {
 		writeError(w, http.StatusForbidden, "csrf_failed", "missing or wrong X-CSRF-Token")
 		return false
