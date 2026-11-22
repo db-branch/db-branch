@@ -296,3 +296,14 @@ func TestAddUser_ルートユーザーの数には上限がある(t *testing.T) 
 		t.Errorf("replacing one is fine: %v", err)
 	}
 }
+
+func TestPlan_別エンジンのルートユーザーと同名でもブランチのログインを落とさない(t *testing.T) {
+	pg := branch("x", "n1", 40010, domain.BranchReady)
+	pg.Runtime = domain.RuntimeRef{Engine: domain.Postgres, Version: "18.6"}
+	my := branch("other", "n1", 40001, domain.BranchReady)
+	users := []domain.RouteUser{{Name: "x", Password: "p", DefaultBranch: name("other")}}
+	c := routing.Plan([]domain.Branch{pg, my}, map[string]string{"n1": "192.0.2.10"}, users)
+	if len(c.Postgres.Users) != 1 || c.Postgres.Users[0].Password != "pw-x" {
+		t.Errorf("pg users = %+v", c.Postgres.Users)
+	}
+}

@@ -89,9 +89,25 @@ func Plan(branches []domain.Branch, hosts map[string]string, users []domain.Rout
 		}
 		return nil
 	}
-	shared := map[string]bool{}
+	users = append([]domain.RouteUser(nil), users...)
+	sort.Slice(users, func(i, j int) bool { return users[i].Name < users[j].Name })
+	// A route user's table: its default branch's engine while that exists,
+	// else the one it was made with (MySQL for users stored before that).
+	tableOf := func(u domain.RouteUser) *Tables {
+		e := u.Engine
+		if be, live := engine[u.DefaultBranch]; live {
+			e = be
+		}
+		if e == "" {
+			e = domain.MySQL
+		}
+		return tables(e)
+	}
+	shared := map[*Tables]map[string]bool{&c.MySQL: {}, &c.Postgres: {}}
 	for _, u := range users {
-		shared[u.Name] = true
+		if t := tableOf(u); t != nil {
+			shared[t][u.Name] = true
+		}
 	}
 	for _, b := range branches {
 		id, ok := hg[b.Name]
@@ -103,27 +119,18 @@ func Plan(branches []domain.Branch, hosts map[string]string, users []domain.Rout
 		t.Servers = append(t.Servers, Server{Hostgroup: id, Host: host, Port: b.Port})
 		// A route user of the same name keeps the name: the proxy takes one
 		// login per name.
-		if b.User == b.Name.String() && !shared[b.User] {
+		if b.User == b.Name.String() && !shared[t][b.User] {
 			t.Users = append(t.Users, User{Name: b.User, Password: b.Password, Hostgroup: id})
 		}
 		t.Rules = append(t.Rules, Rule{ID: id, FlagIn: commentFlag, Pattern: branchPattern(b.Name), Hostgroup: id, Apply: true})
 	}
-	users = append([]domain.RouteUser(nil), users...)
-	sort.Slice(users, func(i, j int) bool { return users[i].Name < users[j].Name })
 	entries := map[*Tables]int{}
 	for _, u := range users {
 		id, ok := hg[u.DefaultBranch]
 		if !ok {
 			id = NoHostgroup
 		}
-		e := u.Engine
-		if be, live := engine[u.DefaultBranch]; live {
-			e = be
-		}
-		if e == "" {
-			e = domain.MySQL
-		}
-		t := tables(e)
+		t := tableOf(u)
 		if t == nil {
 			continue
 		}
