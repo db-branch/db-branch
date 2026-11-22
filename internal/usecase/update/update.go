@@ -577,6 +577,11 @@ func missingModules(r *domain.Rollout, n domain.Node) []string {
 	}
 	var out []string
 	for pkg, want := range r.Modules {
+		// A runtime module (a database engine) is not a plugin the agent loads,
+		// so the node's module list never shows it.
+		if strings.HasPrefix(pkg, domain.ModulePackage(domain.RuntimeModuleName(""))) {
+			continue
+		}
 		if v, ok := running[pkg]; !ok || domain.CompareVersions(v, want) != 0 {
 			out = append(out, pkg+" "+want)
 		}

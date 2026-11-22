@@ -982,3 +982,19 @@ func TestRunning_ロールアウトが走っている間だけ真(t *testing.T) 
 		t.Error("canceled")
 	}
 }
+
+func TestTick_ランタイムモジュールはノードのモジュール一覧に出ないので完了の条件にしない(t *testing.T) {
+	e := newEnv(t)
+	_ = e.store.PutModule(ctx, domain.ModuleSpec{Name: "rt-clickhouse", Kind: domain.ModuleKindRuntime, Version: "1.0.0", Wanted: true})
+	e.pkgs.versions["db-branch-rt-clickhouse"] = []domain.PackageVersion{{Version: "1.1.0"}, {Version: "1.0.0"}}
+	_, _ = e.Check(ctx)
+	if r := apply(t, e, "1.2.0"); r.Modules["db-branch-rt-clickhouse"] != "1.1.0" {
+		t.Fatalf("the runtime module is upgraded with the rollout: %v", r.Modules)
+	}
+	e.step(t, "n1")
+	e.setVersion("n1", "1.2.0") // reports auth 1.2.0, and no runtime module
+	e.step(t, "n3")
+	if r, _ := e.store.GetRollout(ctx); r.Nodes["n1"].State != domain.NodeDone {
+		t.Fatalf("n1 = %+v", r.Nodes["n1"])
+	}
+}
