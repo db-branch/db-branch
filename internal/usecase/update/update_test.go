@@ -105,10 +105,13 @@ func newEnv(t *testing.T) *env {
 // as makes the service act as node name (the executor of that node).
 func (e *env) as(name string) { e.Self = name }
 
+// setVersion makes node report core version v; its auth module moves along,
+// as the packages upgrade together.
 func (e *env) setVersion(node, v string) {
 	for i := range e.nodes {
 		if e.nodes[i].Name == node {
 			e.nodes[i].Version = v
+			e.nodes[i].Modules = []string{"auth " + v}
 		}
 	}
 }
@@ -877,5 +880,105 @@ func TestView_APTで入れるランタイムモジュールは対象で_運用�
 	got := strings.Join(names, ",")
 	if !strings.Contains(got, "db-branch-rt-clickhouse") || strings.Contains(got, "db-branch-rt-duckdb") {
 		t.Errorf("packages = %s: an APT runtime module is updated with the cluster, a local one is not APT's business", got)
+	}
+}
+
+func TestTick_コアだけ更新されモジュール更新が失敗したノードをNodeDoneにしない(t *testing.T) {
+	e := newEnv(t)
+	_, _ = e.Check(ctx)
+	apply(t, e, "1.2.0")
+	e.step(t, "n1")
+	// The core is on the target, but the module did not come up (still 1.0.0).
+	e.nodes[0].Version = "1.2.0"
+	e.step(t, "n3")
+	if r, _ := e.store.GetRollout(ctx); r.Nodes["n1"].State != domain.NodeUpdating {
+		t.Fatalf("n1 = %+v", r.Nodes["n1"])
+	}
+	// The module catches up: now it is done.
+	e.nodes[0].Modules = []string{"auth 1.2.0"}
+	e.step(t, "n3")
+	if r, _ := e.store.GetRollout(ctx); r.Nodes["n1"].State != domain.NodeDone {
+		t.Fatalf("n1 = %+v", r.Nodes["n1"])
+	}
+}
+
+func TestTick_モジュールが揃わないまま時間切れならノードを失敗にする(t *testing.T) {
+	e := newEnv(t)
+	_, _ = e.Check(ctx)
+	apply(t, e, "1.2.0")
+	e.step(t, "n1")
+	e.nodes[0].Version = "1.2.0"
+	e.now = e.now.Add(update.DefaultTimeout + time.Second)
+	e.beat()
+	e.step(t, "n3")
+	r, _ := e.store.GetRollout(ctx)
+	if r.Nodes["n1"].State != domain.NodeFailed || !strings.Contains(r.Nodes["n1"].Error, "db-branch-auth 1.2.0") {
+		t.Fatalf("n1 = %+v", r.Nodes["n1"])
+	}
+}
+
+// canceledWhileUpdating cancels the rollout while n1 runs apt.
+func canceledWhileUpdating(t *testing.T) *env {
+	e := newEnv(t)
+	_, _ = e.Check(ctx)
+	apply(t, e, "1.2.0")
+	e.step(t, "n1")
+	if err := e.Cancel(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func TestUpdateCancel_キャンセル後もupdating中ノードの完了を回収する(t *testing.T) {
+	e := canceledWhileUpdating(t)
+	e.setVersion("n1", "1.2.0")
+	e.step(t, "n3")
+	r, _ := e.store.GetRollout(ctx)
+	if r.Nodes["n1"].State != domain.NodeDone || r.Status != domain.RolloutCanceled {
+		t.Fatalf("rollout = %+v", r)
+	}
+	// Nothing starts after the cancel, and the done node is left alone.
+	before := len(e.pkgs.upgraded)
+	e.step(t, "n2")
+	e.step(t, "n3")
+	if len(e.pkgs.upgraded) != before {
+		t.Errorf("a node started after the cancel: %v", e.pkgs.upgraded)
+	}
+}
+
+func TestUpdateCancel_キャンセル後もupdating中ノードがタイムアウトで失敗になり_ロールアウトはキャンセルのまま(t *testing.T) {
+	e := canceledWhileUpdating(t)
+	e.now = e.now.Add(update.DefaultTimeout + time.Second)
+	e.beat()
+	e.step(t, "n3")
+	r, _ := e.store.GetRollout(ctx)
+	if r.Nodes["n1"].State != domain.NodeFailed || r.Status != domain.RolloutCanceled {
+		t.Fatalf("rollout = %+v", r)
+	}
+}
+
+func TestUpdateCancel_キャンセル後にクラスターから消えたupdating中ノードは失敗にする(t *testing.T) {
+	e := canceledWhileUpdating(t)
+	e.nodes = e.nodes[1:]
+	e.step(t, "n3")
+	r, _ := e.store.GetRollout(ctx)
+	if r.Nodes["n1"].State != domain.NodeFailed || r.Status != domain.RolloutCanceled {
+		t.Fatalf("rollout = %+v", r)
+	}
+}
+
+func TestRunning_ロールアウトが走っている間だけ真(t *testing.T) {
+	e := newEnv(t)
+	if e.Running(ctx) {
+		t.Error("nothing runs")
+	}
+	_, _ = e.Check(ctx)
+	apply(t, e, "1.2.0")
+	if !e.Running(ctx) {
+		t.Error("a rollout runs")
+	}
+	_ = e.Cancel(ctx)
+	if e.Running(ctx) {
+		t.Error("canceled")
 	}
 }

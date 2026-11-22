@@ -261,15 +261,16 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	}
 	if svc, err := a.Branches(); err == nil {
 		var rolled func(context.Context) map[string]string
+		var rolling func(context.Context) bool
 		if upd := wireUpdates(runCtx, svc.Store, cl, node, bus, log); upd != nil {
-			srv.Updates, rolled = upd, upd.Rolled
+			srv.Updates, rolled, rolling = upd, upd.Rolled, upd.Running
 		}
 		leading := func() bool { return true }
 		if cl != nil {
 			leading = cl.store.IsLeader
 		}
 		srv.RuntimeWarnings = runtimeWarnings
-		mgr := wireModulesAndSettings(runCtx, cfg, svc, srv, mods, moduleSettings, loadedNames, loadedRuntimes, nodes, problems, arc, rolled, leading, log)
+		mgr := wireModulesAndSettings(runCtx, cfg, svc, srv, mods, moduleSettings, loadedNames, loadedRuntimes, nodes, problems, arc, rolled, rolling, leading, log)
 		if cl != nil {
 			cl.moduleChanged = mgr
 		}

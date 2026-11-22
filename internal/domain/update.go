@@ -218,6 +218,16 @@ type Rollout struct {
 	FinishedAt time.Time             `json:"finished_at,omitempty"`
 }
 
+// Updating reports whether a node is still running its update.
+func (r Rollout) Updating() bool {
+	for _, n := range r.Nodes {
+		if n.State == NodeUpdating {
+			return true
+		}
+	}
+	return false
+}
+
 // NewRollout begins a rollout; nodes already on target count as done.
 // versions are the nodes' current versions.
 func NewRollout(id, target string, order []string, versions map[string]string, at time.Time) Rollout {

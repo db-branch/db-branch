@@ -88,7 +88,7 @@ func coreSettings(cfg config.Config) []ext.Setting {
 // recorded modules change.
 func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranch.Service, srv *httpapi.Server,
 	mods []*plugin.Loaded, moduleSettings map[string][]ext.Setting, loadedNames, loadedRuntimes []string, nodes func() int,
-	problems *moduleProblems, arc *arcNode, rolled func(context.Context) map[string]string, leading func() bool, log *slog.Logger) func() {
+	problems *moduleProblems, arc *arcNode, rolled func(context.Context) map[string]string, rolling func(context.Context) bool, leading func() bool, log *slog.Logger) func() {
 	checkNotifyURL := func(v string) error {
 		return notifier.ValidateURL(v, cfg.Notify.AllowPrivateIPs)
 	}
@@ -235,7 +235,7 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 	if !ok {
 		return func() {}
 	}
-	mgr := &module.Service{Store: store, Packages: apt.Packages{Run: execx.Runner{}}, Rolled: rolled}
+	mgr := &module.Service{Store: store, Packages: apt.Packages{Run: execx.Runner{}}, Rolled: rolled, Busy: rolling}
 	if ns, ok := svc.Store.(domain.NodeStore); ok {
 		mgr.Nodes = ns.ListNodes // runtime modules wait until every node knows them
 	}
