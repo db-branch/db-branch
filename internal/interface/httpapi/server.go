@@ -93,6 +93,7 @@ type Server struct {
 	// private. branchSeed fills it from the branch list on the first stream.
 	branchAudiences sync.Map
 	seedMu          sync.Mutex
+	publishMu       sync.Mutex
 	seeded          bool
 
 	// anonLimiter counts the branches each client address creates without a

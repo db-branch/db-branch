@@ -324,6 +324,9 @@ func (s *Server) publishBranch(ctx context.Context, svc Branches, n domain.Name)
 }
 
 func (s *Server) publishBranchNow(ctx context.Context, svc Branches, n domain.Name) {
+	// One at a time, so that the events leave in the order the states were read.
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
 	b, err := svc.GetBranch(ctx, n)
 	if err != nil {
 		// The branch is gone, so who could see it comes from the last event about it.
