@@ -39,7 +39,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	u, err := s.Uploads.Save(r.Body, r.URL.Query().Get("name"), r.ContentLength)
+	u, err := s.Uploads.Save(http.MaxBytesReader(w, r.Body, r.ContentLength), r.URL.Query().Get("name"), r.ContentLength)
 	switch {
 	case errors.Is(err, domain.ErrTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "too_large", err.Error())

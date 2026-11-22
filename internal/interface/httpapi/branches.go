@@ -215,6 +215,15 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 			return
 		}
 	}
+	// A branch being made counts against the anonymous caps from the moment
+	// it is accepted until it shows in the list.
+	unreserve, forwarded := func() {}, false
+	w, sw := track(w)
+	defer func() {
+		if sw.status != http.StatusAccepted || forwarded {
+			unreserve() // refused, or running on another node: nothing of ours is pending
+		}
+	}()
 	req, err := func() (dbbranch.CreateBranchRequest, error) {
 		base, err := domain.ParseName(in.Base)
 		if err != nil {
@@ -227,7 +236,7 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 		if err != nil {
 			return dbbranch.CreateBranchRequest{}, err
 		}
-		if err := s.branchOwner(r.Context(), svc, principalOf(r), &in, &ttl); err != nil {
+		if unreserve, err = s.branchOwner(r.Context(), svc, principalOf(r), &in, &ttl); err != nil {
 			return dbbranch.CreateBranchRequest{}, err
 		}
 		if err := s.userBranchName(principalOf(r), r, &in); err != nil {
@@ -283,7 +292,15 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 		in.Node = node
 		body, _ := json.Marshal(in)
 		r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(body)), int64(len(body))
-		s.forward(w, r, node)
+		forwarded = true
+		if _, status := s.forwardStatus(w, r, node); status != http.StatusAccepted {
+			refund() // the other node refused: the allowance is not used
+		} else {
+			// The branch shows in the list once the other node has made it;
+			// until then this node keeps counting it.
+			time.AfterFunc(anonForwardHold, unreserve)
+			forwarded = false
+		}
 		return
 	}
 	req.Node = node
@@ -295,6 +312,7 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 		}
 		s.acceptedResult(w, r, "branch.create", operation.Target{Resource: "branch", Name: req.Name.String()},
 			func(ctx context.Context, report func(string)) (any, error) {
+				defer unreserve()
 				b, res, err := svc.CreateBranchUpgraded(ctx, req, report)
 				s.publishBranch(ctx, svc, b.Name)
 				return res, err
@@ -303,6 +321,7 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 	}
 	s.accepted(w, r, "branch.create", operation.Target{Resource: "branch", Name: req.Name.String()},
 		func(ctx context.Context, report func(string)) error {
+			defer unreserve()
 			b, err := svc.CreateBranch(ctx, req, report)
 			s.publishBranch(ctx, svc, b.Name)
 			return err

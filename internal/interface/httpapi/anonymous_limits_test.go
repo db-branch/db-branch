@@ -415,3 +415,54 @@ func TestPublicBases_ブランチ一覧が読めなければ失敗を返す(t *t
 		t.Errorf("status %d", resp.StatusCode)
 	}
 }
+
+func TestAnonymous_作成中のブランチも上限に数え並行作成で超過しない(t *testing.T) {
+	f := anonFixture(t)
+	h := f.srv.Handler(false)
+	f.branches.createGate = make(chan struct{})
+	t.Cleanup(func() { close(f.branches.createGate) })
+	f.srv.Anonymous = func() (time.Duration, int) { return 2 * time.Hour, 2 }
+	for _, n := range []string{"c1", "c2"} {
+		if resp, body := anonCreate(t, h, n, "prod"); resp.StatusCode != 202 {
+			t.Fatalf("%s: %d %v", n, resp.StatusCode, body)
+		}
+	}
+	// c1 and c2 are still being made (not in the list): c3 is over the cap.
+	if resp, body := anonCreate(t, h, "c3", "prod"); resp.StatusCode != 409 {
+		t.Errorf("3rd while two are pending: %d %v", resp.StatusCode, body)
+	}
+	// The per-base cap counts them as well.
+	f.srv.Anonymous = func() (time.Duration, int) { return 2 * time.Hour, 10 }
+	f.setAnonymous("prod", domain.AnonymousLimits{MaxBranches: intPtr(2)})
+	if resp, body := anonCreate(t, h, "c4", "prod"); resp.StatusCode != 409 {
+		t.Errorf("per-base cap while pending: %d %v", resp.StatusCode, body)
+	}
+}
+
+func TestAnonymous_転送先が202以外を返したらレート枠を返金する(t *testing.T) {
+	f := anonFixture(t)
+	c := &fakeCluster{replies: map[string]int{"n2": http.StatusConflict}}
+	f.srv.Cluster = c
+	f.branches.place = "n2"
+	f.srv.AnonymousRate = func() int { return 1 }
+	h := f.srv.Handler(false)
+	for _, n := range []string{"f1", "f2"} {
+		if resp, body := anonCreate(t, h, n, "prod"); resp.StatusCode != 409 {
+			t.Fatalf("%s: the other node refuses with 409, got %d %v", n, resp.StatusCode, body)
+		}
+	}
+}
+
+func TestAnonymous_他ノードへ転送中のブランチも転送元の上限に数える(t *testing.T) {
+	f := anonFixture(t)
+	f.srv.Cluster = &fakeCluster{replies: map[string]int{"n2": http.StatusAccepted}}
+	f.branches.place = "n2"
+	f.srv.Anonymous = func() (time.Duration, int) { return 2 * time.Hour, 1 }
+	h := f.srv.Handler(false)
+	if resp, body := anonCreate(t, h, "m1", "prod"); resp.StatusCode != 202 {
+		t.Fatalf("m1: %d %v", resp.StatusCode, body)
+	}
+	if resp, body := anonCreate(t, h, "m2", "prod"); resp.StatusCode != 409 {
+		t.Errorf("m1 is being made on n2, m2 is over the cap: %d %v", resp.StatusCode, body)
+	}
+}

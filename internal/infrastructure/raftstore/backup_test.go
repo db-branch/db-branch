@@ -112,3 +112,20 @@ func TestBackup_忘却したモジュールの記録はバックアップに含�
 		t.Errorf("wanted module missing after restore: %+v", st.Modules)
 	}
 }
+
+func TestRestore_展開後の大きさが上限を超えるgzipは断る(t *testing.T) {
+	old := raftstore.MaxBackupBytes
+	raftstore.MaxBackupBytes = 1 << 10
+	t.Cleanup(func() { raftstore.MaxBackupBytes = old })
+	dst := newCluster(t, 1).leader(t)
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	_, _ = zw.Write([]byte(`{"format":1,"node":"` + strings.Repeat("a", 1<<20) + `"}`))
+	_ = zw.Close()
+	if buf.Len() > 1<<13 {
+		t.Fatalf("test data should compress well: %d", buf.Len())
+	}
+	if _, err := dst.RestoreBackup(ctx, bytes.NewReader(buf.Bytes())); !errors.Is(err, domain.ErrTooLarge) {
+		t.Errorf("zip bomb: %v", err)
+	}
+}

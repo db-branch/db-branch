@@ -54,6 +54,9 @@ type fakeBranches struct {
 	// upErr fails the upgrade validations; upResultErr makes the upgrade
 	// (and a create with a runtime) fail after producing a result.
 	upErr, upResultErr error
+	// createGate, when set, holds every CreateBranch until it is closed:
+	// the branch does not exist yet while the operation is pending.
+	createGate chan struct{}
 }
 
 func (f *fakeBranches) CheckpointsAvailable() bool { return !f.noCheckpoints }
@@ -107,6 +110,9 @@ func (f *fakeBranches) CreateBranch(_ context.Context, r dbbranch.CreateBranchRe
 	f.mu.Unlock()
 	if rep != nil {
 		rep("cloning")
+	}
+	if f.createGate != nil {
+		<-f.createGate
 	}
 	if f.fail != nil {
 		return domain.Branch{}, f.fail

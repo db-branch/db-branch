@@ -2,10 +2,12 @@ package httpapi_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -261,5 +263,30 @@ func TestOperations_時刻は秒までのUTCで返す(t *testing.T) {
 	_, got := f.do(t, "GET", "/v1/operations/"+body["id"].(string), nil)
 	if got["finished_at"] != "2026-11-09T03:00:00Z" || got["updated_at"] != "2026-11-09T03:00:00Z" {
 		t.Errorf("op = %v", got)
+	}
+}
+
+func TestHTTPAPI_500エラー応答に内部エラー文字列を含めずログに残す(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	f := newFixture(t)
+	f.srv.Storage = func(context.Context) (domain.StorageReport, error) {
+		return domain.StorageReport{}, errors.New("zfs list tank/db-branch/secret-path: dataset busy")
+	}
+	f.branches.fail = errors.New("open /var/lib/db-branch/raft.db: permission denied")
+	for _, path := range []string{"/v1/nodes/node1/storage", "/v1/branches"} {
+		resp, body := f.do(t, "GET", path, nil)
+		if resp.StatusCode != 500 || errCode(body) != "internal" {
+			t.Fatalf("%s: %d %v", path, resp.StatusCode, body)
+		}
+		msg := fmt.Sprint(body["error"])
+		if strings.Contains(msg, "/var/lib") || strings.Contains(msg, "zfs list") {
+			t.Errorf("%s leaks the internal error: %s", path, msg)
+		}
+	}
+	if !strings.Contains(logs.String(), "dataset busy") || !strings.Contains(logs.String(), "permission denied") {
+		t.Errorf("internal errors must be logged: %s", logs.String())
 	}
 }
