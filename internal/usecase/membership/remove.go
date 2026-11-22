@@ -117,7 +117,7 @@ func (r *Remover) Remove(ctx context.Context, node string, force bool) (RemoveRe
 			rep.Replicas = append(rep.Replicas, b.Name.String())
 		}
 		// Naming the node in the list of copy nodes is a setting, not data:
-		// it is dropped whether or not force is set.
+		// when nothing else holds the removal back, it is dropped without force.
 		if b.Node != node && b.ReplicaNodes != nil && slices.Contains(*b.ReplicaNodes, node) {
 			listed = append(listed, b)
 		}
