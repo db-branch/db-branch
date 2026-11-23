@@ -33,7 +33,7 @@
 | `query` | ブランチで SQL を 1 文実行。行（文字列）か影響行数を返す。最大 1000 行、30 秒 |
 | `create_checkpoint` | 稼働中のブランチの今の状態をチェックポイントとして保存する（一瞬。`name` は省略可）。危ない作業の前に取る |
 | `list_checkpoints` | ブランチのチェックポイント（時刻・容量・`current`・`auto`） |
-| `restore_checkpoint` | チェックポイントの状態に戻す（完了まで待つ）。今の状態は置き換わり、自動では保存されない（必要なら先に `create_checkpoint` を呼ぶ）。取ってあるチェックポイントはすべて残る |
+| `restore_checkpoint` | チェックポイントの状態に戻す（完了まで待つ）。今の状態は置き換わり、最後のチェックポイントより後の変更は復元で失われる（残したい場合は先に `create_checkpoint` を呼ぶ）。取ってあるチェックポイントはすべて残る |
 | `fork_branch` | 既存のブランチ（現在の状態またはチェックポイント）から独立した新しいブランチをフォークし（完了まで待つ）、接続先（dsn）を返す。[branch-fork.md](branch-fork.md) |
 | `merge_line` | 同一ブランチ内で `restore_checkpoint` により分岐した履歴ライン（`source_line` または `checkpoint`）の変更を現在のライブラインへ 3-way マージする（`dry_run: true` で事前検証可、コンフリクト時はライブを変更せず失敗）。[branch-merge.md](branch-merge.md) |
 | `check_upgrade` | ブランチを新しいバージョンのランタイムに上げると何に当たるかを調べる（何も変えない）。指摘は `error` `warning` `info` |

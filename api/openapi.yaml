@@ -801,7 +801,7 @@ paths:
       x-dbb-action: branch.restore
       x-dbb-token-scopes: [full, branches]
       description: |-
-        Puts the branch back to the checkpoint, in the background; the server restarts briefly. The current state is replaced and is not saved: take a checkpoint first if it may be needed. Every checkpoint already taken stays restorable. Restoring a checkpoint taken on another runtime switches the branch back to that runtime. Answers `202` with an operation of kind `branch.restore`; phases include `cloning`, `stopping`, `checkpointing`, `swapping`, `promoting`, `starting`.
+        Puts the branch back to the checkpoint, in the background; the server restarts briefly. Changes after the last checkpoint are lost on restore: take a checkpoint first if you want to keep them. Every checkpoint already taken stays restorable. Restoring a checkpoint taken on another runtime switches the branch back to that runtime. Answers `202` with an operation of kind `branch.restore`; phases include `cloning`, `stopping`, `checkpointing`, `swapping`, `promoting`, `starting`.
 
         **Action:** `branch.restore`. Allowed for `full` and `branches` tokens. Allowed for the branch's owner and admins.
       parameters:
