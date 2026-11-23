@@ -2,22 +2,65 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to follow [Semantic Versioning](https://semver.org/) from 1.0. Until then (Beta), APIs may change.
 
-## [Unreleased]
+## [0.3.0] - 2026-11-23
+
+This release includes **Branch Fork**, **Branch Line Merge**, **External Runtime Modules (Experimental)**, and a comprehensive set of **security, reliability, and API/CLI hardening fixes** for GA readiness.
 
 ### Added
 
-- `db-branch module forget <name>` (`POST /v1/modules/{name}/forget`, console **Forget** button): deletes the cluster record of a removed module so it is no longer listed (Raft Protocol 22).
+- **Branch Fork (`F-01`)**: Create an independent child branch from a running or paused branch's live state or from any existing checkpoint (`db-branch branch fork`, `POST /v1/branches/{name}/fork`, MCP `fork_branch`, and the Fork action in the web console). Supports `--checkpoint`, `--clean`, `--init-sql` / `--init-file`, `--ttl`, `--node`, `--owner`, `--access`, and `--record`. Uses Raft Protocol `25`. See `docs/branch-fork.md`.
+- **Branch Line Merge (`F-02`)**: Logically 3-way merge changes from a past history line (or checkpoint) into the live line of the same branch (`db-branch branch merge`, `POST /v1/branches/{name}/merge`, MCP `merge_line`, and the Merge action in the web console), with `--dry-run`, `--checkpoint`, and conflict reporting at the table/row/key level without modifying the live line on failure. Uses Raft Protocol `26`. See `docs/branch-merge.md`.
+- **Runtime Modules Standard (Experimental, single-node)**: Pluggable database engine contract (`RuntimeRegistry`, `RuntimeProvider`, `RuntimeCaps`) and gRPC protocol (`pkg/ext/proto/runtime/v1`) for external database engines, with Ed25519 signature verification, dedicated unprivileged OS users (`db-branch-rt-<engine>`), systemd isolation (`db-branch-rt@.service`), conformance suite (`db-branch-conformance`), and CLI management (`db-branch module install|remove|list|trust`). Supports `branch upgrade` and source dump/load on external engines. Uses Raft Protocol `21`. Cluster usage is restricted/warned as single-node experimental in 1.0.
+- `db-branch module forget <name>` (`POST /v1/modules/{name}/forget`, console **Forget** button): deletes the cluster record of a removed module so it is no longer listed (Raft Protocol `22`).
+- **Cluster node removal (`W-17`)**: `db-branch cluster remove <node>` and `db-branch cluster leave` (`DELETE /v1/cluster/nodes/{name}`), refusing removal by default if bases or branches remain on the node unless `--force` is given.
+- **License verification (`W-21`)**: Embedded production license root public key with offline `Verify` support and improved console TLS error handling.
+- **Demo & documentation**: Refreshed browser demo (`demo.db-branch.com`) with path tracking, Team/Business interest contact links, GitHub Sponsors links, and updated `docs/roadmap.md`.
+
+### Security
+
+- **Cluster-wide & persistent logout (`R-01` / SEC-12)**: Console logout now revokes the session on every node and survives restarts via Raft (`revoke_session`, Raft Protocol `24`) and `revoked-sessions.json` on single nodes.
+- **DB EnvironmentFile & systemd hardening (`R-04` / SEC-01, SEC-15)**: Database server environment files are now `root:db-branch` (`0640`) and DB systemd units are hardened (`NoNewPrivileges`, `ProtectSystem`, etc.).
+- **Proxy & header hardening (`W-01` / SEC-02)**: Prevent `X-Db-Branch-Forwarded` spoofing and hop-by-hop header abuse across node forwarding.
+- **Write-only secret settings (`W-02`)**: Secret settings (license key, open-branch password, webhook secrets) are write-only; `GET /v1/settings` and `setting.updated` return an empty `value` with `secret_set: true`. Use `clear` (`--clear <key>`) to remove a secret.
+- **Operation & SSE ownership scoping (`W-03`)**: Non-admin users only see their own operations and SSE events.
+- **Immutable branch owner IDs & visibility (`W-04`)**: `Branch.Owner` now stores the immutable principal ID (`OwnerName` holds the display name), with atomic cluster migration (`migrate_branch_owner`, Raft Protocol `23`). `branch.read` is scoped to own branches, `open` branches, and `SharesBranches` policies; `GET /v1/public/bases` 403 issue fixed.
+- **Dump path & ExtPublic CSRF (`W-05`)**: Disallow local file paths for dumps over HTTPS and enforce CSRF and `must_change_password` checks on `ExtPublic` routes.
+- **Audit logging & MCP guards (`W-06`)**: Filled missing audit log entries and added request guards and size limits on `POST /v1/mcp`.
+- **Auth & DoS hardening (`W-07`)**: Fixed polling DoS on nonexistent tokens, global login lockout bypasses, and Argon2 lock contention.
+- **Plugin isolation (`W-08`)**: Strengthened path, ownership, and environment variable isolation when loading extension modules.
+- **Notification SSRF protection (`W-09`)**: Require HTTPS for webhook/Slack notifications, block redirects, always block loopback/link-local addresses, and block RFC1918/ULA by default (opt-in via `config.toml`).
+- **Input limits & error hiding (`W-10`)**: Added input size limits, fixed TOCTOU on anonymous branch limits, and prevented internal error details from leaking in `500` responses.
+- **SQL execution & credential safety (`W-12`)**: Prevented password leakage in `ExecAs`, handled `partial_revokes` suffixes, and fixed SQL escaping in `CreateUser`.
+- **ProxySQL routing isolation (`W-19`)**: Fixed misrouted entries and username collisions; restricted `/*db_branch=...*/` comment routing to shared `RouteUser` connections only.
+
+### Changed
+
+- **Compatibility & Raft Protocol (`18` -> `26`)**:
+  - Protocol `19`/`20` reservations were removed (`W-17`).
+  - Protocol `21`: `ProtocolRuntimeModules` (external runtime module `Kind`/`Source` in `put_module`).
+  - Protocol `22`: `ProtocolModuleForget` (`delete_module`).
+  - Protocol `23`: `ProtocolBranchOwnerID` (`migrate_branch_owner`).
+  - Protocol `24`: `ProtocolSessionRevocation` (`revoke_session`).
+  - Protocol `25`: `ProtocolBranchFork` (`insert_branch`/`put_branch` with `ParentBranch`/`BranchForking`).
+  - Protocol `26`: `ProtocolBranchMerge` (`insert_branch`/`put_branch` with `BranchMerging`).
+  - In mixed-version clusters during a rolling upgrade, new commands wait until all nodes speak the required protocol; older behaviors (such as single-node-only logout) remain in effect until every node is at `0.3.0`.
+- **Upgrade**: Upgrade cluster nodes one by one (leader last) via `apt-get update && apt-get install db-branch` (or `db-branch update`). No manual database or ZFS migration is required.
+- **Extension compatibility**: `pkg/ext` (interfaces) and `pkg/ext/proto/runtime/v1` are the supported 1.0 extension contracts; `pkg/ext/plugin` (`net/rpc`) is internal/deprecated.
+- **`base mask`**: Temporarily hidden from CLI/API/Web Console/MCP for 1.0 while keeping `pkg/ext` interfaces intact.
 
 ### Fixed
 
-- Console logout now ends the session on every node and survives a restart (GA audit R-01). Logged-out session ids are replicated in the cluster state (`revoke_session`, Raft Protocol 24; until every node is at 24 a logout holds only on the node that took it, as before) and, on a single node, kept in `revoked-sessions.json` next to `auth.json`. Records go once the session would have expired anyway.
-
-- The console's Modules page no longer marks free modules (for example ProxySQL) as **Paid** when the licence covers every module. The badge now shows for modules the server reports as needing a licence, and, for a licence that names its modules, for the modules it names.
-- Secret settings (the licence key, the open-branch password, webhook secrets) are now write-only. `GET /v1/settings` and the `setting.updated` event return an empty `value` and `secret_set` instead of the secret. A secret sent empty keeps its value; list its key in `clear` of `PUT /v1/settings/{scope}` (or `db-branch settings set <scope> --clear <key>`) to remove it. An empty value no longer removes a secret (older `settings set <scope> <key>=` and older console builds did). Text settings in the console keep trailing spaces and newlines.
+- **DB lifecycle & recovery (`W-13`, `W-14`)**: Fixed DB server start/stop/recovery edge cases and state consistency across agent restarts.
+- **Resource exhaustion (`W-15`)**: Excluded paused branches from Placement memory budgets (checked on resume), enforced optional `refquota`, added pool free-space guard (10% or 1 GiB minimum), serialized concurrent uploads, and cleaned up `srcdump` temporaries.
+- **Cluster stability (`W-16`)**: Fixed backup directory, Raft store, and base replication bugs.
+- **Cluster updates (`W-18`)**: Added module version checks, post-cancellation cleanup, and `dpkg` lock contention prevention during rolling updates.
+- **Runtime module upgrades (`W-20`)**: Preserved trusted keys when old directory removal fails during runtime module upgrade, and added single-node warnings in clusters.
+- The console's Modules page no longer marks free modules (for example ProxySQL) as **Paid** when the licence covers every module.
+- Text settings in the console keep trailing spaces and newlines (`W-02`).
 
 ### Removed
 
-- Removed the `db-branch-anon`, `db-branch-greenmask`, and `db-branch-greenmask-mysql` masker modules from this repository; they are now maintained in separate repositories (not yet public). The `base mask` command and the `Masker` extension point (`pkg/ext`) remain in the core repository.
+- Removed the `db-branch-anon`, `db-branch-greenmask`, and `db-branch-greenmask-mysql` masker modules from this repository; they are now maintained in separate repositories. The `Masker` extension point (`pkg/ext`) remains in the core repository.
 
 ## [0.2.7] - 2026-11-18
 
