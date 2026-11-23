@@ -3,7 +3,7 @@
 openapi: 3.1.0
 info:
   title: db-branch API
-  version: 0.2.0
+  version: 0.3.0
   summary: 'REST API of the db-branch agent: database branches, bases, checkpoints and cluster administration.'
   description: |
     The REST API of the db-branch agent. The web console, the `db-branch` command and your own scripts all use it. This document describes the core API that every installation serves. Paid modules add their own APIs under `/v1/ext/<module>/`; each module documents its API itself, and those paths are not listed here. A node's `GET /v1/capabilities` names the modules it runs.
