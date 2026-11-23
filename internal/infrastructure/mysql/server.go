@@ -427,6 +427,13 @@ func (m *Server) Exec(ctx context.Context, s domain.Server, sql string) error {
 	return err
 }
 
+// execNoBinlog runs agent management SQL as root in a fresh mysql CLI session
+// (via Exec) with sql_log_bin = 0 so internal account/privilege housekeeping is
+// not recorded in the branch binlog.
+func (m *Server) execNoBinlog(ctx context.Context, s domain.Server, sql string) error {
+	return m.Exec(ctx, s, "SET SESSION sql_log_bin = 0; "+sql)
+}
+
 // allowBackslashEscapes resets NO_BACKSLASH_ESCAPES on the session before
 // running SQL built with quoteMySQL, so server sql_mode overrides in my.cnf
 // cannot corrupt escaped literals.
@@ -481,7 +488,7 @@ func (m *Server) CreateUser(ctx context.Context, s domain.Server, user, password
 	if err := m.Exec(ctx, s, "SET GLOBAL partial_revokes = ON"); err != nil {
 		return err
 	}
-	return m.Exec(ctx, s, fmt.Sprintf(allowBackslashEscapes+"REVOKE %s ON mysql.* FROM %s@'%%'", clientPrivileges, quoteMySQL(user)))
+	return m.execNoBinlog(ctx, s, fmt.Sprintf(allowBackslashEscapes+"REVOKE %s ON mysql.* FROM %s@'%%'", clientPrivileges, quoteMySQL(user)))
 }
 
 // partialRevokes says whether the runtime can take a privilege away on one
@@ -509,7 +516,7 @@ func (m *Server) createUser(ctx context.Context, s domain.Server, user, password
 	if !seriesAtLeast(series, "5.7") {
 		// 5.6: no CREATE USER IF NOT EXISTS (GRANT ... IDENTIFIED BY makes the account), and the
 		// install script left anonymous accounts and root for other hosts without a password.
-		return m.Exec(ctx, s, fmt.Sprintf(allowBackslashEscapes+
+		return m.execNoBinlog(ctx, s, fmt.Sprintf(allowBackslashEscapes+
 			"DELETE FROM mysql.user WHERE User = '' OR (User = 'root' AND Host <> 'localhost'); FLUSH PRIVILEGES; "+
 			"GRANT USAGE ON *.* TO %[1]s@'%%' IDENTIFIED BY %[2]s; "+
 			"REVOKE ALL PRIVILEGES, GRANT OPTION FROM %[1]s@'%%'; "+
@@ -522,7 +529,7 @@ func (m *Server) createUser(ctx context.Context, s domain.Server, user, password
 	if seriesAtLeast(series, "9.0") || (series == "8.4" && !s.LegacyAuth) {
 		alterAuth = "IDENTIFIED WITH caching_sha2_password BY " + pw
 	}
-	return m.Exec(ctx, s, fmt.Sprintf(allowBackslashEscapes+
+	return m.execNoBinlog(ctx, s, fmt.Sprintf(allowBackslashEscapes+
 		"CREATE USER IF NOT EXISTS %[1]s@'%%' IDENTIFIED BY %[2]s; "+
 		"ALTER USER %[1]s@'%%' %[3]s; "+
 		"REVOKE ALL PRIVILEGES, GRANT OPTION FROM %[1]s@'%%'; "+
@@ -622,10 +629,10 @@ func (m *Server) DropUser(ctx context.Context, s domain.Server, user string) err
 	}
 	u := quoteMySQL(user)
 	if !seriesAtLeast(domain.MySQLSeries(s.Runtime.Version), "5.7") {
-		return m.Exec(ctx, s, fmt.Sprintf(allowBackslashEscapes+
+		return m.execNoBinlog(ctx, s, fmt.Sprintf(allowBackslashEscapes+
 			"DELETE FROM mysql.user WHERE User = %s AND Host = '%%'; FLUSH PRIVILEGES", u))
 	}
-	return m.Exec(ctx, s, fmt.Sprintf(allowBackslashEscapes+"DROP USER IF EXISTS %s@'%%'", u))
+	return m.execNoBinlog(ctx, s, fmt.Sprintf(allowBackslashEscapes+"DROP USER IF EXISTS %s@'%%'", u))
 }
 
 // logReadLimit bounds what is read of the error log: the service user can grow

@@ -361,7 +361,7 @@ func (m *Server) convertOwn(ctx context.Context, s domain.Server, own domain.Log
 	}
 	for _, r := range rows {
 		sql := fmt.Sprintf(allowBackslashEscapes+"ALTER USER %s@%s IDENTIFIED WITH caching_sha2_password BY %s", quoteMySQL(own.User), quoteMySQL(r[0]), quoteMySQL(own.Password))
-		if err := m.Exec(ctx, s, sql); err != nil {
+		if err := m.execNoBinlog(ctx, s, sql); err != nil {
 			return err
 		}
 	}
