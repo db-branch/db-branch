@@ -11,7 +11,6 @@ The documents in this directory are written in **Japanese**. English user docume
 | [mixed-os.md](mixed-os.md) | Running nodes of different distributions in one cluster: what each node reports and why PostgreSQL branches stay on the distribution their base was made on |
 | [service-user-ids.md](service-user-ids.md) | Why every node of a cluster must use the same db-branch uid/gid, how `cluster join` and `cluster align-ids` align them, and how mismatches are reported |
 | [base-refresh.md](base-refresh.md) | Reloading a base from a source database on a schedule |
-| [masking.md](masking.md) | Creating masked bases with masker modules and what is recorded about them |
 | [modules.md](modules.md) | Writing and deploying extension modules: ports, plugin protocol, settings, module APIs and pages, cluster-wide install |
 | [mcp.md](mcp.md) | The MCP server for LLM agents: endpoint, tokens and scopes, tools, connecting Claude Code |
 | [monitoring.md](monitoring.md) | Prometheus metrics and health endpoints |
