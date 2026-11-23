@@ -304,6 +304,9 @@ func (s *Service) transitionBranch(ctx context.Context, name domain.Name, check 
 	if err := check(br); err != nil {
 		return br, err
 	}
+	if err := s.checkNotDryRun(name); err != nil {
+		return br, err
+	}
 	for _, g := range guards {
 		if err := g(ctx, br); err != nil {
 			return br, err
@@ -496,6 +499,7 @@ func (s *Service) sweepDumps() {
 // and interrupted creates are marked failed.
 func (s *Service) Recover(ctx context.Context) error {
 	s.sweepDumps()
+	s.sweepMergeWork(ctx)
 	baseErr := s.recoverBases(ctx)
 	branches, err := s.Store.ListBranches(ctx)
 	if err != nil {
@@ -509,7 +513,10 @@ func (s *Service) Recover(ctx context.Context) error {
 		}
 		switch br.Status {
 		case domain.BranchReady:
+			_ = s.clearMergeIntent(ctx, br.Name)
 			errs = append(errs, s.recoverRunning(ctx, br, true))
+		case domain.BranchPaused:
+			_ = s.clearMergeIntent(ctx, br.Name)
 		case domain.BranchResetting:
 			_, err := s.doReset(ctx, br, nil)
 			errs = append(errs, err)
@@ -525,8 +532,10 @@ func (s *Service) Recover(ctx context.Context) error {
 			errs = append(errs, s.recoverForking(ctx, br))
 		case domain.BranchUpgrading:
 			errs = append(errs, s.resumeUpgrade(ctx, br))
+		case domain.BranchMerging:
+			errs = append(errs, s.resumeMerge(ctx, br))
 		case domain.BranchFailed:
-			errs = append(errs, s.resumeFailedRestore(ctx, br))
+			errs = append(errs, s.resumeFailed(ctx, br))
 		case domain.BranchDeleting:
 			deleting = append(deleting, br)
 		case domain.BranchProvisioning:

@@ -54,6 +54,9 @@ func TestSnapshotInfos_作成順に時刻と容量とクローンと自前のプ
 	if len(got) != 2 || got[0].Name != "reset" || got[1].Name != "ckpt-c1" {
 		t.Fatalf("got %+v", got)
 	}
+	if got[0].CreateTXG != 10 || got[1].CreateTXG != 20 {
+		t.Errorf("CreateTXG = %d, %d; want 10, 20", got[0].CreateTXG, got[1].CreateTXG)
+	}
 	if len(got[0].Props) != 0 || len(got[0].Clones) != 0 {
 		t.Errorf("inherited properties must not count: %+v", got[0])
 	}

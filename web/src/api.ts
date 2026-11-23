@@ -163,6 +163,52 @@ export type Operation = {
   result?: UpgradeResult | null;
 };
 
+export type MergeTableSummary = {
+  database: string;
+  table: string;
+  inserted: number;
+  updated: number;
+  deleted: number;
+  ddl?: string;
+};
+
+export type MergeConflict = {
+  type: string;
+  database: string;
+  table: string;
+  constraint?: string;
+  key?: Record<string, unknown>;
+  conflicting_target_key?: Record<string, unknown>;
+  columns?: string[];
+  ancestor_values?: Record<string, unknown>;
+  source_values?: Record<string, unknown>;
+  target_values?: Record<string, unknown>;
+  message?: string;
+};
+
+export type MergeResult = {
+  branch: string;
+  source_line: number;
+  source_checkpoint?: string;
+  target_line: number;
+  ancestor?: string;
+  checkpoint?: string;
+  dry_run?: boolean;
+  status: "dry_run" | "merged" | "conflicted" | "rolled_back" | "failed";
+  code?: string;
+  inserted: number;
+  updated: number;
+  deleted: number;
+  ddl?: number;
+  tables?: MergeTableSummary[];
+  total_conflicts?: number;
+  truncated?: boolean;
+  conflicts?: MergeConflict[];
+  error?: string;
+};
+
+export type MergeOperation = Omit<Operation, "result"> & { result?: MergeResult | null };
+
 export type BaseRefresh = {
   base: string;
   engine: string;
@@ -397,9 +443,14 @@ export const api = {
   capabilities: () => call<Capabilities>("GET", "/v1/capabilities"),
   branch: (name: string) => call<Branch>("GET", `/v1/branches/${name}`),
   operation: (id: string) => call<Operation>("GET", `/v1/operations/${id}`),
+  mergeOperation: (id: string) => call<MergeOperation>("GET", `/v1/operations/${id}`),
   publicBases: () => call<{ items: PublicBase[]; anonymous: { max_ttl: string; max_branches: number; branches?: number; rate_per_hour?: number } }>("GET", "/v1/public/bases"),
   branches: () => call<{ items: Branch[] }>("GET", "/v1/branches").then((r) => r.items),
   upgradeBranch: (name: string, body: { runtime: string; check_only?: boolean; no_rollback?: boolean; force?: boolean }) => call<Operation>("POST", `/v1/branches/${name}/upgrade`, body),
+  mergeBranch: (
+    name: string,
+    body: { source_line?: number; checkpoint?: string; dry_run?: boolean; tables?: string[]; allow_ddl?: boolean; ignore_triggers?: boolean },
+  ) => call<MergeOperation>("POST", `/v1/branches/${encodeURIComponent(name)}/merge`, body),
   createBranch: (b: { name: string; base: string; ttl?: string; init_sql?: string; owner?: string; access?: string; record?: boolean; runtime?: string }) => call<Operation>("POST", "/v1/branches", b),
   forkBranch: (source: string, b: { name: string; checkpoint?: string; clean?: boolean; init_sql?: string; ttl?: string; owner?: string; access?: string; record?: boolean }) =>
     call<Operation>("POST", `/v1/branches/${encodeURIComponent(source)}/fork`, b),

@@ -92,6 +92,9 @@ func (s *Service) planFork(ctx context.Context, req ForkBranchRequest) (forkPlan
 	if err := parent.CanFork(); err != nil {
 		return forkPlan{}, err
 	}
+	if err := s.checkNotDryRun(parent.Name); err != nil {
+		return forkPlan{}, err
+	}
 	if _, err := s.Store.GetBranch(ctx, req.Name); err == nil {
 		return forkPlan{}, fmt.Errorf("branch %s: %w", req.Name, domain.ErrAlreadyExists)
 	}
@@ -421,7 +424,7 @@ func (s *Service) dropInheritedUsers(ctx context.Context, br domain.Branch, srv 
 
 func isLineageTransition(st domain.BranchStatus) bool {
 	switch st {
-	case domain.BranchUpgrading, domain.BranchRestoring, domain.BranchResetting, domain.BranchForking:
+	case domain.BranchUpgrading, domain.BranchRestoring, domain.BranchResetting, domain.BranchForking, domain.BranchMerging:
 		return true
 	}
 	return false

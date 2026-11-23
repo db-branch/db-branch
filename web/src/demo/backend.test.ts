@@ -875,5 +875,14 @@ describe("branch fork", () => {
     expect(branch("alex-try1")).toMatchObject({ parent_branch: "alex-checkout-fix", parent_snapshot: "reset", owner: "alex@example.com" });
     expect(call("POST", "/v1/branches/alex-checkout-fix/fork", { name: "try1" })).toMatchObject({ status: 409, body: { error: { code: "already_exists" } } });
   });
+
+  it("merges a line or checkpoint into live in dry-run and apply modes", () => {
+    const dry = call("POST", "/v1/branches/migration-test/merge", { checkpoint: "before-migration", dry_run: true });
+    if (dry.status === 202) {
+      settle();
+      expect(op((dry.body as Operation).id).result).toMatchObject({ status: "dry_run", dry_run: true });
+    }
+    expect(call("POST", "/v1/branches/migration-test/merge", { source_line: 0 })).toMatchObject({ status: 400 });
+  });
 });
 

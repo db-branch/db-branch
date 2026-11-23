@@ -32,6 +32,7 @@ function panel(over: Partial<Panel> = {}): Panel {
     restoreWhy: undefined,
     deleteWhy: undefined,
     forkWhy: undefined,
+    mergeWhy: undefined,
     txRestoreWhy: undefined,
     save: noop,
     saveFirst: noop,
@@ -173,5 +174,19 @@ describe("PanelView", () => {
     expect(h).toContain("Checkpoints of x");
     expect(h).toMatch(/<section class="cps"[^>]*inert/);
     expect(h.match(/aria-label="Name \(optional\)"/g)).toHaveLength(2);
+  });
+});
+
+describe("Merge into live", () => {
+  it("disables Merge into live on a live-line checkpoint and enables it on another line", () => {
+    const onLive = body(panel({ selected: selectedNode("checkpoint:d1") }));
+    expect(onLive).toMatch(/<button[^>]*disabled[^>]*>Merge into live<\/button>/);
+
+    const onOther = body(panel({ selected: selectedNode("checkpoint:c1") }));
+    expect(onOther).toContain(">Merge into live</button>");
+    expect(onOther).not.toMatch(/<button[^>]*disabled[^>]*>Merge into live<\/button>/);
+
+    const blocked = body(panel({ selected: selectedNode("checkpoint:c1"), mergeWhy: "Your role cannot do this." }));
+    expect(blocked).toMatch(/<button[^>]*disabled[^>]*>Merge into live<\/button>/);
   });
 });

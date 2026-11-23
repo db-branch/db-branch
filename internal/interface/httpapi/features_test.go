@@ -90,7 +90,7 @@ func TestCapabilities_エンジン別の機能を返す(t *testing.T) {
 	}
 	my := engines["mysql"].(map[string]any)
 	feat := my["features"].(map[string]any)
-	if my["display_name"] != "MySQL" || feat["query"] != true || feat["checkpoints"] != true || feat["upgrade"] != true || feat["branch_merge"] != false || feat["live_freeze"] != false {
+	if my["display_name"] != "MySQL" || feat["query"] != true || feat["checkpoints"] != true || feat["upgrade"] != true || feat["branch_merge"] != true || feat["live_freeze"] != false {
 		t.Errorf("mysql = %v", my)
 	}
 	if len(feat) != len(domain.FeatureNames) {
@@ -150,7 +150,7 @@ func TestCapabilities_history_recordはモジュールが受け付けるとき�
 
 func TestMCP_エンジンが宣言していない機能のツールは明示的なエラーを返す(t *testing.T) {
 	httpapi.MCPPoll = time.Millisecond
-	mysqlWith(t, func(c *domain.RuntimeCaps) { c.Upgrade = false; c.Checkpoints = false })
+	mysqlWith(t, func(c *domain.RuntimeCaps) { c.Upgrade = false; c.Checkpoints = false; c.BranchMerge = false })
 	f := checkpointFixture(t)
 	bx := f.branches.branches["x"]
 	bx.Owner, bx.OwnerName = "token:dev", "dev"
@@ -173,6 +173,7 @@ func TestMCP_エンジンが宣言していない機能のツールは明示的�
 		"create_checkpoint":  {map[string]any{"branch": "x"}, "checkpoints"},
 		"list_checkpoints":   {map[string]any{"branch": "x"}, "checkpoints"},
 		"restore_checkpoint": {map[string]any{"branch": "x", "checkpoint": "c1"}, "checkpoints"},
+		"merge_line":         {map[string]any{"branch": "x", "source_line": 0}, "branch_merge"},
 	}
 	for tool, c := range calls {
 		out, isErr := callText(t, s, tool, c.args)

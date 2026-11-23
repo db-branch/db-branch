@@ -224,6 +224,8 @@ const (
 	// BranchForking: the branch's server is stopped briefly while a clean fork
 	// snapshot is taken and cloned.
 	BranchForking BranchStatus = "forking"
+	// BranchMerging: a history line is being merged into the branch's live line.
+	BranchMerging BranchStatus = "merging"
 )
 
 // Branch is a writable clone of a base snapshot served by its own database server.
@@ -287,6 +289,11 @@ const ProtocolSessionRevocation = 24
 // from another branch (carrying parent_branch, parent_snapshot, fork_runtime,
 // fork_legacy_auth and the forking status inside put_branch / insert_branch).
 const ProtocolBranchFork = 25
+
+// ProtocolBranchMerge is the cluster protocol from which a branch's history
+// line may be merged into its live line (carrying the merging status inside
+// put_branch / insert_branch).
+const ProtocolBranchMerge = 26
 
 // DisplayOwner returns the human-readable owner label: OwnerName when set,
 // otherwise Owner.
@@ -362,6 +369,16 @@ func (b Branch) CanFork() error {
 		return nil
 	}
 	return fmt.Errorf("%w: branch %s is %s; only a ready or paused branch can be forked", ErrConflict, b.Name, b.Status)
+}
+
+// CanMerge reports whether a history line may be merged into this branch's
+// live line: ready or paused only.
+func (b Branch) CanMerge() error {
+	switch b.Status {
+	case BranchReady, BranchPaused:
+		return nil
+	}
+	return fmt.Errorf("%w: branch %s is %s; only a ready or paused branch can be merged", ErrConflict, b.Name, b.Status)
 }
 
 // CanRecreate reports whether the branch may be built again elsewhere: only

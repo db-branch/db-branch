@@ -15,7 +15,7 @@ ZFS クローンを使い、本番相当のデータベースのブランチを�
 ### 非目標（当面）
 
 - 本番トラフィックの HA 構成（ブランチは開発・検証用途）
-- ブランチ同士のマージやリベース（ZFS のブロックレベル CoW クローンであり DB エンジンの MVCC をフックしているわけではないため、並行書き込みしたブランチを Git のようにマージ・リベースすることはできない。AI エージェントや CI 向けの使い捨て（disposable）サンドボックスを前提とする）
+- 異なるブランチ同士やベースへのマージ・リベース（ZFS のブロックレベル CoW クローンであり DB エンジンの MVCC をフックしているわけではないため、別々に並行書き込みした異なるブランチ間やベースへ Git のようにマージ・リベースすることはしない。AI エージェントや CI 向けの使い捨て（disposable）サンドボックスを前提とする。なお、**同一ブランチ内部**で `branch restore` により分岐した履歴ライン（`line`）間の変更をライブラインへ論理 3-way マージする `branch merge` はサポートする。[branch-merge.md](branch-merge.md) 参照）
 - Kubernetes Operator
 - 複数ユーザー・権限管理・監査ログ（有償モジュールで提供する。§12）
 
@@ -166,9 +166,13 @@ create ──▶ provisioning ──▶ ready ⇄ (reset) ──▶ deleting ─
 
 DB サーバー停止 → `zfs rollback tank/branches/feature-x@reset` → DB サーバー起動。`@reset` も正常停止した状態で取っているので、起動時のクラッシュリカバリは不要。init SQL の再実行もないので数秒で終わる。停止はロールバックで捨てる状態なので、即時停止（MySQL: `innodb_fast_shutdown=2` 相当、PostgreSQL: `immediate`）でよい。
 
-### チェックポイント `db-branch branch checkpoint feature-x` / `branch restore feature-x <名前>`
+### チェックポイント `db-branch branch checkpoint feature-x` / `branch restore feature-x <名前>` / `branch merge feature-x <line>`
 
-稼働中のブランチのデータセットのスナップショットを取り、あとでその状態に戻せる。復元してもほかのチェックポイントは消えない（履歴の線を別のデータセットとして残す）。設計・データセットの配置・復元の手順・クラッシュ時の再開は [checkpoints.md](checkpoints.md)。
+稼働中のブランチのデータセットのスナップショットを取り、あとでその状態に戻せる。復元してもほかのチェックポイントは消えない（履歴の線を別のデータセットとして残す）。退避された履歴の線（またはチェックポイント）で行われた変更を現在のライブの線へ論理 3-way マージすることもできる（コンフリクト検出時はライブを変更せずに失敗する）。設計・データセットの配置・復元の手順・クラッシュ時の再開は [checkpoints.md](checkpoints.md) および [branch-merge.md](branch-merge.md)。
+
+### フォーク `db-branch branch fork feature-x feature-x-try`
+
+稼働中または一時停止中のブランチ（またはそのチェックポイント）から独立した新しい子ブランチを切り出す。設計は [branch-fork.md](branch-fork.md)。
 
 ### アップグレード `db-branch branch upgrade feature-x --runtime mysql@8.4.13`
 

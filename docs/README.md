@@ -7,6 +7,8 @@ The documents in this directory are written in **Japanese**. English user docume
 | [design.md](design.md) | Overall design: goals, terminology, architecture, engines and runtimes, branch lifecycle, base snapshots, ZFS tuning, ProxySQL routing, clustering, packaging, the web console, extension modules |
 | [api.md](api.md) | REST API design: conventions, resources, operations and events, with examples (machine-readable definition: [../api/openapi.yaml](../api/openapi.yaml)) |
 | [checkpoints.md](checkpoints.md) | Branch checkpoints: saving a branch's state and restoring it without losing the others (dataset layout, restore steps, crash safety, limits) |
+| [branch-fork.md](branch-fork.md) | Branch forking: cloning an existing running or paused branch (or one of its checkpoints) into a new independent child branch |
+| [branch-merge.md](branch-merge.md) | Branch line merging: logical 3-way merge of row and schema changes from a past history line (or checkpoint) into the live line within a single branch |
 | [cluster-plan.md](cluster-plan.md) | Implementation plan for clustering: ports, steps and the verification done at each step |
 | [mixed-os.md](mixed-os.md) | Running nodes of different distributions in one cluster: what each node reports and why PostgreSQL branches stay on the distribution their base was made on |
 | [service-user-ids.md](service-user-ids.md) | Why every node of a cluster must use the same db-branch uid/gid, how `cluster join` and `cluster align-ids` align them, and how mismatches are reported |

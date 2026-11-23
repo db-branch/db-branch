@@ -9,6 +9,7 @@ import { t } from "../lib/i18n";
 import { useLive } from "../lib/live";
 import { HistoryGraph } from "./historygraph";
 import { Icon } from "./marks";
+import { MergeBranchModal } from "./mergebranch";
 import { Modal } from "./modal";
 import { ErrorLine } from "./ui";
 
@@ -49,6 +50,7 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
   const restoreWhy = why("branch.restore");
   const deleteWhy = why("branch.checkpoint_delete");
   const forkWhy = !allow("branch.fork") ? noRole : b.status !== "ready" && b.status !== "paused" ? t("Available once it is ready.") : undefined;
+  const mergeWhy = !allow("branch.merge") ? noRole : b.status !== "ready" && b.status !== "paused" ? t("Available once it is ready.") : undefined;
 
   const shape = useMemo(() => JSON.stringify([graph?.lines, graph?.items.map((c) => c.name)]), [graph]);
   useEffect(() => setSelected(null), [shape]);
@@ -126,6 +128,7 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
     restoreWhy,
     deleteWhy,
     forkWhy,
+    mergeWhy,
     txRestoreWhy: !allow("ext.history.write") ? noRole : !ready ? t("Available once it is ready.") : undefined,
     save,
     // saveFirst: the button of a restore confirmation, which saves a checkpoint (named as typed in the form, or by time).
@@ -172,17 +175,26 @@ export function CheckpointPanel(props: { branch: Branch; ready: boolean; allow: 
 // enlarged in a modal. The one on the page is inert meanwhile: out of reach of
 // the keyboard and of screen readers, so there is one of each control to find.
 export function PanelView({ p, open, onOpen, onClose, expandRef, onFork }: { p: Panel; open: boolean; onOpen: () => void; onClose: () => void; expandRef?: RefObject<HTMLButtonElement | null>; onFork?: (checkpoint: string) => void }) {
+  const [mergeTarget, setMergeTarget] = useState<{ checkpoint: string; line: number } | null>(null);
   return (
     <>
       <section className="cps" aria-label="Checkpoints" inert={open}>
-        <PanelBody p={p} onExpand={onOpen} expandRef={expandRef} onFork={onFork} />
+        <PanelBody p={p} onExpand={onOpen} expandRef={expandRef} onFork={onFork} onMerge={(checkpoint, line) => setMergeTarget({ checkpoint, line })} />
       </section>
       {open && (
         <Modal title={t("Checkpoints of {name}", { name: p.branch.name })} onClose={onClose} returnFocus={expandRef}>
           <section className="cps cps-modal" aria-label="Checkpoints">
-            <PanelBody p={p} modal onFork={onFork ? (cp) => (onClose(), onFork(cp)) : undefined} />
+            <PanelBody p={p} modal onFork={onFork ? (cp) => (onClose(), onFork(cp)) : undefined} onMerge={(checkpoint, line) => (onClose(), setMergeTarget({ checkpoint, line }))} />
           </section>
         </Modal>
+      )}
+      {mergeTarget && (
+        <MergeBranchModal
+          branch={p.branch}
+          checkpoint={mergeTarget.checkpoint}
+          sourceLine={mergeTarget.line}
+          onClose={() => setMergeTarget(null)}
+        />
       )}
     </>
   );
@@ -190,8 +202,10 @@ export function PanelView({ p, open, onOpen, onClose, expandRef, onFork }: { p: 
 
 // PanelBody is the panel itself: save, the graph with the selected node and its
 // actions, and the list. modal draws it enlarged for the modal.
-export function PanelBody({ p, modal, onExpand, expandRef, onFork }: { p: Panel; modal?: boolean; onExpand?: () => void; expandRef?: RefObject<HTMLButtonElement | null>; onFork?: (checkpoint: string) => void }): ReactNode {
+export function PanelBody({ p, modal, onExpand, expandRef, onFork, onMerge }: { p: Panel; modal?: boolean; onExpand?: () => void; expandRef?: RefObject<HTMLButtonElement | null>; onFork?: (checkpoint: string) => void; onMerge?: (checkpoint: string, line: number) => void }): ReactNode {
   const { branch: b, graph, rows, selected, asking, working } = p;
+  const [localMerge, setLocalMerge] = useState<{ checkpoint: string; line: number } | null>(null);
+  const openMerge = onMerge ?? ((checkpoint: string, line: number) => setLocalMerge({ checkpoint, line }));
   const dots = !!p.events && Object.values(p.events).some((l) => l.length > 0);
   return (
     <>
@@ -286,12 +300,23 @@ export function PanelBody({ p, modal, onExpand, expandRef, onFork }: { p: Panel;
                   onRestore={() => p.restoreCheckpoint(selected.checkpoint!.name)}
                   onFork={onFork ? () => onFork(selected.checkpoint!.name) : undefined}
                   forkWhy={p.forkWhy}
+                  liveLine={graph.live}
+                  mergeWhy={p.mergeWhy}
+                  onMerge={() => openMerge(selected.checkpoint!.name, selected.checkpoint!.line)}
                   saveFirst={{ onSave: p.saveFirst, why: p.saveWhy }}
                 />
               ) : (
                 <p className="small">{t("The branch's creation state. Reset returns here.")}</p>
               )}
             </div>
+          )}
+          {!onMerge && localMerge && (
+            <MergeBranchModal
+              branch={b}
+              checkpoint={localMerge.checkpoint}
+              sourceLine={localMerge.line}
+              onClose={() => setLocalMerge(null)}
+            />
           )}
         </>
       )}
@@ -382,7 +407,7 @@ function Confirm({ label, text, action, danger, working, onCancel, onConfirm, sa
   );
 }
 
-function CheckpointDetail({ c, line, branch, asking, working, why, forkWhy, onAsk, onRestore, onFork, saveFirst }: { c: import("../api").Checkpoint; line: number; branch: string; asking: boolean; working: boolean; why?: string; forkWhy?: string; onAsk: (on: boolean) => void; onRestore: () => void; onFork?: () => void; saveFirst: { onSave: () => void; why?: string } }) {
+function CheckpointDetail({ c, line, liveLine, branch, asking, working, why, forkWhy, mergeWhy, onAsk, onRestore, onFork, onMerge, saveFirst }: { c: import("../api").Checkpoint; line: number; liveLine: number; branch: string; asking: boolean; working: boolean; why?: string; forkWhy?: string; mergeWhy?: string; onAsk: (on: boolean) => void; onRestore: () => void; onFork?: () => void; onMerge?: () => void; saveFirst: { onSave: () => void; why?: string } }) {
   return (
     <div className="hg-detail-body">
       <div className="cp-main">
@@ -416,6 +441,11 @@ function CheckpointDetail({ c, line, branch, asking, working, why, forkWhy, onAs
           {onFork && (
             <button type="button" disabled={!!forkWhy || working} title={forkWhy} onClick={onFork}>
               Fork
+            </button>
+          )}
+          {onMerge && (
+            <button type="button" disabled={!!mergeWhy || c.line === liveLine || working} title={mergeWhy ?? (c.line === liveLine ? t("Select a checkpoint on another line to merge.") : t("Merge changes from this checkpoint's line into the live branch."))} onClick={onMerge}>
+              Merge into live
             </button>
           )}
         </span>

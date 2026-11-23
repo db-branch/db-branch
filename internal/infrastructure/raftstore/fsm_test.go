@@ -730,3 +730,21 @@ func TestFSM_フォークしたブランチの項目がスナップショット�
 		t.Fatalf("after restore = %+v", got)
 	}
 }
+
+func TestFSM_マージ中のブランチはプロトコル26を要求しスナップショットでも維持される(t *testing.T) {
+	if raftstore.Protocol != domain.ProtocolBranchMerge {
+		t.Fatalf("raftstore.Protocol = %d, want %d", raftstore.Protocol, domain.ProtocolBranchMerge)
+	}
+	br := domain.Branch{Name: name("feature-x"), Base: name("prod"), Status: domain.BranchMerging}
+	if got := raftstore.PutBranch(br).Needs(); got != domain.ProtocolBranchMerge {
+		t.Fatalf("PutBranch(merging).Needs() = %d, want %d", got, domain.ProtocolBranchMerge)
+	}
+	if got := raftstore.InsertBranch(br).Needs(); got != domain.ProtocolBranchMerge {
+		t.Fatalf("InsertBranch(merging).Needs() = %d, want %d", got, domain.ProtocolBranchMerge)
+	}
+	f := raftstore.NewFSM()
+	apply(t, f, raftstore.PutBranch(br))
+	if f.State().Branches["feature-x"].Status != domain.BranchMerging {
+		t.Fatalf("status = %s, want %s", f.State().Branches["feature-x"].Status, domain.BranchMerging)
+	}
+}
