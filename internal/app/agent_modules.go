@@ -268,17 +268,17 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 		mgr.Nodes = ns.ListNodes // runtime modules wait until every node knows them
 	}
 	srv.ModuleAdmin = mgr
+	notices := newNotifier(nil, cfg.Notify.AllowPrivateIPs, 0)
+	notifyFn := func(ctx context.Context, event, level, subject, text string) {
+		if err := notices.Publish(ctx, event, level, subject, text); err != nil {
+			log.Warn("sending a notice", "event", event, "err", err)
+		}
+	}
 	if srv.Settings != nil {
 		lic.Modules = mgr
 		srv.Licensing = lic
 		// Renewing a subscription's key is the leader's job.
-		notices := newNotifier(nil, cfg.Notify.AllowPrivateIPs, 0)
-		renewer := &licensing.Renewer{Service: lic, Client: &licenseclient.Client{Version: version}, Leader: leading, Log: log,
-			Notify: func(ctx context.Context, event, level, subject, text string) {
-				if err := notices.Publish(ctx, event, level, subject, text); err != nil {
-					log.Warn("sending a licence notice", "err", err)
-				}
-			}}
+		renewer := &licensing.Renewer{Service: lic, Client: &licenseclient.Client{Version: version}, Leader: leading, Log: log, Notify: notifyFn}
 		// The cluster's anonymous id travels with the renewal request.
 		if ids, ok := svc.Store.(domain.ClusterIDStore); ok {
 			renewer.Cluster = ids
@@ -298,40 +298,237 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 		return pending
 	}
 	kick := make(chan struct{}, 1)
-	go func() {
-		adopted := false
-		for {
-			// Retried: right after a start the cluster may not accept the
-			// record yet (protocol not known to be high enough).
-			if !adopted {
-				if err := mgr.Adopt(ctx); err != nil {
-					log.Debug("recording installed modules", "err", err)
-				} else {
-					adopted = true
-				}
-			}
-			if changed, err := mgr.Sync(ctx); err != nil {
-				log.Warn("installing modules", "err", err)
-			} else if changed {
-				log.Info("modules changed; the agent restarts to load them")
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(30 * time.Second):
-			case <-kick:
-				// Let the request that changed the record answer first: a
-				// package change restarts this agent.
-				time.Sleep(2 * time.Second)
-			}
-		}
-	}()
+	syncer := &moduleSyncer{
+		adopt:         mgr.Adopt,
+		sync:          mgr.SyncReport,
+		problems:      problems,
+		node:          srv.Node,
+		bus:           srv.Bus,
+		notify:        notifyFn,
+		log:           log,
+		baseDelay:     moduleSyncInterval,
+		maxBackoff:    moduleSyncMaxBackoff,
+		kickDelay:     moduleSyncKickDelay,
+		failThreshold: moduleSyncFailThreshold,
+	}
+	go syncer.run(ctx, kick)
 	return func() {
 		select {
 		case kick <- struct{}{}:
 		default:
 		}
 	}
+}
+
+const (
+	moduleSyncInterval      = 30 * time.Second
+	moduleSyncKickDelay     = 2 * time.Second
+	moduleSyncMaxBackoff    = 30 * time.Minute
+	moduleSyncFailThreshold = 2
+)
+
+type moduleSyncer struct {
+	adopt         func(context.Context) error
+	sync          func(context.Context) (module.SyncResult, error)
+	problems      *moduleProblems
+	node          string
+	bus           *operation.Bus
+	notify        func(ctx context.Context, event, level, subject, text string)
+	log           *slog.Logger
+	baseDelay     time.Duration
+	maxBackoff    time.Duration
+	kickDelay     time.Duration
+	failThreshold int
+	after         func(time.Duration) <-chan time.Time
+
+	adopted         bool
+	backoffFailures int
+	moduleFailures  map[string]int
+	aheadWarned     map[string]string
+	failReported    map[string]string
+}
+
+func (r *moduleSyncer) afterTimer(d time.Duration) <-chan time.Time {
+	if r.after != nil {
+		return r.after(d)
+	}
+	return time.After(d)
+}
+
+func (r *moduleSyncer) backoff(failures int) time.Duration {
+	if failures <= 0 {
+		return r.baseDelay
+	}
+	d := r.baseDelay
+	for range failures {
+		if d >= r.maxBackoff || d > r.maxBackoff/2 {
+			return r.maxBackoff
+		}
+		d *= 2
+	}
+	return min(d, r.maxBackoff)
+}
+
+func (r *moduleSyncer) run(ctx context.Context, kick <-chan struct{}) {
+	for {
+		wait := r.step(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.afterTimer(wait):
+		case <-kick:
+			// Reset backoff wait when the cluster's module record changes,
+			// without clearing ongoing per-module failure counts/problems.
+			r.backoffFailures = 0
+			// Let the request that changed the record answer first: a
+			// package change restarts this agent.
+			select {
+			case <-ctx.Done():
+				return
+			case <-r.afterTimer(r.kickDelay):
+			}
+		}
+	}
+}
+
+func (r *moduleSyncer) step(ctx context.Context) time.Duration {
+	// Retried: right after a start the cluster may not accept the
+	// record yet (protocol not known to be high enough).
+	if !r.adopted {
+		if err := r.adopt(ctx); err != nil {
+			r.log.Debug("recording installed modules", "err", err)
+		} else {
+			r.adopted = true
+		}
+	}
+	res, err := r.sync(ctx)
+	if ctx.Err() != nil || res.Skipped {
+		return r.baseDelay
+	}
+	keepProblems := map[string]bool{}
+	seenAhead := map[string]bool{}
+	for _, a := range res.Ahead {
+		seenAhead[a.Name] = true
+		keepProblems[a.Name] = true
+		msg := fmt.Sprintf("installed %s is newer than cluster record %s; skipping downgrade (run `db-branch module install %s --version %s` once all nodes are upgraded)", a.Installed, a.Recorded, a.Name, a.Installed)
+		r.problems.setSync(a.Name, msg)
+		sig := a.Installed + "->" + a.Recorded
+		if r.aheadWarned == nil {
+			r.aheadWarned = map[string]string{}
+		}
+		if r.aheadWarned[a.Name] != sig {
+			r.aheadWarned[a.Name] = sig
+			r.log.Warn("installed module is newer than cluster record; skipping downgrade", "module", a.Name, "installed", a.Installed, "recorded", a.Recorded)
+			if r.bus != nil {
+				r.bus.PublishTo(operation.Audience{Action: "module.read"}, "module.version_ahead", map[string]string{
+					"node": r.node, "module": a.Name, "package": a.Package, "installed": a.Installed, "recorded": a.Recorded,
+				})
+			}
+			if r.notify != nil {
+				r.notify(ctx, "module.version_ahead", "warning", a.Name,
+					fmt.Sprintf("Node %s runs %s %s, newer than cluster record %s; skipping downgrade. Run `db-branch module install %s --version %s` once all nodes are upgraded.", r.node, a.Package, a.Installed, a.Recorded, a.Name, a.Installed))
+			}
+		}
+	}
+	for k := range r.aheadWarned {
+		if !seenAhead[k] {
+			delete(r.aheadWarned, k)
+		}
+	}
+
+	if err == nil {
+		if r.backoffFailures > 0 || len(r.moduleFailures) > 0 {
+			r.log.Info("module sync recovered", "after_failures", r.backoffFailures)
+		}
+		r.backoffFailures = 0
+		r.moduleFailures = nil
+		r.failReported = nil
+		r.problems.clearSyncExcept(keepProblems)
+		if res.Changed {
+			r.log.Info("modules changed; the agent restarts to load them")
+		}
+		return r.baseDelay
+	}
+
+	r.backoffFailures++
+	wait := r.backoff(r.backoffFailures)
+	r.log.Warn("installing modules", "err", err, "failures", r.backoffFailures, "retry_in", wait)
+
+	failed := res.Failed
+	if len(failed) == 0 {
+		failed = []module.FailedModule{{Name: "_sync", Op: "sync", Err: err}}
+	}
+	if r.moduleFailures == nil {
+		r.moduleFailures = map[string]int{}
+	}
+	if r.failReported == nil {
+		r.failReported = map[string]string{}
+	}
+	seenFailed := map[string]bool{}
+	for _, f := range failed {
+		seenFailed[f.Name] = true
+		r.moduleFailures[f.Name]++
+		count := r.moduleFailures[f.Name]
+		if count < r.failThreshold {
+			continue
+		}
+		keepProblems[f.Name] = true
+		msg := fmt.Sprintf("module %s failed after %d attempts: %v", f.Op, count, f.Err)
+		r.problems.setSync(f.Name, msg)
+		if r.failReported[f.Name] != f.Op {
+			r.failReported[f.Name] = f.Op
+			errText := f.Err.Error()
+			if r.bus != nil {
+				r.bus.PublishTo(operation.Audience{Action: "module.read"}, "module.sync_failed", map[string]any{
+					"node": r.node, "module": f.Name, "op": f.Op, "error": errText, "failures": count,
+				})
+			}
+			if r.notify != nil {
+				r.notify(ctx, "module.sync_failed", "error", f.Name,
+					fmt.Sprintf("Module %s (%s) sync failed on %s after %d attempts: %s", f.Name, f.Op, r.node, count, errText))
+			}
+		}
+	}
+	for k := range r.moduleFailures {
+		if !seenFailed[k] {
+			delete(r.moduleFailures, k)
+		}
+	}
+	for k := range r.failReported {
+		if !seenFailed[k] {
+			delete(r.failReported, k)
+		}
+	}
+	r.problems.clearSyncExcept(keepProblems)
+	return wait
+}
+
+// moduleKicks calls kick whenever a module.updated event arrives on bus (used
+// in single-node mode where Raft does not drive cl.moduleChanged).
+func moduleKicks(ctx context.Context, bus *operation.Bus, kick func()) {
+	sub := bus.Subscribe(0)
+	go func() {
+		for {
+			for open := true; open; {
+				select {
+				case <-ctx.Done():
+					sub.Close()
+					return
+				case ev, ok := <-sub.Events():
+					if !ok {
+						open = false
+					} else if ev.Type == "module.updated" {
+						kick()
+					}
+				}
+			}
+			kick()
+			if ctx.Err() != nil {
+				return
+			}
+			sub = bus.Subscribe(0)
+		}
+	}()
 }
 
 // arcNode applies the ARC cap setting on this node and remembers why it
@@ -362,24 +559,74 @@ func (a *arcNode) report() (uint64, string) {
 	return a.ctl.EffectiveMB(), p
 }
 
-// moduleProblems are the last Configure errors of this node's modules
-// (e.g. "licence expired"), shown in the console.
+// moduleProblems are the last Configure or module-sync errors on this node
+// (e.g. "licence expired" or sync failure), shown in the console and metrics.
 type moduleProblems struct {
-	mu sync.Mutex
-	m  map[string]string
+	mu       sync.Mutex
+	m        map[string]string
+	sync     map[string]string
+	onChange func()
 }
 
-// set records a module's problem ("" when none) and reports whether it
-// changed, so it is logged once rather than at every retry.
+func (p *moduleProblems) notifyChange() {
+	if p.onChange != nil {
+		p.onChange()
+	}
+}
+
+// set records a module's configure problem ("" when none) and reports whether
+// it changed, so it is logged once rather than at every retry.
 func (p *moduleProblems) set(name, problem string) bool {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	if p.m == nil {
+		p.m = map[string]string{}
+	}
 	changed := p.m[name] != problem
 	if problem == "" {
 		delete(p.m, name)
-		return changed
+	} else {
+		p.m[name] = problem
 	}
-	p.m[name] = problem
+	p.mu.Unlock()
+	if changed {
+		p.notifyChange()
+	}
+	return changed
+}
+
+// setSync records a module's sync or version-mismatch problem ("" when none).
+func (p *moduleProblems) setSync(name, problem string) bool {
+	p.mu.Lock()
+	if p.sync == nil {
+		p.sync = map[string]string{}
+	}
+	changed := p.sync[name] != problem
+	if problem == "" {
+		delete(p.sync, name)
+	} else {
+		p.sync[name] = problem
+	}
+	p.mu.Unlock()
+	if changed {
+		p.notifyChange()
+	}
+	return changed
+}
+
+// clearSyncExcept removes sync problems for modules not in keep.
+func (p *moduleProblems) clearSyncExcept(keep map[string]bool) bool {
+	p.mu.Lock()
+	changed := false
+	for k := range p.sync {
+		if !keep[k] {
+			delete(p.sync, k)
+			changed = true
+		}
+	}
+	p.mu.Unlock()
+	if changed {
+		p.notifyChange()
+	}
 	return changed
 }
 
@@ -389,6 +636,13 @@ func (p *moduleProblems) all() map[string]string {
 	out := map[string]string{}
 	for k, v := range p.m {
 		out[k] = v
+	}
+	for k, v := range p.sync {
+		if prev, ok := out[k]; ok && prev != "" {
+			out[k] = prev + "; " + v
+		} else {
+			out[k] = v
+		}
 	}
 	return out
 }

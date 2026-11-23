@@ -244,3 +244,74 @@ func TestAptLock_moduleSyncとupdateのdpkgを同時に実行しない(t *testin
 		t.Errorf("%d package changes ran at once", o.peak.Load())
 	}
 }
+
+type blockingAptRunner struct {
+	started chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+	running atomic.Int32
+	peak    atomic.Int32
+}
+
+func (b *blockingAptRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if name == "apt-cache" {
+		return []byte("x:\n  Candidate: (none)\n"), nil
+	}
+	b.calls.Add(1)
+	n := b.running.Add(1)
+	for p := b.peak.Load(); n > p && !b.peak.CompareAndSwap(p, n); p = b.peak.Load() {
+	}
+	if b.started != nil {
+		select {
+		case b.started <- struct{}{}:
+		default:
+		}
+	}
+	if b.release != nil {
+		select {
+		case <-b.release:
+		case <-ctx.Done():
+		}
+	}
+	b.running.Add(-1)
+	return nil, errors.New("exit 1")
+}
+
+func TestAptLock_aptGetUpdateやRefreshも同時に実行せずキャンセルで待たない(t *testing.T) {
+	r := &blockingAptRunner{started: make(chan struct{}, 1), release: make(chan struct{})}
+	p := apt.Packages{Run: r, Systemd: no(), RepoList: filepath.Join(t.TempDir(), "missing.list")}
+
+	done1 := make(chan error, 1)
+	go func() { done1 <- p.Refresh(ctx) }()
+	<-r.started
+
+	// A second apt-get caller with a canceled context must not wait for the lock or start apt-get.
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	if err := p.Install(cctx, "db-branch-proxysql", "1.0"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Install while locked with expired ctx = %v, want DeadlineExceeded", err)
+	}
+	// Candidate (which falls back to apt-get update) must also serialize on the same lock.
+	done2 := make(chan error, 1)
+	go func() { _, err := p.Candidate(ctx, "db-branch-proxysql"); done2 <- err }()
+	time.Sleep(30 * time.Millisecond)
+	if r.calls.Load() != 1 {
+		t.Fatalf("calls while Refresh holds lock = %d, want 1", r.calls.Load())
+	}
+
+	close(r.release)
+	<-done1
+	<-done2
+	if r.peak.Load() != 1 {
+		t.Errorf("peak concurrent apt-get = %d, want 1", r.peak.Load())
+	}
+
+	// Already-canceled context fails deterministically even when the lock is free.
+	canceledCtx, cancelNow := context.WithCancel(ctx)
+	cancelNow()
+	for range 20 {
+		if err := p.Refresh(canceledCtx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Refresh with canceled ctx = %v, want Canceled", err)
+		}
+	}
+}

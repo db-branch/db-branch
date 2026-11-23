@@ -582,7 +582,7 @@ func missingModules(r *domain.Rollout, n domain.Node) []string {
 		if strings.HasPrefix(pkg, domain.ModulePackage(domain.RuntimeModuleName(""))) {
 			continue
 		}
-		if v, ok := running[pkg]; !ok || domain.CompareVersions(v, want) != 0 {
+		if v, ok := running[pkg]; !ok || domain.CompareVersions(v, want) < 0 {
 			out = append(out, pkg+" "+want)
 		}
 	}
@@ -644,7 +644,7 @@ func (s *Service) finish(ctx context.Context, r domain.Rollout) error {
 		return err
 	}
 	for _, m := range specs {
-		if v, ok := r.Modules[m.Package()]; ok && m.Version != v {
+		if v, ok := r.Modules[m.Package()]; ok && domain.CompareVersions(v, m.Version) > 0 {
 			m.Version = v
 			if err := s.Modules.PutModule(ctx, m); err != nil {
 				return err

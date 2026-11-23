@@ -225,44 +225,104 @@ func (s *Service) Adopt(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// AheadModule describes a wanted APT module whose installed package is newer
+// than the cluster's recorded version. Sync never downgrades it.
+type AheadModule struct {
+	Name      string
+	Package   string
+	Installed string
+	Recorded  string
+}
+
+// FailedModule describes a module whose APT operation failed during Sync.
+type FailedModule struct {
+	Name    string
+	Package string
+	Op      string // "install" or "remove"
+	Err     error
+}
+
+// SyncResult summarizes what a Sync pass changed, skipped as newer, or failed.
+type SyncResult struct {
+	Changed bool
+	Skipped bool
+	Ahead   []AheadModule
+	Failed  []FailedModule
+}
+
 // Sync installs, upgrades and removes module packages on this node to match
 // the record, and reports whether it changed anything. Installing a package
 // restarts the agent (the package's postinst), which then loads the module.
 func (s *Service) Sync(ctx context.Context) (bool, error) {
+	res, err := s.SyncReport(ctx)
+	return res.Changed, err
+}
+
+// SyncReport performs Sync and returns structured details about modules whose
+// installed version is ahead of the cluster record or whose package operation failed.
+func (s *Service) SyncReport(ctx context.Context) (SyncResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.Busy != nil && s.Busy(ctx) {
-		return false, nil
+		return SyncResult{Skipped: true}, nil
 	}
 	list, err := s.Store.ListModules(ctx)
 	if err != nil {
-		return false, err
+		return SyncResult{}, err
 	}
 	installed, err := s.Packages.Installed(ctx, prefix)
 	if err != nil {
-		return false, err
+		return SyncResult{}, err
 	}
 	var rolled map[string]string
 	if s.Rolled != nil {
 		rolled = s.Rolled(ctx)
 	}
-	changed := false
+	var res SyncResult
 	var errs []error
 	for _, m := range list {
 		if m.Source == domain.SourceLocal {
 			continue // the operator installs these; APT has nothing to do with them
 		}
-		have, ok := installed[m.Package()]
-		switch {
-		case m.Wanted && have != m.Version && have == rolled[m.Package()] && have != "":
-			// Installed by an update rollout; the record follows when it ends.
-		case m.Wanted && have != m.Version:
-			changed = true
-			errs = append(errs, s.Packages.Install(ctx, m.Package(), m.Version))
-		case !m.Wanted && ok:
-			changed = true
-			errs = append(errs, s.Packages.Remove(ctx, m.Package()))
+		pkg := m.Package()
+		have, ok := installed[pkg]
+		if !m.Wanted {
+			if ok {
+				if err := s.Packages.Remove(ctx, pkg); err != nil {
+					res.Failed = append(res.Failed, FailedModule{Name: m.Name, Package: pkg, Op: "remove", Err: err})
+					errs = append(errs, err)
+				} else {
+					res.Changed = true
+				}
+			}
+			continue
+		}
+		if ok && have != "" {
+			if have == rolled[pkg] {
+				// Installed by an update rollout; the record follows when it ends.
+				continue
+			}
+			cmp := domain.CompareVersions(have, m.Version)
+			if cmp == 0 {
+				continue
+			}
+			if cmp > 0 {
+				// Never downgrade an installed module that is newer than the cluster record.
+				res.Ahead = append(res.Ahead, AheadModule{
+					Name:      m.Name,
+					Package:   pkg,
+					Installed: have,
+					Recorded:  m.Version,
+				})
+				continue
+			}
+		}
+		if err := s.Packages.Install(ctx, pkg, m.Version); err != nil {
+			res.Failed = append(res.Failed, FailedModule{Name: m.Name, Package: pkg, Op: "install", Err: err})
+			errs = append(errs, err)
+		} else {
+			res.Changed = true
 		}
 	}
-	return changed, errors.Join(errs...)
+	return res, errors.Join(errs...)
 }
