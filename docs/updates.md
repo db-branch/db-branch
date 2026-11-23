@@ -43,11 +43,20 @@
 - ノードで原因（ディスク、リポジトリ、dpkg の状態）を直し、「Check for updates」のあとにもう一度適用する。更新済みのノードは飛ばして続ける
 - 実行中のロールアウトは「Stop the rollout」（`db-branch update cancel`）で止められる。まだ始まっていないノードは更新されない。更新中のノードはそのまま終わる
 
-## メジャー更新（手作業）
+## 手作業での更新（`apt upgrade`・メジャー更新）
+
+コンソールを使わず `apt upgrade` や `apt-get install` で更新するとき（メジャー更新、またはパッチ版を手動で当てるとき）は、次の順で行う。
 
 1. リリースノートと互換性を確認し、バックアップを取る（`db-branch backup`）
-2. ノードを 1 台ずつ `apt-get install db-branch=<版> db-branch-<モジュール>=<版>` で更新する。フォロワーから始め、リーダーは最後にする
-3. 各ノードで `db-branch update status` を見て、全ノードが同じ版になったことを確かめる
+2. ノードを 1 台ずつ更新する。**フォロワーから始め、リーダーは最後**にする
+   - パッチ・マイナー更新または最新への更新: `sudo apt-get update && sudo apt-get upgrade`（または `sudo apt-get install db-branch db-branch-<モジュール>`）
+   - 版を指定するとき: `sudo apt-get install db-branch=<版> db-branch-<モジュール>=<版>`
+3. コアと一緒にモジュール（`db-branch-proxysql` など）も上がった場合、まだ更新していないノードに影響を与えないよう、各ノードのエージェントはクラスターの記録より新しいモジュールをダウングレードせず維持する（警告と `module.version_ahead` イベント、`dbbranch_module_problem` メトリクスが出る）。全ノードを上げ終えたあと、クラスターの記録を合わせるには任意のノードで次を実行する:
+   ```sh
+   db-branch module install <モジュール名> --version <新しい版>
+   ```
+   （最新候補と一致していれば `--version` は省略可）
+4. 各ノードで `db-branch update status` と `db-branch module list` を見て、全ノードが同じ版になり、モジュールが揃っていることを確かめる
 
 ## API
 

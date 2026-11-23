@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -80,7 +79,13 @@ func (p Packages) Candidate(ctx context.Context, pkg string) (string, error) {
 	if v, err := p.candidate(ctx, pkg); v != "" || err != nil {
 		return v, err
 	}
-	if err := p.update(ctx); err != nil {
+	unlock, err := lockApt(ctx)
+	if err != nil {
+		return "", err
+	}
+	err = p.update(ctx)
+	unlock()
+	if err != nil {
 		return "", err
 	}
 	return p.candidate(ctx, pkg)
@@ -116,18 +121,29 @@ func (p Packages) update(ctx context.Context) error {
 	return err
 }
 
-// changing serializes package changes in this process: module sync and the
-// rolling update each hold their own Packages, and two dpkg runs at once fail
-// on dpkg's lock.
-var changing sync.Mutex
+// aptSem serializes every apt-get invocation in this process (update, Refresh,
+// install, remove, upgrade): module sync and the rolling update each hold
+// their own Packages, and concurrent apt-get / dpkg runs fail on locks or
+// overload the node.
+var aptSem = make(chan struct{}, 1)
+
+func lockApt(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case aptSem <- struct{}{}:
+		return func() { <-aptSem }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
 
 // lockWait is how long apt-get waits for dpkg's lock held by something else
 // (unattended-upgrades, an operator's apt) instead of failing at once.
 const lockWait = "DPkg::Lock::Timeout=60"
 
 func (p Packages) change(ctx context.Context, args ...string) error {
-	changing.Lock()
-	defer changing.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, ChangeTimeout)
 	defer cancel()
 	apt := append([]string{"apt-get", "-y", "-q", "-o", "Dpkg::Options::=--force-confold", "-o", lockWait}, args...)
@@ -142,6 +158,11 @@ func (p Packages) change(ctx context.Context, args ...string) error {
 
 // Install installs pkg at exactly version (downgrading if needed).
 func (p Packages) Install(ctx context.Context, pkg, version string) error {
+	unlock, err := lockApt(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if err := p.change(ctx, "install", "--allow-downgrades", pkg+"="+version); err != nil {
 		// The version may be newer than the package lists know.
 		if uerr := p.update(ctx); uerr != nil {
@@ -154,12 +175,26 @@ func (p Packages) Install(ctx context.Context, pkg, version string) error {
 
 // Remove removes pkg.
 func (p Packages) Remove(ctx context.Context, pkg string) error {
+	unlock, err := lockApt(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return p.change(ctx, "remove", pkg)
 }
 
 // Refresh downloads the package lists of the db-branch repository only (the
 // other sources are left alone); without that source list, of all sources.
 func (p Packages) Refresh(ctx context.Context) error {
+	unlock, err := lockApt(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return p.refresh(ctx)
+}
+
+func (p Packages) refresh(ctx context.Context) error {
 	list := p.RepoList
 	if list == "" {
 		list = DefaultRepoList
@@ -228,6 +263,11 @@ func requirements(show string) map[string]string {
 // Upgrade moves the packages (package -> version) to those versions, never
 // down. The change runs detached: db-branch's own postinst restarts the agent.
 func (p Packages) Upgrade(ctx context.Context, versions map[string]string) error {
+	unlock, err := lockApt(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	pkgs := make([]string, 0, len(versions))
 	for pkg := range versions {
 		pkgs = append(pkgs, pkg)
@@ -239,7 +279,7 @@ func (p Packages) Upgrade(ctx context.Context, versions map[string]string) error
 	}
 	if err := p.change(ctx, args...); err != nil {
 		// The versions may be newer than this node's package lists.
-		if uerr := p.Refresh(ctx); uerr != nil {
+		if uerr := p.refresh(ctx); uerr != nil {
 			return err
 		}
 		return p.change(ctx, args...)

@@ -998,3 +998,68 @@ func TestTick_ランタイムモジュールはノードのモジュール一覧
 		t.Fatalf("n1 = %+v", r.Nodes["n1"])
 	}
 }
+
+func TestTick_ノードが目標より新しいモジュールを既に動かしていても完了にする(t *testing.T) {
+	e := newEnv(t)
+	e.nodes[1].Modules = []string{"auth 1.3.0"} // n2 already has a newer module
+	_, _ = e.Check(ctx)
+	r := apply(t, e, "1.2.0")
+	if r.Modules["db-branch-auth"] != "1.2.0" {
+		t.Fatalf("modules = %v", r.Modules)
+	}
+	e.step(t, "n1")
+	e.setVersion("n1", "1.2.0")
+	e.step(t, "n3")
+	// n2 updates core to 1.2.0 while auth stays at 1.3.0 (apt --only-upgrade never downgrades).
+	e.step(t, "n2")
+	e.nodes[1].Version = "1.2.0"
+	e.step(t, "n3")
+	if cur, _ := e.store.GetRollout(ctx); cur.Nodes["n2"].State != domain.NodeDone {
+		t.Fatalf("n2 with newer module = %+v", cur.Nodes["n2"])
+	}
+}
+
+func TestTick_完了時に記録済みのモジュール版を古い版へ戻さない(t *testing.T) {
+	e := newEnv(t)
+	e.Cluster = nil
+	e.nodes = e.nodes[:1]
+	_, _ = e.Check(ctx)
+	apply(t, e, "1.2.0")
+	e.step(t, "n1")
+	// Cluster record was concurrently raised to 1.3.0 (e.g. operator aligned it).
+	_ = e.store.PutModule(ctx, domain.ModuleSpec{Name: "auth", Version: "1.3.0", Wanted: true})
+	e.setVersion("n1", "1.2.0")
+	e.step(t, "n1")
+	mods, _ := e.store.ListModules(ctx)
+	if mods[0].Version != "1.3.0" {
+		t.Errorf("module version downgraded to %q, want 1.3.0", mods[0].Version)
+	}
+}
+
+func TestUpdateCancel_先行モジュールを持つノードでキャンセルしてもロールアウト後の同期を壊さない(t *testing.T) {
+	e := newEnv(t)
+	_, _ = e.Check(ctx)
+	r := apply(t, e, "1.2.0")
+	// n1 updates to 1.2.0 (including auth 1.2.0), then rollout is canceled before n2 starts.
+	e.step(t, "n1")
+	if err := e.Cancel(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.setVersion("n1", "1.2.0")
+	e.step(t, "n3")
+	cur, _ := e.store.GetRollout(ctx)
+	if cur.ID != r.ID || cur.Status != domain.RolloutCanceled || cur.Nodes["n1"].State != domain.NodeDone {
+		t.Fatalf("rollout = %+v", cur)
+	}
+	// Running is now false, while Rolled still reports auth 1.2.0 and cluster record remains 1.0.0.
+	if e.Running(ctx) {
+		t.Error("Running must be false after cancel")
+	}
+	if rolled := e.Rolled(ctx); rolled["db-branch-auth"] != "1.2.0" {
+		t.Errorf("Rolled = %v, want db-branch-auth=1.2.0", rolled)
+	}
+	mods, _ := e.store.ListModules(ctx)
+	if mods[0].Version != "1.0.0" {
+		t.Errorf("cluster record changed on cancel: %+v", mods[0])
+	}
+}

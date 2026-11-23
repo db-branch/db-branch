@@ -392,11 +392,73 @@ func TestSync_ロールアウト中はaptに触れない(t *testing.T) {
 	_, _ = s.Install(ctx, "proxysql", "1.0")
 	apt.ran = nil
 	s.Busy = func(context.Context) bool { return true }
-	if changed, err := s.Sync(ctx); changed || err != nil || len(apt.ran) != 0 {
-		t.Errorf("sync during a rollout: %v %v %v", changed, err, apt.ran)
+	if res, err := s.SyncReport(ctx); !res.Skipped || res.Changed || err != nil || len(apt.ran) != 0 {
+		t.Errorf("sync during a rollout: %+v %v %v", res, err, apt.ran)
 	}
 	s.Busy = func(context.Context) bool { return false }
 	if _, err := s.Sync(ctx); err != nil || len(apt.ran) != 1 {
 		t.Errorf("sync after it: %v %v", err, apt.ran)
+	}
+}
+
+func TestSyncReport_導入済みがクラスタ記録より新しければダウングレードせずAheadとして返す(t *testing.T) {
+	s, apt := newService(t)
+	_, _ = s.Install(ctx, "proxysql", "0.0.0~dev20261122011940.854bd9e")
+	apt.installed["db-branch-proxysql"] = "0.3.0"
+	apt.ran = nil
+
+	res, err := s.SyncReport(ctx)
+	if err != nil {
+		t.Fatalf("SyncReport error = %v, want nil", err)
+	}
+	if res.Changed || len(apt.ran) != 0 {
+		t.Fatalf("must not downgrade or run apt: changed=%v ran=%v", res.Changed, apt.ran)
+	}
+	if len(res.Ahead) != 1 {
+		t.Fatalf("Ahead = %+v, want 1 item", res.Ahead)
+	}
+	got := res.Ahead[0]
+	if got.Name != "proxysql" || got.Package != "db-branch-proxysql" || got.Installed != "0.3.0" || got.Recorded != "0.0.0~dev20261122011940.854bd9e" {
+		t.Errorf("Ahead[0] = %+v", got)
+	}
+
+	// Once the cluster record catches up, Ahead clears and no apt runs.
+	_, _ = s.Install(ctx, "proxysql", "0.3.0")
+	res, err = s.SyncReport(ctx)
+	if err != nil || res.Changed || len(res.Ahead) != 0 || len(apt.ran) != 0 {
+		t.Errorf("after cluster aligned: res=%+v err=%v ran=%v", res, err, apt.ran)
+	}
+}
+
+func TestSyncReport_ロールアウトによる先行版はAheadとして報告しない(t *testing.T) {
+	s, apt := newService(t)
+	_, _ = s.Install(ctx, "proxysql", "0.2.7")
+	apt.installed["db-branch-proxysql"] = "0.3.0"
+	s.Rolled = func(context.Context) map[string]string { return map[string]string{"db-branch-proxysql": "0.3.0"} }
+
+	res, err := s.SyncReport(ctx)
+	if err != nil || res.Changed || len(res.Ahead) != 0 || len(apt.ran) != 0 {
+		t.Errorf("rolled ahead: res=%+v err=%v ran=%v", res, err, apt.ran)
+	}
+}
+
+func TestSyncReport_失敗したモジュールをFailedに記録し他モジュールは継続する(t *testing.T) {
+	s, apt := newService(t)
+	apt.candidates["db-branch-audit"] = "1.0"
+	_, _ = s.Install(ctx, "proxysql", "1.0")
+	_, _ = s.Install(ctx, "audit", "")
+	apt.installed["db-branch-audit"] = "1.0"
+	_ = s.Remove(ctx, "audit")
+	apt.failOn = "install"
+
+	res, err := s.SyncReport(ctx)
+	if err == nil {
+		t.Fatal("want error when install fails")
+	}
+	if !res.Changed {
+		t.Error("audit removal succeeded, so Changed should be true")
+	}
+	if len(res.Failed) != 1 || res.Failed[0].Name != "proxysql" || res.Failed[0].Op != "install" || res.Failed[0].Err == nil {
+		t.Errorf("Failed = %+v", res.Failed)
 	}
 }

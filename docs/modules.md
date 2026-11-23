@@ -40,7 +40,9 @@ func main() {
 ## クラスタ全体への導入（2026-11-10）
 
 - `db-branch module install <名前>`（またはコンソールの Settings → Modules → Enable）で、パッケージ `db-branch-<名前>` を全ノードに入れる。版は実行したノードで apt が入れられる最新版（`--version` で指定可）を Raft に記録し、全ノードがその版に揃える。後から参加したノードにも入る
-- 各ノードの agent は記録と手元を 30 秒ごと（記録が変わったときはすぐ）に照合し、`apt-get install/remove` を `systemd-run` の一時ユニットで実行する（パッケージの postinst が agent を再起動するため、apt を agent の子プロセスにしない）
+- 各ノードの agent は記録と手元を 30 秒ごと（記録が変わったときはすぐ）に照合し、`apt-get install/remove` を `systemd-run` の一時ユニットで実行する（パッケージの postinst が agent を再起動するため、apt を agent の子プロセスにしない）。エージェント内の `apt-get`（`install`・`remove`・`upgrade`・`update`）はすべて直列化し、同時に複数の `apt-get` を走らせない（外部の `apt` / `dpkg` ロックも `DPkg::Lock::Timeout=60` で待つ）
+- **導入済みが記録より新しい場合（ダウングレードしない）**: `apt upgrade` などでコアと一緒にモジュールが新しい版へ上がったとき、手元の版がクラスターの記録より新しければダウングレードは行わない。1 台だけ先に上げた途中状態で他ノードへ旧コア非対応の版を強制したり、W-18 のローリング更新（キャンセル後の状態を含む）や Raft の互換性を壊したりしないためである。警告ログ、`module.version_ahead` イベント（SSE `/v1/events` および通知）、`GET /v1/modules` の `problem`、`dbbranch_module_problem` メトリクスで知らせる。全ノードを上げ終えたあと、`db-branch module install <名前>`（または `--version <版>`）でクラスターの記録を揃えると解消する
+- **失敗時の指数バックオフと観測**: パッケージのインストール・削除が失敗したときは指数バックオフ（1 分 → 2 分 → 4 分 → …、上限 30 分）で間隔を延ばし、クラスターのモジュール記録が変わったときだけ即座にリセットする。連続して失敗する（2 回以上）と、`module.sync_failed` イベント（SSE・通知）、`GET /v1/modules` の `problem`、`dbbranch_module_problem` メトリクスに表れる（復旧すると消える）
 - `db-branch module remove <名前>`（Disable）で全ノードから削除する
 - 削除済みの記録を一覧から消すには `db-branch module forget <名前>`（API: `POST /v1/modules/{name}/forget`、アクション名 `module.forget`、Raft プロトコル 22）
 - 記録されたモジュールを読み込めていないノードは、コンソールと API の操作を `503 modules_pending` で断る（認証・認可のモジュールが一部のノードにだけない状態を作らないため）。状態の確認・ログイン・モジュールと設定の操作・ローカルソケットからの操作は通す

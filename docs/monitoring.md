@@ -26,7 +26,7 @@ db-branch は Prometheus 形式のメトリクスと、ロードバランサー�
 | `dbbranch_bases` | gauge | status | ベースの数 |
 | `dbbranch_base_snapshots` | gauge | base | ベースが持つスナップショットの数 |
 | `dbbranch_base_replicas_missing` | gauge | base | 最新スナップショットをまだ持っていない稼働中ノードの数（複製の遅れ）。コピーの対象でないノード（`replica_nodes` にない、PostgreSQL で別の OS）は数えない |
-| `dbbranch_module_problem` | gauge | node, module | モジュールが問題（ライセンスなど）を報告していれば 1 |
+| `dbbranch_module_problem` | gauge | node, module | モジュールが問題（ライセンス、同期の連続失敗、クラスター記録より新しい版など）を報告していれば 1 |
 | `dbbranch_api_requests_total` | counter | action, outcome | このノードが受けた API リクエスト（`ok` / `failed` / `denied`） |
 
 ## Prometheus の設定例

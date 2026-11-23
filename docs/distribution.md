@@ -10,6 +10,17 @@ sudo apt install db-branch          # Recommends で db-branch-proxysql と prox
 sudo db-branch init --pool <pool>
 ```
 
+### アップグレード（`apt upgrade`）
+
+新しい版が出たら、`apt` で更新できる。クラスタ構成ではフォロワーから 1 台ずつ、リーダーを最後にして実行する（詳細は [updates.md](updates.md)）。
+
+```sh
+sudo apt update
+sudo apt upgrade                    # db-branch と導入済みの db-branch-* モジュールが一緒に上がる
+```
+
+モジュールも一緒に上がった場合は、全ノードを更新したあとに `db-branch module install <モジュール名>`（または `--version <新しい版>`。最新候補と一致していれば省略可。例: `db-branch module install proxysql`）でクラスタの記録を最新の版へ揃える（[modules.md](modules.md)）。エージェントは記録より新しいモジュールを勝手にダウングレードしない。
+
 ## リポジトリの中身
 
 | パッケージ | 中身 |

@@ -256,6 +256,9 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		cl.beatNow()
 	}
 	problems := &moduleProblems{m: map[string]string{}}
+	if cl != nil {
+		problems.onChange = cl.beatNow
+	}
 	srv.ModuleProblems = problems.all
 	arc := &arcNode{ctl: &arccap.Controller{Sys: zfsarc.System, Initial: func() (uint64, error) { return initialArc(cfg, zfsarc.System) }}}
 	nodes := func() int { return 1 }
@@ -291,6 +294,8 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		mgr := wireModulesAndSettings(runCtx, cfg, svc, srv, mods, moduleSettings, loadedNames, loadedRuntimes, nodes, problems, arc, rolled, rolling, leading, log)
 		if cl != nil {
 			cl.moduleChanged = mgr
+		} else if srv.Bus != nil {
+			moduleKicks(runCtx, srv.Bus, mgr)
 		}
 	}
 	// Connection routing is a module (db-branch-proxysql): only with it does
