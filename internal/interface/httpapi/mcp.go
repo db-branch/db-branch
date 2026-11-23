@@ -221,9 +221,10 @@ type restoreIn struct {
 }
 
 type queryIn struct {
-	Branch  string `json:"branch" jsonschema:"the branch to run on"`
-	SQL     string `json:"sql" jsonschema:"one SQL statement"`
-	MaxRows int    `json:"max_rows,omitempty" jsonschema:"at most this many rows (default and limit 1000)"`
+	Branch   string `json:"branch" jsonschema:"the branch to run on"`
+	SQL      string `json:"sql" jsonschema:"one SQL statement"`
+	Database string `json:"database,omitempty" jsonschema:"database name on the branch (optional; defaults to postgres for PostgreSQL)"`
+	MaxRows  int    `json:"max_rows,omitempty" jsonschema:"at most this many rows (default and limit 1000)"`
 }
 
 // branchInfo is a branch with how to connect to it.
@@ -413,7 +414,11 @@ func (s *Server) mcpServer(r *http.Request) *mcp.Server {
 		})
 	mcp.AddTool(srv, &mcp.Tool{Name: "query", Description: "Run one SQL statement in a branch and return its rows (as text) or the number of affected rows. Changes stay in the branch."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in queryIn) (*mcp.CallToolResult, any, error) {
-			status, body := s.call(ctx, r, http.MethodPost, "/v1/branches/"+url.PathEscape(in.Branch)+"/query", map[string]any{"sql": in.SQL, "max_rows": in.MaxRows})
+			req := map[string]any{"sql": in.SQL, "max_rows": in.MaxRows}
+			if in.Database != "" {
+				req["database"] = in.Database
+			}
+			status, body := s.call(ctx, r, http.MethodPost, "/v1/branches/"+url.PathEscape(in.Branch)+"/query", req)
 			if status >= 300 {
 				return nil, nil, apiError(status, body)
 			}

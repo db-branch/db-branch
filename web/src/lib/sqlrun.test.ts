@@ -68,3 +68,32 @@ describe("splitStatements", () => {
   });
 });
 
+describe("TestSplitStatements_PostgreSQLのJSONBシャープ演算子と末尾バックスラッシュ文字列とネストコメントで誤分割しない", () => {
+  it("does not treat PostgreSQL JSONB # operators as comments", () => {
+    expect(splitStatements("SELECT data #> '{a;b}' FROM t; SELECT 2")).toEqual(["SELECT data #> '{a;b}' FROM t", "SELECT 2"]);
+    expect(splitStatements("SELECT data #>> '{a,b}'; SELECT data #- '{x}'")).toEqual(["SELECT data #>> '{a,b}'", "SELECT data #- '{x}'"]);
+    expect(splitStatements("SELECT 5 # 3; SELECT 2", "postgres")).toEqual(["SELECT 5 # 3", "SELECT 2"]);
+    expect(splitStatements("SELECT 1 # c; x\n; SELECT 2", "mysql")).toEqual(["SELECT 1 # c; x", "SELECT 2"]);
+  });
+
+  it("handles trailing backslash in PostgreSQL string literals and E-strings", () => {
+    expect(splitStatements("SELECT 'C:\\'; SELECT 2", "postgres")).toEqual(["SELECT 'C:\\'", "SELECT 2"]);
+    expect(splitStatements('SELECT "col\\"; SELECT 2', "postgres")).toEqual(['SELECT "col\\"', "SELECT 2"]);
+    expect(splitStatements("SELECT E'a\\'b;c'; SELECT 2", "postgres")).toEqual(["SELECT E'a\\'b;c'", "SELECT 2"]);
+    expect(splitStatements("SELECT 'back\\'s;x'; SELECT 2", "mysql")).toEqual(["SELECT 'back\\'s;x'", "SELECT 2"]);
+  });
+
+  it("handles nested block comments in PostgreSQL without splitting inside them", () => {
+    expect(splitStatements("/* outer /* inner; */ still comment; */ SELECT 1; SELECT 2", "postgres")).toEqual([
+      "/* outer /* inner; */ still comment; */ SELECT 1",
+      "SELECT 2",
+    ]);
+    expect(splitStatements("/* outer /* inner; */ still comment; */ SELECT 1; SELECT 2")).toEqual([
+      "/* outer /* inner; */ still comment; */ SELECT 1",
+      "SELECT 2",
+    ]);
+    expect(splitStatements("/* only /* nested; */ comment; */", "postgres")).toEqual([]);
+    expect(splitStatements("/* a /* b */ SELECT 1; SELECT 2", "mysql")).toEqual(["/* a /* b */ SELECT 1", "SELECT 2"]);
+  });
+});
+

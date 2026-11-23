@@ -241,6 +241,7 @@ type QueryRequest struct {
 	// Host is the address the instance is reached at (the node it runs on);
 	// empty: this node.
 	Host           string
+	Database       string
 	User, Password string
 	SQL            string
 	MaxRows        int

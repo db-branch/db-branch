@@ -18,7 +18,7 @@ export const isRunKey = (e: { key: string; ctrlKey: boolean; metaKey: boolean })
 // splitStatements cuts the text at semicolons that end a statement. A semicolon inside a
 // quoted string or name, a comment or a PostgreSQL $tag$ body does not. A statement that is
 // only a comment is dropped.
-export function splitStatements(text: string): string[] {
+export function splitStatements(text: string, engine?: string): string[] {
   const out: string[] = [];
   let start = 0;
   let code = false; // the current statement has something other than comments
@@ -34,21 +34,39 @@ export function splitStatements(text: string): string[] {
     const two = text.slice(i, i + 2);
     if (c === "'" || c === '"' || c === "`") {
       code = true;
+      const pgEscape = engine === "postgres" && c === "'" && i > 0 && (text[i - 1] === "e" || text[i - 1] === "E") && (i === 1 || !/[A-Za-z0-9_$]/.test(text[i - 2]));
+      const backslashEscape = c !== "`" && (engine === "postgres" ? pgEscape : true);
       i++;
       while (i < text.length) {
-        if (text[i] === "\\" && c !== "`") i += 2;
+        if (backslashEscape && text[i] === "\\") i += 2;
         else if (text[i] === c) {
           if (text[i + 1] === c) i += 2;
           else break;
         } else i++;
       }
       i++;
-    } else if (two === "--" || c === "#") {
+    } else if (two === "--" || (c === "#" && engine !== "postgres" && (engine === "mysql" || (text[i + 1] !== ">" && text[i + 1] !== "-")))) {
       const nl = text.indexOf("\n", i);
       i = nl < 0 ? text.length : nl;
     } else if (two === "/*") {
-      const end = text.indexOf("*/", i + 2);
-      i = end < 0 ? text.length : end + 2;
+      if (engine === "mysql") {
+        const end = text.indexOf("*/", i + 2);
+        i = end < 0 ? text.length : end + 2;
+      } else {
+        let depth = 1;
+        i += 2;
+        while (i < text.length && depth > 0) {
+          if (text[i] === "/" && text[i + 1] === "*") {
+            depth++;
+            i += 2;
+          } else if (text[i] === "*" && text[i + 1] === "/") {
+            depth--;
+            i += 2;
+          } else {
+            i++;
+          }
+        }
+      }
     } else if (c === "$") {
       const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(text.slice(i));
       code = true;
@@ -66,5 +84,87 @@ export function splitStatements(text: string): string[] {
   }
   push(text.length);
   return out;
+}
+
+export type SqlRunItem = { sql: string; result?: QueryResult; error?: string };
+
+export type SqlRunnerState = {
+  running: boolean;
+  stopped: boolean;
+  items: SqlRunItem[];
+  total: number;
+};
+
+// runStatements runs statements sequentially until all finish, one errors, or signal aborts.
+export async function runStatements(
+  statements: string[],
+  exec: (sql: string, signal: AbortSignal) => Promise<QueryResult>,
+  signal: AbortSignal,
+  onProgress?: (items: SqlRunItem[]) => void,
+): Promise<{ items: SqlRunItem[]; stopped: boolean }> {
+  const done: SqlRunItem[] = [];
+  for (const st of statements) {
+    if (signal.aborted) {
+      return { items: done, stopped: true };
+    }
+    try {
+      const result = await exec(st, signal);
+      done.push({ sql: st, result });
+      onProgress?.([...done]);
+      if (signal.aborted) {
+        return { items: done, stopped: true };
+      }
+    } catch (e) {
+      if (signal.aborted || (e instanceof Error && e.name === "AbortError")) {
+        return { items: done, stopped: true };
+      }
+      done.push({ sql: st, error: (e as Error).message });
+      onProgress?.([...done]);
+      return { items: done, stopped: false };
+    }
+  }
+  return { items: done, stopped: false };
+}
+
+// createSqlRunnerController manages an abortable sequential SQL run and component unmount cleanup.
+export function createSqlRunnerController(
+  exec: (sql: string, database: string | undefined, signal: AbortSignal) => Promise<QueryResult>,
+  onState: (state: SqlRunnerState) => void,
+  engine?: string,
+) {
+  let disposed = false;
+  let controller: AbortController | null = null;
+  let state: SqlRunnerState = { running: false, stopped: false, items: [], total: 0 };
+  const emit = (next: SqlRunnerState) => {
+    state = next;
+    if (!disposed) onState(next);
+  };
+  return {
+    async run(sql: string, database?: string) {
+      if (state.running || disposed) return;
+      const list = splitStatements(sql, engine);
+      if (list.length === 0) return;
+      const ac = new AbortController();
+      controller = ac;
+      emit({ running: true, stopped: false, items: [], total: list.length });
+      const db = database?.trim() || undefined;
+      const res = await runStatements(
+        list,
+        (st, signal) => exec(st, db, signal),
+        ac.signal,
+        (items) => emit({ running: true, stopped: false, items, total: list.length }),
+      );
+      if (controller === ac) controller = null;
+      emit({ running: false, stopped: res.stopped, items: res.items, total: list.length });
+    },
+    stop() {
+      controller?.abort();
+    },
+    dispose() {
+      disposed = true;
+      controller?.abort();
+      controller = null;
+    },
+  };
 }
 

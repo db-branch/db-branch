@@ -152,3 +152,124 @@ func TestQueryHook_ホストが空ならこのノードのループバックに�
 		t.Errorf("dsn = %q", *dsns)
 	}
 }
+
+func TestSQLQuery_空文字およびコメントのみ入力でpanicせずCRLFと行コメントとRETURNINGを正しく判定する(t *testing.T) {
+	r, _ := runner(2)
+	pg := sqlquery.Target{Engine: "postgres", Host: "127.0.0.1", Port: 40002, User: "u", Password: "p"}
+	my := sqlquery.Target{Engine: "mysql", Host: "127.0.0.1", Port: 40001, User: "u", Password: "p"}
+
+	// Empty, whitespace, and comment-only inputs must not panic.
+	for _, tc := range []struct {
+		target sqlquery.Target
+		q      string
+	}{
+		{pg, ""},
+		{pg, "   \r\n\t \v\f "},
+		{pg, "-- only line comment"},
+		{my, "# mysql comment"},
+		{pg, "/* only block */"},
+		{pg, "/* outer /* inner */ outer */"},
+		{pg, "/* unclosed"},
+		{my, "/* unclosed"},
+	} {
+		res, err := r.Run(ctx, tc.target, tc.q, 10)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", tc.q, err)
+		}
+		if res.Affected == nil || len(res.Rows) != 0 {
+			t.Errorf("%q: expected Exec path (affected, no rows), got %+v", tc.q, res)
+		}
+	}
+
+	// CRLF, line comments, nested block comments, and RETURNING must take the Query path.
+	for _, tc := range []struct {
+		target sqlquery.Target
+		q      string
+	}{
+		{pg, "SELECT\r\n1"},
+		{pg, "SELECT\r1"},
+		{pg, "-- leading comment\r\nSELECT 1"},
+		{my, "# mysql line comment\nSHOW TABLES"},
+		{pg, "/* outer /* inner */ */ SELECT 1"},
+		{my, "/* a /* b */ SELECT 1"},
+		{my, "-- c1\n/* c2 */\r\n# c3\nSELECT 1"},
+		{pg, "INSERT INTO t (a) VALUES (1) RETURNING id"},
+		{pg, "UPDATE t SET a = 1 RETURNING *"},
+		{pg, "DELETE FROM t WHERE id = 1 RETURNING id, name"},
+		{pg, "UPDATE t SET a = (SELECT 1) RETURNING id"},
+		{pg, "INSERT INTO t (a) VALUES ('C:\\') RETURNING id"},
+		{pg, "INSERT INTO t (a) VALUES (E'it\\'s ''ok'' RETURNING') RETURNING id"},
+		{my, "INSERT INTO t (a) VALUES ('it\\'s ''ok'' RETURNING') RETURNING id"},
+		{pg, "(SELECT 1)"},
+	} {
+		res, err := r.Run(ctx, tc.target, tc.q, 10)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", tc.q, err)
+		}
+		if len(res.Rows) != 2 || res.Affected != nil {
+			t.Errorf("%q: expected Query path (rows, nil affected), got %+v", tc.q, res)
+		}
+	}
+
+	// RETURNING inside string literals, comments, or column lists must NOT trigger Query path.
+	for _, tc := range []struct {
+		target sqlquery.Target
+		q      string
+	}{
+		{pg, "INSERT INTO t (returning) VALUES (1)"},
+		{pg, "INSERT INTO t (a) VALUES ('RETURNING id')"},
+		{pg, "INSERT INTO t (a) VALUES (1) -- RETURNING id"},
+		{pg, "INSERT INTO t (a) VALUES (1) /* RETURNING id */"},
+		{pg, "UPDATE t SET a = $$RETURNING id$$"},
+		{pg, "UPDATE t SET a = $q$RETURNING$q$, b = $1"},
+		{pg, "UPDATE t SET a = $q$unclosed"},
+		{pg, "UPDATE t SET a = 'unclosed"},
+		{pg, "UPDATE t SET a = $unclosed"},
+	} {
+		res, err := r.Run(ctx, tc.target, tc.q, 10)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", tc.q, err)
+		}
+		if res.Affected == nil || len(res.Rows) != 0 {
+			t.Errorf("%q: expected Exec path (affected, no rows), got %+v", tc.q, res)
+		}
+	}
+}
+
+func TestSQLQuery_PostgreSQLおよびMySQLで任意database指定クエリを実行できる(t *testing.T) {
+	r, dsns := runner(1)
+	if _, err := r.Run(ctx, sqlquery.Target{Engine: "postgres", Host: "192.0.2.10", Port: 5432, Database: "app_db", User: "u", Password: "p"}, "SELECT 1", 10); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix((*dsns)[0], "pgx postgres://u:p@192.0.2.10:5432/app_db?") {
+		t.Errorf("postgres custom db dsn = %q", (*dsns)[0])
+	}
+	if _, err := r.Run(ctx, sqlquery.Target{Engine: "postgres", Host: "192.0.2.10", Port: 5432, Database: "my db", User: "u", Password: "p"}, "SELECT 1", 10); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix((*dsns)[1], "pgx postgres://u:p@192.0.2.10:5432/my%20db?") {
+		t.Errorf("postgres spaced db dsn = %q", (*dsns)[1])
+	}
+	if _, err := r.Run(ctx, sqlquery.Target{Engine: "mysql", Host: "192.0.2.10", Port: 3306, Database: "shop_db", User: "u", Password: "p"}, "SELECT 1", 10); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix((*dsns)[2], "mysql u:p@tcp(192.0.2.10:3306)/shop_db?") {
+		t.Errorf("mysql custom db dsn = %q", (*dsns)[2])
+	}
+
+	hook := r.QueryHook()
+	pgSrv := domain.Server{Runtime: domain.RuntimeRef{Engine: domain.Postgres, Version: "18.6"}, Port: 40002}
+	if _, err := hook(ctx, pgSrv, domain.QueryRequest{Host: "h", Database: "custom_pg", User: "u", Password: "p", SQL: "SELECT 1"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix((*dsns)[3], "pgx postgres://u:p@h:40002/custom_pg?") {
+		t.Errorf("hook postgres custom db dsn = %q", (*dsns)[3])
+	}
+	mySrv := domain.Server{Runtime: domain.RuntimeRef{Engine: domain.MySQL, Version: "8.4.13"}, Port: 40001}
+	if _, err := hook(ctx, mySrv, domain.QueryRequest{Host: "h", Database: "custom_my", User: "u", Password: "p", SQL: "SELECT 1"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix((*dsns)[4], "mysql u:p@tcp(h:40001)/custom_my?") {
+		t.Errorf("hook mysql custom db dsn = %q", (*dsns)[4])
+	}
+}

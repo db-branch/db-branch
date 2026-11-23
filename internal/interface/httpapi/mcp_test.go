@@ -147,6 +147,36 @@ func TestQuery_ブランチ自身のユーザーで実行する(t *testing.T) {
 	}
 }
 
+func TestQuery_任意database指定をRESTとMCPの両方からプロバイダへ渡せる(t *testing.T) {
+	httpapi.MCPPoll = time.Millisecond
+	f := newFixture(t)
+	f.branches.branches["x"] = domain.Branch{Name: name("x"), Runtime: mysql84, Status: domain.BranchReady, Port: 40001, User: "x", Password: "pw", Access: domain.AccessOpen}
+	q := &fakeQuery{}
+	f.srv.Providers = providersOf(q)
+	f.srv.TokenAuth = &fakeTokens{}
+
+	resp, _ := f.do(t, "POST", "/v1/branches/x/query", map[string]any{"sql": "SELECT 1", "database": "app"})
+	if resp.StatusCode != 200 || q.got.Database != "app" {
+		t.Fatalf("REST database: status=%d got=%+v", resp.StatusCode, q.got)
+	}
+	resp, _ = f.do(t, "POST", "/v1/branches/x/query", map[string]any{"sql": "SELECT 1"})
+	if resp.StatusCode != 200 || q.got.Database != "" {
+		t.Fatalf("REST default database: status=%d got=%+v", resp.StatusCode, q.got)
+	}
+
+	s, err := mcpSession(t, f, "t-branches")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if out, isErr := callText(t, s, "query", map[string]any{"branch": "x", "sql": "SELECT 1", "database": "analytics"}); isErr || !strings.Contains(out, "42") {
+		t.Fatalf("MCP query: isErr=%v out=%s", isErr, out)
+	}
+	if q.got.Database != "analytics" {
+		t.Errorf("MCP database not forwarded: got=%+v", q.got)
+	}
+}
+
 type bearerRT struct{ token string }
 
 func (b bearerRT) RoundTrip(r *http.Request) (*http.Response, error) {

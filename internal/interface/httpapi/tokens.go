@@ -105,8 +105,9 @@ func (s *Server) revokeToken(w http.ResponseWriter, r *http.Request) {
 // queryBranch runs one statement on a ready branch as its own user.
 func (s *Server) queryBranch(w http.ResponseWriter, r *http.Request, svc Branches, n domain.Name) {
 	var in struct {
-		SQL     string `json:"sql"`
-		MaxRows int    `json:"max_rows"`
+		SQL      string `json:"sql"`
+		Database string `json:"database"`
+		MaxRows  int    `json:"max_rows"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -128,7 +129,7 @@ func (s *Server) queryBranch(w http.ResponseWriter, r *http.Request, svc Branche
 		fail(w, err)
 		return
 	}
-	res, err := p.Query(r.Context(), b.Instance(spec), domain.QueryRequest{Host: s.hostOf(b.Node), User: b.User, Password: b.Password, SQL: in.SQL, MaxRows: in.MaxRows})
+	res, err := p.Query(r.Context(), b.Instance(spec), domain.QueryRequest{Host: s.hostOf(b.Node), Database: in.Database, User: b.User, Password: b.Password, SQL: in.SQL, MaxRows: in.MaxRows})
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "query_failed", err.Error())
 		return
