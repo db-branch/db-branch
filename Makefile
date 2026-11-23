@@ -52,7 +52,7 @@ cover:
 # with the package installed (make deb && apt install ./dist/*.deb).
 DB_BRANCH_TEST_POOL ?= tank
 integration:
-	DB_BRANCH_TEST_POOL=$(DB_BRANCH_TEST_POOL) go test -count=1 -v -tags integration ./internal/infrastructure/zfs/ ./test/integration/
+	DB_BRANCH_TEST_POOL=$(DB_BRANCH_TEST_POOL) go test -count=1 -v -tags integration ./internal/app/ ./internal/infrastructure/zfs/ ./test/integration/
 
 # Regenerates pkg/ext/proto/**/*.pb.go. Needs protoc and, in $(GOPATH)/bin,
 # protoc-gen-go (google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12) and
@@ -73,6 +73,8 @@ deb-proxysql:
 		nfpm package --packager deb --config packaging/proxysql/nfpm.yaml --target dist/
 
 # Every package of the free (Apache-2.0) edition built from this repository, for one architecture.
+# Release builds must not inherit TAGS=dev from environment or CLI overrides.
+deb-oss: override TAGS=
 deb-oss: deb deb-proxysql
 
 # A signed APT repository in dist/apt from dist/*.deb plus the mirrored

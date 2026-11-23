@@ -278,9 +278,11 @@ func TestBranch_ベースのランタイムと違うことをJSONで返す(t *te
 func TestRestoreCheckpoint_アップグレードに失敗して残ったブランチからも戻せる(t *testing.T) {
 	f := checkpointFixture(t)
 	f.branches.branches["x"] = domain.Branch{Name: name("x"), Runtime: mysql84, Status: domain.BranchFailed, Error: domain.UpgradeFailedPrefix + "boom"}
-	if resp, body := f.do(t, "POST", "/v1/branches/x/checkpoints/c1/restore", nil); resp.StatusCode != 202 {
-		t.Errorf("%d %v", resp.StatusCode, body)
+	resp, body := f.do(t, "POST", "/v1/branches/x/checkpoints/c1/restore", nil)
+	if resp.StatusCode != 202 {
+		t.Fatalf("%d %v", resp.StatusCode, body)
 	}
+	f.waitOp(t, body["id"].(string))
 	f.branches.branches["x"] = domain.Branch{Name: name("x"), Runtime: mysql84, Status: domain.BranchFailed, Error: "disk full"}
 	if resp, _ := f.do(t, "POST", "/v1/branches/x/checkpoints/c1/restore", nil); resp.StatusCode != 409 {
 		t.Errorf("another failure: %d", resp.StatusCode)
