@@ -930,6 +930,7 @@ func TestCreateUser_引用符やバックスラッシュを含むパスワード
 	user := `u's\r`
 	wantUser := `'u''s\\r'`
 	wantModeReset := "SET SESSION sql_mode = REPLACE(@@SESSION.sql_mode, 'NO_BACKSLASH_ESCAPES', '');"
+	wantNoBinlogModeReset := "SET SESSION sql_log_bin = 0; " + wantModeReset
 
 	// MySQL 8.4 (LegacyAuth=false): clears NO_BACKSLASH_ESCAPES on every session
 	// that embeds quoted literals, escapes user & password, uses IDENTIFIED WITH
@@ -942,11 +943,11 @@ func TestCreateUser_引用符やバックスラッシュを含むパスワード
 	if len(f.sys.stdin) != 3 {
 		t.Fatalf("8.4 stdin calls = %d, want 3: %q", len(f.sys.stdin), f.sys.stdin)
 	}
-	if !strings.HasPrefix(f.sys.stdin[0], wantModeReset) {
-		t.Errorf("8.4 createUser stdin[0] does not start with sql_mode reset:\n%s", f.sys.stdin[0])
+	if !strings.HasPrefix(f.sys.stdin[0], wantNoBinlogModeReset) {
+		t.Errorf("8.4 createUser stdin[0] does not start with sql_log_bin + sql_mode reset:\n%s", f.sys.stdin[0])
 	}
-	if !strings.HasPrefix(f.sys.stdin[2], wantModeReset) || !strings.Contains(f.sys.stdin[2], " ON mysql.* FROM "+wantUser+"@'%'") {
-		t.Errorf("8.4 revoke stdin[2] lacks leading sql_mode reset or escaped user:\n%s", f.sys.stdin[2])
+	if !strings.HasPrefix(f.sys.stdin[2], wantNoBinlogModeReset) || !strings.Contains(f.sys.stdin[2], " ON mysql.* FROM "+wantUser+"@'%'") {
+		t.Errorf("8.4 revoke stdin[2] lacks leading sql_log_bin + sql_mode reset or escaped user:\n%s", f.sys.stdin[2])
 	}
 	for _, want := range []string{
 		"CREATE USER IF NOT EXISTS " + wantUser + "@'%' IDENTIFIED BY " + wantPW,
@@ -991,8 +992,8 @@ func TestCreateUser_引用符やバックスラッシュを含むパスワード
 	if err := f57.srv.CreateUser(ctx, f57.spec, user, pw); err != nil {
 		t.Fatal(err)
 	}
-	if s := f57.sys.stdin[0]; !strings.HasPrefix(s, wantModeReset) || !strings.Contains(s, "ALTER USER "+wantUser+"@'%' IDENTIFIED BY "+wantPW) {
-		t.Errorf("5.7 stdin[0] lacks leading sql_mode reset or ALTER USER:\n%s", s)
+	if s := f57.sys.stdin[0]; !strings.HasPrefix(s, wantNoBinlogModeReset) || !strings.Contains(s, "ALTER USER "+wantUser+"@'%' IDENTIFIED BY "+wantPW) {
+		t.Errorf("5.7 stdin[0] lacks leading sql_log_bin + sql_mode reset or ALTER USER:\n%s", s)
 	}
 
 	// MySQL 5.6: escapes user & password in GRANT ... IDENTIFIED BY and never emits ALTER USER.
@@ -1001,8 +1002,8 @@ func TestCreateUser_引用符やバックスラッシュを含むパスワード
 		t.Fatal(err)
 	}
 	s56 := f56.sys.stdin[0]
-	if !strings.HasPrefix(s56, wantModeReset) || !strings.Contains(s56, "GRANT USAGE ON *.* TO "+wantUser+"@'%' IDENTIFIED BY "+wantPW) {
-		t.Errorf("5.6 stdin[0] lacks leading sql_mode reset or escaped GRANT:\n%s", s56)
+	if !strings.HasPrefix(s56, wantNoBinlogModeReset) || !strings.Contains(s56, "GRANT USAGE ON *.* TO "+wantUser+"@'%' IDENTIFIED BY "+wantPW) {
+		t.Errorf("5.6 stdin[0] lacks leading sql_log_bin + sql_mode reset or escaped GRANT:\n%s", s56)
 	}
 	if strings.Contains(s56, "ALTER USER") {
 		t.Errorf("5.6 must not emit ALTER USER:\n%s", s56)
@@ -1024,8 +1025,8 @@ func TestCreateUser_引用符やバックスラッシュを含むパスワード
 		t.Errorf("9.6 query stdin[0] lacks leading sql_mode reset or escaped user:\n%s", f96.sys.stdin[0])
 	}
 	wantAlter := "ALTER USER " + wantUser + "@'h''o\\\\st\t1\\n2\\0x' IDENTIFIED WITH caching_sha2_password BY " + wantPW
-	if !strings.HasPrefix(f96.sys.stdin[1], wantModeReset) || !strings.Contains(f96.sys.stdin[1], wantAlter) {
-		t.Errorf("9.6 convertOwn stdin[1] lacks leading sql_mode reset or %q:\n%s", wantAlter, f96.sys.stdin[1])
+	if !strings.HasPrefix(f96.sys.stdin[1], wantNoBinlogModeReset) || !strings.Contains(f96.sys.stdin[1], wantAlter) {
+		t.Errorf("9.6 convertOwn stdin[1] lacks leading sql_log_bin + sql_mode reset or %q:\n%s", wantAlter, f96.sys.stdin[1])
 	}
 	if calls := strings.Join(f96.sys.calls, "\n"); strings.Contains(calls, pw) || strings.Contains(calls, wantPW) || strings.Contains(calls, "SELECT host") {
 		t.Errorf("9.6 convertOwn leaked password or query to argv: %s", calls)
@@ -1308,6 +1309,79 @@ func TestStop_キャンセルされたら各段階でcontextエラーを返す(t
 		f.sys.failOn = step
 		if err := f.srv.Stop(c, f.spec, domain.StopClean); !errors.Is(err, context.Canceled) {
 			t.Errorf("cancel at %q: error = %v, want context.Canceled", step, err)
+		}
+	}
+}
+
+func Test管理用SQLは同一セッションでsql_log_binを0にして流し一般のExecやExecAsには付けない(t *testing.T) {
+	const setNoBinlog = "SET SESSION sql_log_bin = 0; "
+
+	for _, tc := range []struct {
+		ver      string
+		wantStmt int
+	}{
+		{"5.6.51", 1},
+		{"5.7.44", 1},
+		{"8.0.15", 1},
+		{"8.0.46", 3},
+		{"8.4.13", 3},
+		{"9.6.0", 3},
+	} {
+		f := newFixture(t).with(tc.ver)
+		if err := f.srv.CreateUser(ctx, f.spec, "feature-x", "pw1"); err != nil {
+			t.Fatalf("%s CreateUser: %v", tc.ver, err)
+		}
+		if len(f.sys.stdin) != tc.wantStmt {
+			t.Fatalf("%s CreateUser stdin count = %d, want %d: %q", tc.ver, len(f.sys.stdin), tc.wantStmt, f.sys.stdin)
+		}
+		for i, stmt := range f.sys.stdin {
+			if tc.wantStmt == 3 && i == 1 {
+				if stmt != "SET GLOBAL partial_revokes = ON" {
+					t.Errorf("%s CreateUser stdin[1] = %q, want SET GLOBAL partial_revokes = ON", tc.ver, stmt)
+				}
+				continue
+			}
+			if !strings.HasPrefix(stmt, setNoBinlog) {
+				t.Errorf("%s CreateUser stdin[%d] = %q, want prefix %q", tc.ver, i, stmt, setNoBinlog)
+			}
+		}
+
+		g := newFixture(t).with(tc.ver)
+		if err := g.srv.DropUser(ctx, g.spec, "parent"); err != nil {
+			t.Fatalf("%s DropUser: %v", tc.ver, err)
+		}
+		if len(g.sys.stdin) != 1 || !strings.HasPrefix(g.sys.stdin[0], setNoBinlog) {
+			t.Errorf("%s DropUser stdin = %q, want prefix %q", tc.ver, g.sys.stdin, setNoBinlog)
+		}
+	}
+
+	// StartUpgraded convertOwn on 9.x also disables binlog in the same session.
+	f9 := newFixture(t).with("9.6.0")
+	f9.sys.outputs = map[string]string{"AND plugin = 'mysql_native_password'": "localhost\n"}
+	if _, err := f9.srv.StartUpgraded(ctx, f9.spec, domain.Login{User: "branch-x", Password: "pw1"}); err != nil {
+		t.Fatalf("9.6 StartUpgraded: %v", err)
+	}
+	if len(f9.sys.stdin) != 2 {
+		t.Fatalf("9.6 StartUpgraded stdin count = %d, want 2: %q", len(f9.sys.stdin), f9.sys.stdin)
+	}
+	if !strings.Contains(f9.sys.stdin[0], "SELECT host FROM mysql.user") {
+		t.Errorf("9.6 StartUpgraded stdin[0] = %q, want SELECT query", f9.sys.stdin[0])
+	}
+	if !strings.HasPrefix(f9.sys.stdin[1], setNoBinlog) || !strings.Contains(f9.sys.stdin[1], "ALTER USER") {
+		t.Errorf("9.6 convertOwn stdin[1] = %q, want prefix %q with ALTER USER", f9.sys.stdin[1], setNoBinlog)
+	}
+
+	// User SQL (Exec / ExecAs) must not disable sql_log_bin.
+	fUser := newFixture(t)
+	if err := fUser.srv.Exec(ctx, fUser.spec, "CREATE TABLE t (id INT)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := fUser.srv.ExecAs(ctx, fUser.spec, "feature-x", "pw1", "INSERT INTO t VALUES (1)"); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range fUser.sys.stdin {
+		if strings.Contains(stmt, "sql_log_bin") {
+			t.Errorf("user SQL unexpectedly touched sql_log_bin: %q", stmt)
 		}
 	}
 }
