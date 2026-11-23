@@ -5,7 +5,7 @@ import { DEMO_ROBOTS_TXT, DEMO_SITEMAP_XML, transformDemoHtml } from "./src/demo
 
 // The static demo (npm run build:demo = vite build --mode demo) is the same console with a fake agent
 // in the browser (src/demo). Its page gets a title, canonical link, description, robots meta and the
-// Cloudflare Web Analytics beacon; its headers file comes from demo-worker/, plus robots.txt and sitemap.xml.
+// Cloudflare Web Analytics beacon; its headers and redirects files come from demo-worker/, plus robots.txt and sitemap.xml.
 function demoSite(): Plugin {
   return {
     name: "db-branch-demo-site",
@@ -14,6 +14,7 @@ function demoSite(): Plugin {
     },
     generateBundle() {
       this.emitFile({ type: "asset", fileName: "_headers", source: readFileSync(new URL("./demo-worker/_headers", import.meta.url), "utf8") });
+      this.emitFile({ type: "asset", fileName: "_redirects", source: readFileSync(new URL("./demo-worker/_redirects", import.meta.url), "utf8") });
       this.emitFile({ type: "asset", fileName: "robots.txt", source: DEMO_ROBOTS_TXT });
       this.emitFile({ type: "asset", fileName: "sitemap.xml", source: DEMO_SITEMAP_XML });
     },

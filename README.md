@@ -7,7 +7,7 @@
 
 **Instant database branches for MySQL and PostgreSQL, on your own servers.** Create a copy-on-write branch of a large database in seconds, break it, reset it, throw it away.
 
-**Try it in your browser in 10 seconds: <https://demo.db-branch.com/?ref=readme>** (nothing real is created).
+**Try it in your browser in 10 seconds: <https://demo.db-branch.com/from/readme>** (nothing real is created).
 
 ![Create a branch, see how to connect, save a checkpoint, reset the branch](docs/assets/demo.gif)
 
@@ -17,7 +17,7 @@ Test a migration, let an AI agent loose, or give every pull request its own copy
 
 ## Try it
 
-1. **In your browser, 0 minutes.** A live console demo runs entirely in the page (nothing real is created): <https://demo.db-branch.com/?ref=readme>
+1. **In your browser, 0 minutes.** A live console demo runs entirely in the page (nothing real is created): <https://demo.db-branch.com/from/readme>
 2. **On a Mac or Windows machine, about 2 minutes.** db-branch needs Linux and ZFS, so run it in an Ubuntu VM with [Multipass](https://multipass.run/). One command makes the VM, installs db-branch, initialises it on a file-backed ZFS pool and loads a small sample base, `shop` (MySQL 8.4):
 
    ```sh
