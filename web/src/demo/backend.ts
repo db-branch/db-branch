@@ -45,7 +45,7 @@ const DAY = 24 * 3600e3;
 const CHECKPOINT_NAME = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const MAX_CHECKPOINT_NAME = 40;
 const CONSOLE_ACTIONS = ["base.read", "base.create", "base.delete", "base.load", "base.snapshot", "base.publish", "base.refresh", "base.refresh.read", "runtime.install", "cluster.read", "setting.write", "module.install", "token.write", "backup.read", "route-user.write", "update.read", "update.check", "update.apply", "branch.checkpoint", "branch.checkpoint_delete", "branch.restore", "branch.upgrade"];
-const BASE_ACTIONS = ["base.snapshot", "base.load", "base.delete", "base.describe", "base.mask", "base.publish", "base.sql", "base.start", "base.stop", "base.refresh", "base.refresh.read", "base.snapshot_delete", "base.replicas"];
+const BASE_ACTIONS = ["base.snapshot", "base.load", "base.delete", "base.describe", "base.publish", "base.sql", "base.start", "base.stop", "base.refresh", "base.refresh.read", "base.snapshot_delete", "base.replicas"];
 
 /** Go-style durations: "4h", "90m", "1h30m0s". Null when it is not one. */
 export function parseDuration(s: string): number | null {
@@ -323,6 +323,11 @@ export class DemoBackend {
 
   private scopes(): SettingScope[] {
     return this.state.settings.filter((s) => s.scope === "core" || this.moduleActive(s.scope));
+  }
+
+  // A secret setting is write-only: the API says whether one is stored, never its value.
+  private scopeView(scope: SettingScope): SettingScope {
+    return { ...scope, settings: scope.settings.map((x) => (x.type === "secret" ? { ...x, value: "", secret_set: x.value !== "" } : x)) };
   }
 
   // ---- routes ----
@@ -748,6 +753,7 @@ export class DemoBackend {
     const pg = runtimeEngine(base.runtime) === "postgres";
     const n = this.state.seq++;
     const op = this.newOp("branch.create", "branch", name);
+    const owner = who ? (who.admin && body.owner ? String(body.owner) : who.id) : null;
     const b: Branch = {
       name,
       status: "provisioning",
@@ -763,7 +769,8 @@ export class DemoBackend {
       connection: { host: DEMO_HOST, port: 41100 + (n % 800), user: pg ? name : "branch" },
       proxy: { host: DEMO_HOST, port: pg ? 6432 : 6033, user: name },
       operation: { id: op.id, kind: op.kind },
-      owner: who ? (who.admin && body.owner ? String(body.owner) : who.id) : null,
+      owner: owner,
+      owner_name: owner,
       id: newId(this.state),
       access: !who || body.access === "open" ? "open" : "private",
       // Decided here, once: the branch asked to, or record_all is on right now.
@@ -1027,7 +1034,7 @@ export class DemoBackend {
       return ok(undefined, 204);
     });
 
-    a("GET", "/v1/settings", "admin", () => ok({ items: this.scopes() }));
+    a("GET", "/v1/settings", "admin", () => ok({ items: this.scopes().map((x) => this.scopeView(x)) }));
     a("PUT", "/v1/settings/:scope", "admin", (c) => {
       const scope = this.scopes().find((x) => x.scope === c.p.scope);
       if (!scope) return notFound("settings scope");
@@ -1037,13 +1044,19 @@ export class DemoBackend {
         const set = scope.settings.find((x) => x.key === key);
         if (!set) return fail(400, "invalid_request", `unknown setting ${key}`);
         const v = String(raw ?? "").trim();
+        if (v === "" && set.type === "secret") continue; // an empty secret keeps the stored one
         const bad = (v !== "" && set.type === "int" && !/^-?\d+$/.test(v)) || (v !== "" && set.type === "bool" && v !== "true" && v !== "false") || (v !== "" && set.type === "duration" && parseDuration(v) === null);
         if (bad) return fail(400, "invalid_request", `${set.label}: ${v} is not a valid ${set.type}`);
         next[key] = v === "" ? set.default : set.type === "duration" ? goDuration(parseDuration(v)!) : v;
       }
+      for (const key of (c.body.clear ?? []) as string[]) {
+        const set = scope.settings.find((x) => x.key === key);
+        if (set?.type !== "secret") return fail(400, "invalid_request", `${key} is not a secret setting`);
+        if (!(key in next)) next[key] = "";
+      }
       for (const set of scope.settings) if (set.key in next) set.value = next[set.key];
       this.emit("resync", {});
-      return ok(scope);
+      return ok(this.scopeView(scope));
     });
 
     a("GET", "/v1/modules", "admin", () =>

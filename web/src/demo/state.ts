@@ -75,7 +75,6 @@ export const MODULES: Record<string, { description: string; paid: boolean }> = {
   audit: { description: "Audit log of every change", paid: true },
   auth: { description: "Users, roles, teams and single sign-on", paid: true },
   history: { description: "Record every change and restore a branch to any point", paid: true },
-  masking: { description: "Mask personal data in snapshots", paid: true },
   proxysql: { description: "Connect to branches through ProxySQL", paid: false },
 };
 
@@ -135,6 +134,7 @@ function branch(s: State, now: number, name: string, b: BaseRec, owner: string, 
     proxy: { host: DEMO_HOST, port: pg ? 6432 : 6033, user: name },
     operation: null,
     owner,
+    owner_name: owner,
     id: newId(s),
     access,
     checkpoints: true,
@@ -208,10 +208,9 @@ export function seed(now: number): State {
           iv("retention", "History retention", "duration", "168h0m0s", "How long recorded changes are kept. Older changes cannot be restored to."),
         ],
       },
-      { scope: "masking", title: "masking", settings: [] },
       { scope: "proxysql", title: "proxysql", settings: [iv("comment_routing", "Route by query comment", "bool", "true"), iv("server_version", "Reported MySQL version", "string", "8.4.0")] },
     ],
-    modules: { audit: "on", auth: "on", history: "on", masking: "on", proxysql: "on" },
+    modules: { audit: "on", auth: "on", history: "on", proxysql: "on" },
     backups: Object.fromEntries(NODES.map((n, i) => [n, [0, 6, 12, 18].map((h) => ({ name: `backup-${n}-${snapshotName(now - (h + i) * 3600e3)}.tar.zst`, size: 380 * 1024 + h * 211 + i * 4096, taken_at: iso(now - (h + i) * 3600e3 - 600e3) }))])),
     checkedAt: iso(now - 3600e3),
   });

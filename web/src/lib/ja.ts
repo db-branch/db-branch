@@ -227,6 +227,7 @@ export const ja: Record<string, string> = {
     "リーダーが 1 日 1 回、パッケージリポジトリに新しい db-branch の版を問い合わせます。オフのときは、管理者が Check for updates を押したときだけ接続します。",
 
   // Demo (the static build at demo.db-branch.com)
+  "Run it on your own machine": "手元で試す",
   "Nothing here is real. Data resets when you reload.": "ここにあるものはすべて架空です。再読み込みするとデータは元に戻ります。",
   "Demo: any user name and password will do.": "デモ：ユーザー名もパスワードも何でも構いません。",
   "This page is served by the {module} module on a real cluster. Here it shows sample data.": "実際のクラスタでは、このページは {module} モジュールが提供します。ここではサンプルのデータを表示しています。",
