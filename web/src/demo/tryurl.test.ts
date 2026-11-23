@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { setLanguage } from "../lib/i18n";
 import { Banner } from "./Banner";
-import { tryLocallyUrl } from "./tryurl";
+import { interestUrl, tryLocallyUrl } from "./tryurl";
 
 describe("the 'Run it on your own machine' link", () => {
   // The link goes through a path of the demo's own (see demo-worker/_redirects), because the site's analytics count paths, not query strings.
@@ -22,6 +22,24 @@ describe("the 'Run it on your own machine' link", () => {
     expect(html("en")).toContain("Run it on your own machine");
     expect(html("ja")).toContain('href="/go/getting-started-ja"');
     expect(html("ja")).toContain("手元で試す");
+    setLanguage("en");
+  });
+});
+
+describe("the 'Interested in Team / Business?' link", () => {
+  it("goes through the counting path for the pricing page, in the language of the UI", () => {
+    expect(interestUrl("en")).toBe("/go/contact");
+    expect(interestUrl("ja")).toBe("/go/contact-ja");
+  });
+  it("is in the banner next to the 'run it' button, in both languages", () => {
+    const html = (lang: "en" | "ja") => {
+      setLanguage(lang);
+      return renderToStaticMarkup(createElement(Banner, { role: "admin", onSwitch: () => {}, home: "https://db-branch.com" }));
+    };
+    expect(html("en")).toContain('href="/go/contact"');
+    expect(html("en")).toContain("Interested in Team / Business?");
+    expect(html("ja")).toContain('href="/go/contact-ja"');
+    expect(html("ja")).toContain("Team / Business に興味がありますか？");
     setLanguage("en");
   });
 });

@@ -114,6 +114,8 @@ A base is a ZFS dataset holding a loaded database. A branch is a ZFS clone of a 
 
 There is no hosted or cloud version of db-branch.
 
+Team and Business are not on sale yet and have no price. If you are interested, tell us with [this form](https://demo.db-branch.com/go/interest) (which plan, what database, how big, how many nodes). Email to <sales@db-branch.com> works too.
+
 ## Documentation
 
 - [docs/README.md](docs/README.md): index of the design and reference documents (written in Japanese)

@@ -2,6 +2,11 @@
 # (which count request paths, not query strings) can tell where a visit came from.
 #   /from/readme            the demo link in README.md
 #   /go/getting-started*    the "Run it on your own machine" button in the demo banner
+#   /go/contact*            the "Interested in Team / Business?" link in the demo banner (pricing page)
+#   /go/interest            README: the Team / Business interest form (Google Form)
 /from/readme /  302
 /go/getting-started https://db-branch.com/docs/getting-started/  302
 /go/getting-started-ja https://db-branch.com/ja/docs/getting-started/  302
+/go/interest https://docs.google.com/forms/d/e/1FAIpQLSeXzl0jePZRGCgFTAfCBImiJrhjsy1KxCM3q1LnFWaK4TRBVQ/viewform  302
+/go/contact https://db-branch.com/plans/#interested  302
+/go/contact-ja https://db-branch.com/ja/plans/#interested  302
