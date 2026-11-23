@@ -29,6 +29,7 @@ func TestPlan_ブランチごとにホストグループとユーザーとコメ
 		branch("feature-x", "n1", 40001, domain.BranchReady),
 		branch("pr-1", "n2", 40002, domain.BranchResetting),
 		branch("broken", "n1", 40003, domain.BranchFailed),
+		branch("merging", "n1", 40006, domain.BranchMerging),
 		branch("away", "n3", 40004, domain.BranchReady), // node unknown
 	}
 	old := branch("legacy", "n1", 40005, domain.BranchReady)

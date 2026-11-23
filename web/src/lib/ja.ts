@@ -264,6 +264,14 @@ export const ja: Record<string, string> = {
   "Upgraded: the Base runs {runtime}": "上げた Branch です（Base は {runtime}）",
   "The Base runs {runtime}": "Base は {runtime} です",
   "The runtime the Branch ran when this Checkpoint was taken": "この Checkpoint を取ったときに Branch が動かしていたランタイム",
+  // Branch merge
+  "Merge changes from this checkpoint's line into the live branch.": "このチェックポイントの線からの変更を現在の Branch にマージします。",
+  "Select a checkpoint on another line to merge.": "マージするには別の線のチェックポイントを選んでください。",
+  "Calculating 3-way diff...": "3-way 差分を計算しています...",
+  "Applying merge to live branch...": "現在の Branch にマージを適用しています...",
+  "No changes to apply.": "適用する変更はありません。",
+  "Resolve all conflicts before applying the merge.": "マージを適用する前にすべての競合を解消してください。",
+  "Automatic checkpoint saved: {checkpoint}": "自動チェックポイントを保存しました: {checkpoint}",
   // Modules
   "Forget {name}?": "{name} の記録を削除しますか？",
   "Remove the cluster record of this module so it is no longer listed. You can install it again later.":

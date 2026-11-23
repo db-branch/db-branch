@@ -184,6 +184,9 @@ func (s *Service) beginUpgrade(ctx context.Context, req UpgradeRequest) (domain.
 	if err != nil || req.CheckOnly {
 		return br, err
 	}
+	if err := s.checkNotDryRun(req.Name); err != nil {
+		return br, err
+	}
 	br.Status = domain.BranchUpgrading
 	return br, s.Store.PutBranch(ctx, br)
 }
@@ -287,17 +290,7 @@ func parseUpgradeIntent(v string) (upgradeIntent, bool) {
 }
 
 func (s *Service) writeUpgradeIntent(ctx context.Context, n domain.Name, in upgradeIntent) error {
-	root := s.historyRoot(n)
-	ok, err := s.Storage.Exists(ctx, root)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		if err := s.Storage.Create(ctx, root, map[string]string{"canmount": "off"}); err != nil {
-			return err
-		}
-	}
-	return s.Lineage.SetProps(ctx, root, map[string]string{domain.PropUpgrade: in.value()})
+	return s.setHistoryProps(ctx, n, map[string]string{domain.PropUpgrade: in.value()})
 }
 
 func (s *Service) readUpgradeIntent(ctx context.Context, n domain.Name) (upgradeIntent, bool, error) {
@@ -315,12 +308,7 @@ func (s *Service) readUpgradeIntent(ctx context.Context, n domain.Name) (upgrade
 }
 
 func (s *Service) clearUpgradeIntent(ctx context.Context, n domain.Name) error {
-	root := s.historyRoot(n)
-	ok, err := s.Storage.Exists(ctx, root)
-	if err != nil || !ok {
-		return err
-	}
-	return s.Lineage.Unset(ctx, root, domain.PropUpgrade)
+	return s.unsetHistoryProps(ctx, n, domain.PropUpgrade)
 }
 
 // upgradeTools is what an upgrade works with: the engine's server and its

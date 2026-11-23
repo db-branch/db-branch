@@ -59,6 +59,11 @@ type fakeBranches struct {
 	// upErr fails the upgrade validations; upResultErr makes the upgrade
 	// (and a create with a runtime) fail after producing a result.
 	upErr, upResultErr error
+	// lastMerge records the latest MergeBranch request; mergeErr fails ValidateMerge.
+	lastMerge      dbbranch.MergeBranchRequest
+	mergeErr       error
+	mergeResult    domain.MergeResult
+	mergeResultErr error
 	// createGate, when set, holds every CreateBranch until it is closed:
 	// the branch does not exist yet while the operation is pending.
 	createGate chan struct{}

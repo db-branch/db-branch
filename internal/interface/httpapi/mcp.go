@@ -27,7 +27,9 @@ create_checkpoint; if it goes wrong, restore_checkpoint puts the branch back.
 Restoring replaces the current state and saves nothing: call create_checkpoint first
 if the current state may be needed.
 A branch can be moved to a newer database version (upgrade_branch; check_upgrade
-only checks). A checkpoint is saved first and a failed upgrade rolls back by itself.`
+only checks). A checkpoint is saved first and a failed upgrade rolls back by itself.
+Changes from another history line or checkpoint can be merged into the live branch
+(merge_line; set dry_run true to preview diffs and conflicts without changing data).`
 
 // internalMux serves tool calls through the same routes (and so the same
 // authorization and audit) as HTTP clients.
@@ -373,6 +375,37 @@ func (s *Server) mcpServer(r *http.Request) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{Name: "upgrade_branch", Description: "Move one branch to a newer version of its database engine (MySQL 8.0 to 8.4 and so on); its base and other branches are untouched. A checkpoint is saved first and a failed upgrade rolls back by itself. The result lists the pre-check findings and the server log's warnings. Upgrades only; to go back, restore the before-upgrade checkpoint."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in upgradeIn) (*mcp.CallToolResult, any, error) {
 			f, err := s.startAndCollect(ctx, r, http.MethodPost, "/v1/branches/"+url.PathEscape(in.Branch)+"/upgrade", map[string]any{"runtime": in.Runtime, "no_rollback": in.NoRollback, "force": in.Force})
+			if err != nil {
+				return nil, nil, err
+			}
+			return operationResult(f), nil, nil
+		})
+	type mergeLineIn struct {
+		Branch         string   `json:"branch" jsonschema:"the target branch name"`
+		SourceLine     *int     `json:"source_line,omitempty" jsonschema:"source line number to merge from (mutually exclusive with checkpoint)"`
+		Checkpoint     string   `json:"checkpoint,omitempty" jsonschema:"source checkpoint name (or '@reset') to merge from"`
+		DryRun         bool     `json:"dry_run,omitempty" jsonschema:"preview diffs and conflicts without changing live data"`
+		Tables         []string `json:"tables,omitempty" jsonschema:"optional list of tables (db.table or table) to merge"`
+		AllowDDL       bool     `json:"allow_ddl,omitempty" jsonschema:"apply schema (DDL) changes detected in the 3-way diff"`
+		IgnoreTriggers bool     `json:"ignore_triggers,omitempty" jsonschema:"allow merging tables that have database triggers"`
+	}
+	mcp.AddTool(srv, &mcp.Tool{Name: "merge_line", Description: "3-way merge changes from another history line or checkpoint into a branch's live state (via common ancestor). Saves an automatic checkpoint before applying changes and rolls back automatically on failure or conflict. Set dry_run=true to preview changes and conflicts without modifying live data."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in mergeLineIn) (*mcp.CallToolResult, any, error) {
+			body := map[string]any{
+				"dry_run":         in.DryRun,
+				"allow_ddl":       in.AllowDDL,
+				"ignore_triggers": in.IgnoreTriggers,
+			}
+			if in.SourceLine != nil {
+				body["source_line"] = *in.SourceLine
+			}
+			if in.Checkpoint != "" {
+				body["checkpoint"] = in.Checkpoint
+			}
+			if len(in.Tables) > 0 {
+				body["tables"] = in.Tables
+			}
+			f, err := s.startAndCollect(ctx, r, http.MethodPost, "/v1/branches/"+url.PathEscape(in.Branch)+"/merge", body)
 			if err != nil {
 				return nil, nil, err
 			}

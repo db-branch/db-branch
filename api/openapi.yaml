@@ -924,6 +924,63 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
+  /v1/branches/{name}/merge:
+    post:
+      tags: [branches]
+      operationId: mergeBranch
+      summary: Merge a history line or checkpoint into live branch
+      x-dbb-action: branch.merge
+      x-dbb-token-scopes: [full, branches]
+      description: |-
+        Performs a logical 3-way merge of changes from another history line (`source_line`) or a checkpoint (`checkpoint`) into the branch's live state via their common ancestor. Answers `202` with an operation of kind `branch.merge` whose `result` is a `MergeResult`.
+
+        With `dry_run: true`, temporary clones are created to compute and return the diff summary and any conflicts without modifying live data. Otherwise, an automatic `before-merge-<time>` checkpoint is saved before applying changes, and failures or conflicts roll back automatically.
+
+        Refused with `503 cluster_upgrading` until every cluster node supports branch merging (`ProtocolBranchMerge`), and with `409 feature_not_supported` if the branch engine does not support `branch_merge`.
+
+        **Action:** `branch.merge`. Allowed for `full` and `branches` tokens. Allowed for the branch's owner and admins.
+      parameters:
+        - {$ref: '#/components/parameters/BranchName'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MergeBranch'}
+      responses:
+        '202':
+          description: Accepted. Poll the operation; its `result` holds the MergeResult.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Operation'}
+          headers:
+            Location: {$ref: '#/components/headers/Location'}
+        '400':
+          description: 'invalid_request: malformed JSON, unknown field, missing/ambiguous source, invalid checkpoint, or source equals ancestor/live line.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: 'not_found: branch or source checkpoint/line does not exist.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: 'conflict: branch is not `ready` or `paused`, or dry-run in progress. checkpoints_unavailable or feature_not_supported.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: 'no_capacity: node lacks memory for temporary merge instances. cluster_upgrading: not every node supports branch merge yet.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '507':
+          description: 'no_space: pool free space is below the safety reserve.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
   /v1/bases:
     get:
       tags: [bases]
@@ -3497,6 +3554,7 @@ components:
             - branch.delete
             - branch.restore
             - branch.upgrade
+            - branch.merge
             - base.create
             - base.snapshot
             - base.mask
@@ -3525,8 +3583,10 @@ components:
         finished_at: {type: string, format: date-time, description: Set once the task has ended.}
         seq: {type: integer, format: int64, description: 'Orders operations by start, newest highest, across nodes.'}
         result:
-          $ref: '#/components/schemas/UpgradeResult'
-          description: 'What the task reports besides success or failure, set when it finishes. Today only a branch upgrade (`branch.upgrade`, and `branch.create` with `runtime`) has one: an UpgradeResult. Absent for other kinds.'
+          oneOf:
+            - {$ref: '#/components/schemas/UpgradeResult'}
+            - {$ref: '#/components/schemas/MergeResult'}
+          description: 'What the task reports besides success or failure, set when it finishes (`UpgradeResult` for `branch.upgrade` and `branch.create` with `runtime`; `MergeResult` for `branch.merge`). Absent for other kinds.'
       required: [id, kind, target, state, created_at, updated_at, seq]
       example:
         id: op_01JC8Z6Q4M7V3X2N9K5R8T1W0B
@@ -3576,7 +3636,7 @@ components:
           description: '`private`: the branch has its own password; owner and admins connect. `open`: it uses the cluster''s shared password and anyone may connect and query.'
         status:
           type: string
-          enum: [provisioning, ready, resetting, restoring, upgrading, pausing, paused, resuming, forking, deleting, failed, lost]
+          enum: [provisioning, ready, resetting, restoring, upgrading, merging, pausing, paused, resuming, forking, deleting, failed, lost]
           description: '`lost` means the node holding the branch is gone (see recreate). `restoring`, `upgrading` and `forking` are shown while a checkpoint restore, runtime upgrade or clean fork runs. `paused` means the database server is stopped and the data kept (see pause); `pausing` and `resuming` are shown while it is stopped or started.'
         status_reason:
           type: [string, 'null']
@@ -3956,6 +4016,90 @@ components:
             code: native_password_users
             message: 2 accounts use mysql_native_password; the plugin stays loaded for this branch
         log: []
+    MergeBranch:
+      type: object
+      properties:
+        source_line:
+          type: integer
+          description: Source history line number to merge from (mutually exclusive with `checkpoint`).
+        checkpoint:
+          type: string
+          description: Source checkpoint name (or `@reset`) to merge from (mutually exclusive with `source_line`).
+        dry_run:
+          type: boolean
+          default: false
+          description: Preview diffs and conflicts without modifying live data.
+        tables:
+          type: array
+          items: {type: string}
+          description: Optional list of tables (`db.table` or `table`) to include.
+        allow_ddl:
+          type: boolean
+          default: false
+          description: Apply schema (DDL) changes detected in the 3-way diff.
+        ignore_triggers:
+          type: boolean
+          default: false
+          description: Allow merging tables that have database triggers.
+      additionalProperties: false
+    MergeTableSummary:
+      type: object
+      properties:
+        database: {type: string}
+        table: {type: string}
+        inserted: {type: integer}
+        updated: {type: integer}
+        deleted: {type: integer}
+        ddl: {type: string}
+      required: [database, table, inserted, updated, deleted]
+    MergeConflict:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [update_update, delete_update, update_delete, insert_insert, unique_violation, foreign_key_conflict, schema_conflict, schema_no_primary_key]
+        database: {type: string}
+        table: {type: string}
+        constraint: {type: string}
+        key: {type: object, additionalProperties: true}
+        conflicting_target_key: {type: object, additionalProperties: true}
+        columns:
+          type: array
+          items: {type: string}
+        ancestor_values: {type: object, additionalProperties: true}
+        source_values: {type: object, additionalProperties: true}
+        target_values: {type: object, additionalProperties: true}
+        message: {type: string}
+      required: [type, database, table]
+    MergeResult:
+      type: object
+      description: The `result` of a `branch.merge` operation.
+      properties:
+        branch: {type: string}
+        source_line: {type: integer}
+        source_checkpoint: {type: string}
+        target_line: {type: integer}
+        ancestor: {type: string}
+        checkpoint: {type: string}
+        dry_run: {type: boolean}
+        status:
+          type: string
+          enum: [dry_run, merged, conflicted, rolled_back, failed]
+        code: {type: string}
+        inserted: {type: integer}
+        updated: {type: integer}
+        deleted: {type: integer}
+        ddl: {type: integer}
+        tables:
+          type: array
+          items: {$ref: '#/components/schemas/MergeTableSummary'}
+        total_conflicts: {type: integer}
+        truncated: {type: boolean}
+        conflicts:
+          type: array
+          items: {$ref: '#/components/schemas/MergeConflict'}
+        error: {type: string}
+      required: [branch, target_line, source_line, status, inserted, updated, deleted]
     MaskInfo:
       type: object
       description: How a snapshot was masked from another base.

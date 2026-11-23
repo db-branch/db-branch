@@ -114,6 +114,8 @@ type Service struct {
 	FreezeTimeout time.Duration
 	// Dumper dumps source databases for scheduled refreshes. Nil: none.
 	Dumper domain.SourceDumper
+	// Merger performs 3-way logical schema/row diff and apply for `branch merge`.
+	Merger domain.LogicalMerger
 	// AutoPrune says whether a refresh prunes old snapshots afterwards
 	// (the base.prune_snapshots setting). Nil means yes.
 	AutoPrune func() bool
@@ -141,6 +143,9 @@ type Service struct {
 	mu sync.Mutex
 	// deletingBases are the bases a DeleteBase is removing (guarded by mu).
 	deletingBases map[domain.Name]bool
+	// mergingDryRun tracks branches currently running `branch merge --dry-run`.
+	dryRunMu      sync.Mutex
+	mergingDryRun map[domain.Name]bool
 }
 
 // SetLimits changes the server memory and the port range at runtime (from
@@ -248,10 +253,20 @@ func (s *Service) checkOwner(kind string, n domain.Name, node string) error {
 // allocatePort returns the lowest port not used by any base or branch on this
 // node. Caller holds s.mu.
 func (s *Service) allocatePort(ctx context.Context) (int, error) {
+	ports, err := s.allocatePorts(ctx, 1)
+	if err != nil {
+		return 0, err
+	}
+	return ports[0], nil
+}
+
+// allocatePorts returns count distinct free ports not used by any base or
+// branch on this node. Caller holds s.mu (or synchronizes concurrently).
+func (s *Service) allocatePorts(ctx context.Context, count int) ([]int, error) {
 	used := map[int]bool{}
 	bases, err := s.Store.ListBases(ctx)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	for _, b := range bases {
 		if s.owns(b.Node) {
@@ -260,20 +275,25 @@ func (s *Service) allocatePort(ctx context.Context) (int, error) {
 	}
 	branches, err := s.Store.ListBranches(ctx)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	for _, b := range branches {
 		if s.owns(b.Node) {
 			used[b.Port] = true
 		}
 	}
-	ports := s.portRange()
-	for p := ports.Min; p <= ports.Max; p++ {
+	pr := s.portRange()
+	out := make([]int, 0, count)
+	for p := pr.Min; p <= pr.Max && len(out) < count; p++ {
 		if !used[p] {
-			return p, nil
+			used[p] = true
+			out = append(out, p)
 		}
 	}
-	return 0, fmt.Errorf("%w in %d-%d", ErrNoFreePort, ports.Min, ports.Max)
+	if len(out) < count {
+		return nil, fmt.Errorf("%w in %d-%d", ErrNoFreePort, pr.Min, pr.Max)
+	}
+	return out, nil
 }
 
 func (s *Service) snapshotName() string { return "s" + s.Clock().UTC().Format("20060102150405") }

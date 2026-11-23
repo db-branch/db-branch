@@ -352,7 +352,8 @@ func (a *App) branchCommand() *cobra.Command {
 	}
 	upgrade := a.upgradeCommand(&noWait)
 	upgrade.Flags().BoolVar(&noWait, "no-wait", false, "print the operation ID and return immediately")
-	cmd.AddCommand(create, fork, list, show, dsn, reset, pause, resume, recreate, del, extend, a.checkpointCommand(), a.checkpointsCommand(), restore, upgrade)
+	merge := a.mergeCommand(&noWait)
+	cmd.AddCommand(create, fork, list, show, dsn, reset, pause, resume, recreate, del, extend, a.checkpointCommand(), a.checkpointsCommand(), restore, upgrade, merge)
 	return cmd
 }
 

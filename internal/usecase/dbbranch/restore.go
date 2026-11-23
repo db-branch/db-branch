@@ -67,17 +67,7 @@ func (in restoreIntent) head() string {
 }
 
 func (s *Service) writeIntent(ctx context.Context, n domain.Name, in restoreIntent) error {
-	root := s.historyRoot(n)
-	ok, err := s.Storage.Exists(ctx, root)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		if err := s.Storage.Create(ctx, root, map[string]string{"canmount": "off"}); err != nil {
-			return err
-		}
-	}
-	return s.Lineage.SetProps(ctx, root, map[string]string{
+	return s.setHistoryProps(ctx, n, map[string]string{
 		domain.PropOp: in.Op, domain.PropSource: in.Source, domain.PropNewLine: strconv.Itoa(in.NewLine),
 		domain.PropAutoName: orNone(in.Auto), domain.PropNote: orNone(encodeNote(in.Note)),
 		domain.PropRuntime: orNone(domain.RuntimeProp(in.Runtime)),
@@ -134,12 +124,7 @@ func (s *Service) readIntent(ctx context.Context, n domain.Name) (restoreIntent,
 }
 
 func (s *Service) clearIntent(ctx context.Context, n domain.Name) error {
-	root := s.historyRoot(n)
-	ok, err := s.Storage.Exists(ctx, root)
-	if err != nil || !ok {
-		return err
-	}
-	return s.Lineage.Unset(ctx, root, domain.PropOp, domain.PropSource, domain.PropNewLine, domain.PropAutoName, domain.PropNote, domain.PropRuntime)
+	return s.unsetHistoryProps(ctx, n, domain.PropOp, domain.PropSource, domain.PropNewLine, domain.PropAutoName, domain.PropNote, domain.PropRuntime)
 }
 
 // RestoreCheckpoint sets the branch back to checkpoint name. The data as it
@@ -187,6 +172,9 @@ func (s *Service) beginRestore(ctx context.Context, n domain.Name, name, note st
 		return br, restoreIntent{}, err
 	}
 	if err := br.CanRestore(); err != nil {
+		return br, restoreIntent{}, err
+	}
+	if err := s.checkNotDryRun(n); err != nil {
 		return br, restoreIntent{}, err
 	}
 	lines, err := s.family(ctx, n)
@@ -257,6 +245,26 @@ func (s *Service) beforeSwap(ctx context.Context, n domain.Name, in restoreInten
 	return err == nil && exists && !done
 }
 
+func (s *Service) finishDatasetSwap(ctx context.Context, br domain.Branch, liveDS string, newLine int, head string, report Reporter) error {
+	if err := s.Lineage.SetProps(ctx, liveDS, map[string]string{"canmount": "on", domain.PropLine: strconv.Itoa(newLine)}); err != nil {
+		return err
+	}
+	var err error
+	if head != "" {
+		err = s.Lineage.SetProps(ctx, liveDS, map[string]string{domain.PropHead: head})
+	} else {
+		err = s.Lineage.Unset(ctx, liveDS, domain.PropHead)
+	}
+	if err != nil {
+		return err
+	}
+	if err := s.Lineage.Mount(ctx, liveDS); err != nil {
+		return err
+	}
+	report.report("promoting")
+	return s.promoteOwn(ctx, br.Name)
+}
+
 func (s *Service) continueRestore(ctx context.Context, brp *domain.Branch, in restoreIntent, report Reporter) error {
 	br := *brp
 	srv, err := s.server(br.Runtime)
@@ -273,22 +281,7 @@ func (s *Service) continueRestore(ctx context.Context, brp *domain.Branch, in re
 			return err
 		}
 	}
-	if err := s.Lineage.SetProps(ctx, liveDS, map[string]string{"canmount": "on", domain.PropLine: strconv.Itoa(in.NewLine)}); err != nil {
-		return err
-	}
-	if head := in.head(); head != "" {
-		err = s.Lineage.SetProps(ctx, liveDS, map[string]string{domain.PropHead: head})
-	} else {
-		err = s.Lineage.Unset(ctx, liveDS, domain.PropHead)
-	}
-	if err != nil {
-		return err
-	}
-	if err := s.Lineage.Mount(ctx, liveDS); err != nil {
-		return err
-	}
-	report.report("promoting")
-	if err := s.promoteOwn(ctx, br.Name); err != nil {
+	if err := s.finishDatasetSwap(ctx, br, liveDS, in.NewLine, in.head(), report); err != nil {
 		return err
 	}
 	// The data is in place: the branch runs what the data needs from here on.

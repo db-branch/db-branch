@@ -37,7 +37,7 @@ func mysqlSpec() EngineSpec {
 		Protocols:   []ProtocolPort{{Name: "mysql", Primary: true}},
 		Capabilities: RuntimeCaps{
 			Query: true, Checkpoints: true, LiveFreeze: false, Upgrade: true,
-			SourceDump: true, BranchMerge: false, HistoryRecord: true,
+			SourceDump: true, BranchMerge: true, HistoryRecord: true,
 			UpdateStats: true,
 		},
 		CheckUpgradePath: checkMySQLPath,
@@ -53,7 +53,7 @@ func postgresSpec() EngineSpec {
 		Protocols:      []ProtocolPort{{Name: "postgres", Primary: true}},
 		Capabilities: RuntimeCaps{
 			Query: true, Checkpoints: true, Upgrade: true,
-			SourceDump: true, UpdateStats: true,
+			SourceDump: true, BranchMerge: true, UpdateStats: true,
 		},
 		CheckUpgradePath: checkPostgresPath,
 		// PostgreSQL clients land in the maintenance database "postgres".

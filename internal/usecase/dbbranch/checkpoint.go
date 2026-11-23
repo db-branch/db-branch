@@ -24,6 +24,32 @@ func (s *Service) historyRoot(n domain.Name) string {
 	return s.Pool + "/db-branch/history/" + n.String()
 }
 
+func (s *Service) setHistoryProps(ctx context.Context, n domain.Name, props map[string]string) error {
+	root := s.historyRoot(n)
+	ok, err := s.Storage.Exists(ctx, root)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		if err := s.Storage.Create(ctx, root, map[string]string{"canmount": "off"}); err != nil {
+			return err
+		}
+	}
+	return s.Lineage.SetProps(ctx, root, props)
+}
+
+func (s *Service) unsetHistoryProps(ctx context.Context, n domain.Name, keys ...string) error {
+	if s.Lineage == nil {
+		return nil
+	}
+	root := s.historyRoot(n)
+	ok, err := s.Storage.Exists(ctx, root)
+	if err != nil || !ok {
+		return err
+	}
+	return s.Lineage.Unset(ctx, root, keys...)
+}
+
 func (s *Service) lineDataset(n domain.Name, line int) string {
 	return s.historyRoot(n) + "/" + strconv.Itoa(line)
 }
@@ -173,6 +199,9 @@ func (s *Service) CreateCheckpoint(ctx context.Context, n domain.Name, name stri
 	if err := br.CanCheckpoint(); err != nil {
 		return domain.Checkpoint{}, err
 	}
+	if err := s.checkNotDryRun(n); err != nil {
+		return domain.Checkpoint{}, err
+	}
 	if err := s.checkPoolRoom(ctx); err != nil {
 		return domain.Checkpoint{}, err
 	}
@@ -267,6 +296,9 @@ func (s *Service) DeleteCheckpoint(ctx context.Context, n domain.Name, name stri
 	if err := br.CanCheckpoint(); err != nil {
 		return err
 	}
+	if err := s.checkNotDryRun(n); err != nil {
+		return err
+	}
 	return s.deleteCheckpointLocked(ctx, n, name)
 }
 
@@ -332,6 +364,7 @@ func (s *Service) collect(ctx context.Context, n domain.Name) error {
 		}
 		g := domain.Garbage(lines)
 		g.Snapshots = append(g.Snapshots, s.orphanedForkSnapshots(ctx, lines, g.Datasets)...)
+		g.Snapshots = append(g.Snapshots, s.orphanedMergeSnapshots(ctx, n, lines, g.Datasets)...)
 		if len(g.Snapshots)+len(g.Datasets) == 0 {
 			return s.dropEmptyRoot(ctx, n, lines)
 		}
@@ -394,6 +427,9 @@ func (s *Service) dropEmptyRoot(ctx context.Context, n domain.Name, lines []doma
 		return err
 	}
 	if _, upgrading, err := s.readUpgradeIntent(ctx, n); err != nil || upgrading {
+		return err
+	}
+	if _, merging, err := s.readMergeIntent(ctx, n); err != nil || merging {
 		return err
 	}
 	return s.Storage.Destroy(ctx, root)

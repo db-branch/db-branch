@@ -29,6 +29,7 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/postgres"
 	"github.com/db-branch/db-branch/internal/infrastructure/runtimeprovider"
 	"github.com/db-branch/db-branch/internal/infrastructure/runtimestore"
+	"github.com/db-branch/db-branch/internal/infrastructure/sqlmerge"
 	"github.com/db-branch/db-branch/internal/infrastructure/sqlquery"
 	"github.com/db-branch/db-branch/internal/infrastructure/srcdump"
 	"github.com/db-branch/db-branch/internal/infrastructure/svcids"
@@ -189,6 +190,7 @@ func New(cfg config.Config) (*App, error) {
 		// Scheduled refreshes: dumps (unmasked data) live here only while loading.
 		Dumper: srcdump.Dumper{WorkDir: filepath.Join(cfg.DataDir, "refresh"), Providers: a.providers,
 			MaxBytes: func() int64 { return refreshMaxGB.Load() << 30 }, Free: uploads.DiskFree, Reserve: uploads.DefaultReserve},
+		Merger:    sqlmerge.New(),
 		AutoPrune: pruneSnapshots.Load,
 		// Checkpoints rename, promote and label ZFS datasets: only this node's own ZFS.
 		MaxCheckpoints: func() int { return int(maxCheckpoints.Load()) },

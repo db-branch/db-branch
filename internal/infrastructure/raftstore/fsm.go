@@ -158,7 +158,12 @@ type BranchOwner struct {
 // forking status inside insert_branch / put_branch. Older nodes drop those
 // fields and do not know BranchForking, so forked branches wait for protocol 25
 // everywhere (domain.ProtocolBranchFork).
-const Protocol = 25
+//
+// 26: branch merge: a history line of a branch may be merged into its live
+// line, carrying the merging status inside insert_branch / put_branch. Older
+// nodes do not know BranchMerging, so line merges wait for protocol 26
+// everywhere (domain.ProtocolBranchMerge).
+const Protocol = 26
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a
@@ -189,14 +194,19 @@ var opProtocol = map[string]int{
 // Needs returns the protocol the command requires (0 for unknown commands).
 // put_module needs more when it carries a runtime module: an older node would
 // take it for a plugin that never loads. insert_branch / put_branch need
+// ProtocolBranchMerge when they carry the merging status, and
 // ProtocolBranchFork when they carry a forked branch or the forking status.
 func (c Command) Needs() int {
 	if c.Op == "put_module" && c.Module != nil && c.Module.IsRuntime() {
 		return domain.ProtocolRuntimeModules
 	}
-	if (c.Op == "insert_branch" || c.Op == "put_branch") && c.Branch != nil &&
-		(c.Branch.ParentBranch != (domain.Name{}) || c.Branch.Status == domain.BranchForking) {
-		return domain.ProtocolBranchFork
+	if (c.Op == "insert_branch" || c.Op == "put_branch") && c.Branch != nil {
+		if c.Branch.Status == domain.BranchMerging {
+			return domain.ProtocolBranchMerge
+		}
+		if c.Branch.ParentBranch != (domain.Name{}) || c.Branch.Status == domain.BranchForking {
+			return domain.ProtocolBranchFork
+		}
 	}
 	return opProtocol[c.Op]
 }

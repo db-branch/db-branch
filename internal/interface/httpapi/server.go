@@ -48,6 +48,9 @@ type Branches interface {
 	// ValidateUpgrade says at once what an upgrade request would be refused for.
 	ValidateUpgrade(ctx context.Context, name domain.Name, to domain.RuntimeRef, checkOnly bool) (domain.Branch, error)
 	UpgradeBranch(ctx context.Context, req dbbranch.UpgradeRequest, report dbbranch.Reporter) (domain.UpgradeResult, error)
+	// ValidateMerge checks synchronous preconditions for merging a line/checkpoint into live.
+	ValidateMerge(ctx context.Context, req dbbranch.MergeBranchRequest) (domain.Branch, error)
+	MergeBranch(ctx context.Context, req dbbranch.MergeBranchRequest, report dbbranch.Reporter) (domain.MergeResult, error)
 	// ValidateTarget checks, for a branch created on another runtime, that this node can run it.
 	ValidateTarget(ctx context.Context, from, to domain.RuntimeRef) error
 	CreateBranchUpgraded(ctx context.Context, req dbbranch.CreateBranchRequest, report dbbranch.Reporter) (domain.Branch, *domain.UpgradeResult, error)
@@ -284,6 +287,7 @@ func (s *Server) routes(mux router, local bool) {
 	r("POST /v1/branches/{name}/checkpoints/{checkpoint}/restore", "branch.restore", s.named(s.restoreCheckpoint))
 	r("DELETE /v1/branches/{name}/checkpoints/{checkpoint}", "branch.checkpoint_delete", s.named(s.deleteCheckpoint))
 	r("POST /v1/branches/{name}/upgrade", "branch.upgrade", s.named(s.upgradeBranch))
+	r("POST /v1/branches/{name}/merge", "branch.merge", s.named(s.mergeBranch))
 	r("GET /v1/branches/{name}/dsn", "branch.connect", s.named(s.branchDSN))
 	r("POST /v1/branches/{name}/query", "branch.query", s.named(s.queryBranch))
 
@@ -544,7 +548,7 @@ func fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, domain.ErrRuntimeInstalled):
 		writeError(w, http.StatusConflict, "already_exists", err.Error())
 	case errors.Is(err, domain.ErrInvalidName), errors.Is(err, domain.ErrInvalidRuntime), errors.Is(err, domain.ErrInvalidTTL), errors.Is(err, domain.ErrInvalidRouteUser),
-		errors.Is(err, domain.ErrInvalidModule), errors.Is(err, domain.ErrInvalidRefresh), errors.Is(err, domain.ErrInvalidReplicas), errors.Is(err, domain.ErrInvalidAnonymous), errors.Is(err, domain.ErrInvalidUpdate), errors.Is(err, settings.ErrInvalid), errors.Is(err, token.ErrInvalid):
+		errors.Is(err, domain.ErrInvalidModule), errors.Is(err, domain.ErrInvalidRefresh), errors.Is(err, domain.ErrInvalidReplicas), errors.Is(err, domain.ErrInvalidAnonymous), errors.Is(err, domain.ErrInvalidUpdate), errors.Is(err, domain.ErrInvalidMergeSource), errors.Is(err, settings.ErrInvalid), errors.Is(err, token.ErrInvalid):
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.Is(err, ext.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden", err.Error())

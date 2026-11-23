@@ -2,7 +2,7 @@
 // in-memory state, with the same shapes, status codes and error codes as the
 // Go handlers (internal/interface/httpapi). Operations take realistic time and
 // publish the same events as the real server. No network, no real data.
-import type { APIToken, Base, BaseRefresh, Branch, Checkpoint, HistoryTx, Operation, SettingScope, Upload } from "../api";
+import type { APIToken, Base, BaseRefresh, Branch, Checkpoint, HistoryTx, MergeResult, Operation, SettingScope, Upload } from "../api";
 import { ownerPrefix } from "../lib/branchname";
 import { upgradeProblem, type Finding, type UpgradeResult } from "../lib/upgrade";
 import {
@@ -44,7 +44,7 @@ const ANON_TTL = 4 * 3600e3;
 const DAY = 24 * 3600e3;
 const CHECKPOINT_NAME = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const MAX_CHECKPOINT_NAME = 40;
-const CONSOLE_ACTIONS = ["base.read", "base.create", "base.delete", "base.load", "base.snapshot", "base.publish", "base.refresh", "base.refresh.read", "runtime.install", "cluster.read", "setting.write", "module.install", "token.write", "backup.read", "route-user.write", "update.read", "update.check", "update.apply", "branch.checkpoint", "branch.checkpoint_delete", "branch.restore", "branch.upgrade", "branch.fork"];
+const CONSOLE_ACTIONS = ["base.read", "base.create", "base.delete", "base.load", "base.snapshot", "base.publish", "base.refresh", "base.refresh.read", "runtime.install", "cluster.read", "setting.write", "module.install", "token.write", "backup.read", "route-user.write", "update.read", "update.check", "update.apply", "branch.checkpoint", "branch.checkpoint_delete", "branch.restore", "branch.upgrade", "branch.fork", "branch.merge"];
 const BASE_ACTIONS = ["base.snapshot", "base.load", "base.delete", "base.describe", "base.publish", "base.sql", "base.start", "base.stop", "base.refresh", "base.refresh.read", "base.snapshot_delete", "base.replicas"];
 
 /** Go-style durations: "4h", "90m", "1h30m0s". Null when it is not one. */
@@ -209,6 +209,21 @@ export class DemoBackend {
         if (op) op.result = fx.result;
         if (!b) return;
         this.finishUpgrade(b, fx.to, fx.result.checkpoint ?? "", now);
+        this.emit("branch.updated", { name: b.name });
+        return;
+      }
+      case "branch.merge": {
+        const b = s.branches.find((x) => x.name === fx.name);
+        const op = s.ops.find((o) => o.id === fx.op);
+        if (op) op.result = fx.result as unknown as UpgradeResult;
+        if (!b) return;
+        if (!fx.result.dry_run && fx.result.status === "merged" && fx.result.checkpoint) {
+          const st = this.checkpointsOf(b.name);
+          st.list.forEach((x) => (x.current = false));
+          st.list.push({ name: fx.result.checkpoint, created_at: new Date(now).toISOString(), size: 96 * 1024, line: st.line, auto: true, current: true, runtime: b.runtime });
+        }
+        b.status = "ready";
+        b.operation = null;
         this.emit("branch.updated", { name: b.name });
         return;
       }
@@ -478,6 +493,7 @@ export class DemoBackend {
     a("POST", "/v1/branches/:name/checkpoints", "user", (c) => this.createCheckpoint(c));
     a("POST", "/v1/branches/:name/checkpoints/:cp/restore", "user", (c) => this.restoreCheckpoint(c));
     a("POST", "/v1/branches/:name/upgrade", "user", (c) => this.upgradeBranch(c));
+    a("POST", "/v1/branches/:name/merge", "user", (c) => this.mergeBranch(c));
     a("DELETE", "/v1/branches/:name/checkpoints/:cp", "user", (c) => this.deleteCheckpoint(c));
     a("GET", "/v1/operations", "user", () => ok({ items: s().ops.slice(-50) }));
     a("GET", "/v1/operations/:id", "anon", (c) => {
@@ -577,6 +593,45 @@ export class DemoBackend {
     result.log = [{ level: "info", code: "log_upgrade", message: `MY-013381: Server upgrade from '${b.runtime}' to '${to}' completed.` }, { level: "warning", code: "log_warning", message: "MY-010068: CA certificate ca.pem is self signed." }];
     if (!b.runtime.startsWith("mysql")) result.log = [];
     return this.branchAction(c, "branch.upgrade", "upgrading", TIMING.restoreMysql, { k: "branch.upgrade", name: b.name, to, op: "", result });
+  }
+
+  private mergeBranch(c: Ctx): Reply {
+    const b = this.branchFor(c);
+    if (!b) return notFound("branch");
+    if (b.status !== "ready" && b.status !== "paused") return fail(409, "conflict", `branch ${b.name} is ${b.status}`);
+    const body = c.body as { source_line?: number; checkpoint?: string; dry_run?: boolean };
+    const st = this.checkpointsOf(b.name);
+    let srcLine = body.source_line;
+    if (srcLine === undefined && body.checkpoint) {
+      const cp = st.list.find((x) => x.name === body.checkpoint);
+      if (!cp && body.checkpoint !== "@reset") return notFound("checkpoint");
+      srcLine = cp ? cp.line : 0;
+    }
+    if (srcLine === undefined || srcLine === st.line) return fail(400, "invalid_request", "specify a source line or checkpoint from another line");
+    const dryRun = !!body.dry_run;
+    const checkpoint = dryRun ? undefined : `before-merge-${this.checkpointStamp(Date.now())}`;
+    const result: MergeResult = {
+      branch: b.name,
+      source_line: srcLine,
+      source_checkpoint: body.checkpoint || undefined,
+      target_line: st.line,
+      ancestor: st.lines?.find((l) => l.line === st.line)?.from ?? "cp1",
+      checkpoint,
+      dry_run: dryRun,
+      status: dryRun ? "dry_run" : "merged",
+      inserted: 2,
+      updated: 1,
+      deleted: 0,
+      tables: [{ database: "app", table: "orders", inserted: 2, updated: 1, deleted: 0 }],
+    };
+    const op = this.newOp("branch.merge", "branch", b.name);
+    if (!dryRun) {
+      b.status = "merging";
+      b.operation = { id: op.id, kind: "branch.merge" };
+    }
+    this.schedule(op, dryRun ? 500 : TIMING.restoreMysql, { k: "branch.merge", name: b.name, op: op.id, result });
+    this.emit("branch.updated", { name: b.name });
+    return ok(op, 202);
   }
 
   // finishUpgrade saves the state before as an automatic checkpoint (it records

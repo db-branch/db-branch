@@ -114,6 +114,7 @@ func fillSnapshot(s *domain.SnapshotInfo, txg map[string]uint64, snap, prop, val
 	switch prop {
 	case "createtxg":
 		txg[snap], err = strconv.ParseUint(value, 10, 64)
+		s.CreateTXG = txg[snap]
 	case "creation":
 		var secs int64
 		secs, err = strconv.ParseInt(value, 10, 64)

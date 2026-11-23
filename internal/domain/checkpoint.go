@@ -28,6 +28,9 @@ const (
 	// ForkPrefix starts the ZFS snapshot name taken on a parent branch when
 	// forking its live state.
 	ForkPrefix = "fork-"
+	// MergeSnapPrefix starts the temporary ZFS snapshot names taken on source
+	// and live datasets during a line merge.
+	MergeSnapPrefix = "merge-"
 	// GonePrefix names a deleted checkpoint that cannot be destroyed yet
 	// because a clone depends on it; it is destroyed with its last clone.
 	GonePrefix = "gone-"
@@ -63,9 +66,11 @@ const (
 	// PropRuntime (on a checkpoint) is the runtime the branch ran when it was
 	// taken, as RuntimeProp writes it; restoring the checkpoint switches back
 	// to it. On the history container it is the runtime an interrupted restore
-	// ends on. PropUpgrade (history container) records an upgrade in progress.
+	// ends on. PropUpgrade (history container) records an upgrade in progress;
+	// PropMerge (history container) records a line merge in progress.
 	PropRuntime = "db-branch:runtime"
 	PropUpgrade = "db-branch:upgrade"
+	PropMerge   = "db-branch:merge"
 	// PropFrom and PropParent (on a line's dataset) say which snapshot the
 	// line was cloned from by a restore ("ckpt-x" or "reset") and the line
 	// that snapshot was taken on.
@@ -115,10 +120,19 @@ func IsForkSnapshot(snapshot string) bool {
 	return ok && n != ""
 }
 
+// IsMergeSnapshot reports whether snapshot is a temporary merge snapshot.
+func IsMergeSnapshot(snapshot string) bool {
+	n, ok := strings.CutPrefix(snapshot, MergeSnapPrefix)
+	return ok && n != ""
+}
+
 // SnapshotInfo is a snapshot with what the checkpoint feature needs to know.
 type SnapshotInfo struct {
 	Name    string
 	Created time.Time
+	// CreateTXG is the ZFS transaction group the snapshot was created in,
+	// used to order snapshots taken within the same second.
+	CreateTXG uint64
 	// Used is the space only this snapshot holds.
 	Used uint64
 	// Clones are the datasets cloned from it.
