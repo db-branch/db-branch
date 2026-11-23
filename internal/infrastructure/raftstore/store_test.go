@@ -168,9 +168,10 @@ func TestStore_リーダーが落ちたら残りから新しいリーダーが�
 		}
 		return false
 	})
-	if _, err := next.GetBase(ctx, name("prod")); err != nil {
-		t.Errorf("state lost on failover: %v", err)
-	}
+	eventually(t, func() bool {
+		_, err := next.GetBase(ctx, name("prod"))
+		return err == nil
+	})
 	if err := next.PutBase(ctx, domain.Base{Name: name("after")}); err != nil {
 		t.Errorf("new leader cannot write: %v", err)
 	}

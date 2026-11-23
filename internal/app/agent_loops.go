@@ -110,32 +110,50 @@ func routingLoop(ctx context.Context, rt *routing.Service, kick <-chan struct{},
 // since events may have been missed.
 func branchKicks(ctx context.Context, bus *operation.Bus) <-chan struct{} {
 	kick := make(chan struct{}, 1)
+	sub := bus.Subscribe(0)
+	go pumpBranchKicks(ctx, bus, sub, kick)
+	return kick
+}
+
+func pumpBranchKicks(ctx context.Context, bus *operation.Bus, sub *operation.Subscription, kick chan<- struct{}) {
 	signal := func() {
 		select {
 		case kick <- struct{}{}:
 		default:
 		}
 	}
-	go func() {
-		for {
-			sub := bus.Subscribe(0)
-			for open := true; open; {
-				select {
-				case <-ctx.Done():
-					sub.Close()
-					return
-				case ev, ok := <-sub.Events():
-					if !ok {
-						open = false
-					} else if strings.HasPrefix(ev.Type, "branch.") {
-						signal()
+	for {
+		for open := true; open; {
+			select {
+			case <-ctx.Done():
+				sub.Close()
+				return
+			case ev, ok := <-sub.Events():
+				if !ok {
+					open = false
+				} else if strings.HasPrefix(ev.Type, "branch.") {
+					for drain := true; drain; {
+						select {
+						case ev, ok = <-sub.Events():
+							if !ok {
+								open = false
+								drain = false
+							}
+						default:
+							drain = false
+						}
 					}
+					signal()
 				}
 			}
-			signal()
 		}
-	}()
-	return kick
+		if ctx.Err() != nil {
+			return
+		}
+		// Subscribe before signaling so events after the kick are never missed.
+		sub = bus.Subscribe(0)
+		signal()
+	}
 }
 
 func every(ctx context.Context, d time.Duration, f func()) {

@@ -1,6 +1,7 @@
 package raftstore_test
 
 import (
+	"errors"
 	"net"
 	"testing"
 
@@ -31,7 +32,8 @@ func TestTLSTransport_相互TLSでRaftが複製する(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s, err := raftstore.Open(raftstore.Options{NodeID: id, Transport: tr, InMemory: true, Fast: true})
+		// Real mTLS handshakes under -race can exceed Fast's 50 ms lease timeout.
+		s, err := raftstore.Open(raftstore.Options{NodeID: id, Transport: tr, InMemory: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -40,19 +42,23 @@ func TestTLSTransport_相互TLSでRaftが複製する(t *testing.T) {
 		servers = append(servers, raft.Server{ID: raft.ServerID(id), Address: raft.ServerAddress(a)})
 	}
 	_ = stores[0].Bootstrap(servers)
-	var leader, follower *raftstore.Store
+	var follower *raftstore.Store
 	eventually(t, func() bool {
 		for i, s := range stores {
-			if s.IsLeader() {
-				leader, follower = s, stores[1-i]
-				return true
+			if !s.IsLeader() {
+				continue
 			}
+			if err := s.PutBase(ctx, domain.Base{Name: name("prod")}); err != nil {
+				if errors.Is(err, domain.ErrNoLeader) {
+					return false
+				}
+				t.Fatal(err)
+			}
+			follower = stores[1-i]
+			return true
 		}
 		return false
 	})
-	if err := leader.PutBase(ctx, domain.Base{Name: name("prod")}); err != nil {
-		t.Fatal(err)
-	}
 	eventually(t, func() bool { _, err := follower.GetBase(ctx, name("prod")); return err == nil })
 }
 
