@@ -21,8 +21,8 @@ describe("demo-worker _redirects (paths the analytics can count)", () => {
     expect(rule("/go/getting-started")).toEqual({ from: "/go/getting-started", to: "https://db-branch.com/docs/getting-started/", status: 302 });
     expect(rule("/go/getting-started-ja")).toEqual({ from: "/go/getting-started-ja", to: "https://db-branch.com/ja/docs/getting-started/", status: 302 });
   });
-  it("sends /go/interest to the Team / Business interest form (the URL is a placeholder until the form exists)", () => {
-    expect(rule("/go/interest")).toEqual({ from: "/go/interest", to: "https://docs.google.com/forms/d/e/PLACEHOLDER/viewform", status: 302 });
+  it("sends /go/interest to the Team / Business interest form", () => {
+    expect(rule("/go/interest")).toEqual({ from: "/go/interest", to: "https://docs.google.com/forms/d/e/1FAIpQLSeXzl0jePZRGCgFTAfCBImiJrhjsy1KxCM3q1LnFWaK4TRBVQ/viewform", status: 302 });
   });
   it("sends /go/contact to the pricing page where both ways to get in touch are, English and Japanese", () => {
     expect(rule("/go/contact")).toEqual({ from: "/go/contact", to: "https://db-branch.com/plans/#interested", status: 302 });
