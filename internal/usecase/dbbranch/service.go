@@ -143,6 +143,8 @@ type Service struct {
 	mu sync.Mutex
 	// deletingBases are the bases a DeleteBase is removing (guarded by mu).
 	deletingBases map[domain.Name]bool
+	// reservedPorts holds ephemeral ports (e.g. temp merge clones) guarded by mu.
+	reservedPorts map[int]bool
 	// mergingDryRun tracks branches currently running `branch merge --dry-run`.
 	dryRunMu      sync.Mutex
 	mergingDryRun map[domain.Name]bool
@@ -281,6 +283,9 @@ func (s *Service) allocatePorts(ctx context.Context, count int) ([]int, error) {
 		if s.owns(b.Node) {
 			used[b.Port] = true
 		}
+	}
+	for p := range s.reservedPorts {
+		used[p] = true
 	}
 	pr := s.portRange()
 	out := make([]int, 0, count)

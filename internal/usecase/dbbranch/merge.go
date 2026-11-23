@@ -475,21 +475,23 @@ func (s *Service) MergeBranch(ctx context.Context, req MergeBranchRequest, repor
 	}
 
 	// Step 6: Restore branch to pre-merge status, then clear merge intent.
+	// Live data has already been committed; do not let context cancellation leave BranchMerging.
+	finishCtx := context.WithoutCancel(ctx)
 	if prevStatus == domain.BranchReady {
-		normalSpec, err := s.branchSpec(mergeCtx, br, liveDS, false, false)
+		normalSpec, err := s.branchSpec(finishCtx, br, liveDS, false, false)
 		if err != nil {
 			return s.failMergeAndRollback(ctx, br, in, res, err, report)
 		}
 		report.report("starting")
-		if err := srv.Start(mergeCtx, normalSpec); err != nil {
+		if err := srv.Start(finishCtx, normalSpec); err != nil {
 			return s.failMergeAndRollback(ctx, br, in, res, err, report)
 		}
 	}
 	br.Status, br.Error = prevStatus, ""
-	if err := s.saveBranch(mergeCtx, br); err != nil {
+	if err := s.saveBranch(finishCtx, br); err != nil {
 		return res, err
 	}
-	_ = s.clearMergeIntent(mergeCtx, br.Name)
+	_ = s.clearMergeIntent(finishCtx, br.Name)
 	res.Status = domain.MergeMerged
 	s.rotateAuto(ctx, br.Name)
 	s.collectIfSettled(ctx, br.Name)
@@ -508,6 +510,7 @@ func (s *Service) runCloneDiff(
 	var createdWorkDir bool
 	var tempSnaps []string
 	var tempClones []string
+	var reservedPorts []int
 	var tempServers []struct {
 		srv  domain.DBServer
 		spec domain.Server
@@ -519,6 +522,13 @@ func (s *Service) runCloneDiff(
 			ts := tempServers[i]
 			_ = ts.srv.Stop(wctx, ts.spec, domain.StopImmediate)
 			_ = ts.srv.Remove(wctx, ts.spec)
+		}
+		if len(reservedPorts) > 0 {
+			s.mu.Lock()
+			for _, p := range reservedPorts {
+				delete(s.reservedPorts, p)
+			}
+			s.mu.Unlock()
 		}
 		for i := len(tempClones) - 1; i >= 0; i-- {
 			_ = s.destroyIfExists(wctx, tempClones[i])
@@ -568,9 +578,18 @@ func (s *Service) runCloneDiff(
 	}
 	createdWorkDir = true
 
-	// Allocate 3 distinct ports for A, S, T.
+	// Allocate 3 distinct ports for A, S, T and hold them reserved until cleanup.
 	s.mu.Lock()
 	ports, err := s.allocatePorts(ctx, 3)
+	if err == nil {
+		if s.reservedPorts == nil {
+			s.reservedPorts = map[int]bool{}
+		}
+		for _, p := range ports {
+			s.reservedPorts[p] = true
+		}
+		reservedPorts = ports
+	}
 	s.mu.Unlock()
 	if err != nil {
 		return domain.MergePlan{}, err

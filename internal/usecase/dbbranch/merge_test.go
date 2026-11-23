@@ -878,4 +878,41 @@ func TestMergeBranch_追加網羅_PausedPreCrashとSwapped済ロールバック�
 	z11.sim.readFail = "Props"
 	_ = z11.svc.Recover(ctx)
 	z11.sim.readFail = ""
+
+	// Concurrent dry-run reserves 3 temp ports so CreateBranch gets a distinct port;
+	// and cancelling ctx once Apply commits does not prevent Step 6 from saving BranchReady.
+	z12, m12 := newMergeEnv(t)
+	var createdPort int
+	var diffPorts []int
+	base12, _ := z12.store.GetBase(ctx, name("prod"))
+	prodSnap := base12.Snapshots[0].Name
+	m12.onDiff = func(req domain.MergeDiffRequest) {
+		diffPorts = []int{req.Ancestor.Port, req.Source.Port, req.Target.Port}
+		yb, err := z12.svc.CreateBranch(ctx, dbbranch.CreateBranchRequest{Name: name("y"), Base: name("prod"), Snapshot: prodSnap}, nil)
+		if err != nil {
+			t.Errorf("concurrent CreateBranch during dry-run: %v", err)
+			return
+		}
+		createdPort = yb.Port
+	}
+	if _, err := z12.svc.MergeBranch(ctx, dbbranch.MergeBranchRequest{Name: name("x"), SourceLine: intPtr(0), DryRun: true}, nil); err != nil {
+		t.Fatalf("dry-run with concurrent CreateBranch: %v", err)
+	}
+	for _, p := range diffPorts {
+		if p == createdPort {
+			t.Errorf("CreateBranch allocated port %d overlapping active merge temp port %v", createdPort, diffPorts)
+		}
+	}
+	m12.onDiff = nil
+	cctx, cancel := context.WithCancel(ctx)
+	m12.onApply = func(domain.AdminAccess, domain.MergePlan) {
+		cancel()
+	}
+	res12, err := z12.svc.MergeBranch(cctx, dbbranch.MergeBranchRequest{Name: name("x"), SourceLine: intPtr(0)}, nil)
+	if err != nil || res12.Status != domain.MergeMerged {
+		t.Fatalf("cancel after Apply should still commit Step 6 cleanly: res=%+v err=%v", res12, err)
+	}
+	if br12, _ := z12.store.GetBranch(ctx, name("x")); br12.Status != domain.BranchReady {
+		t.Errorf("expected BranchReady after Step 6, got %s", br12.Status)
+	}
 }
