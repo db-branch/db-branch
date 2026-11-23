@@ -24,6 +24,8 @@ export function BranchView({
   onCopyProxy,
   onPause,
   onResume,
+  onFork,
+  onOpenParent,
 }: {
   b: Branch;
   clustered: boolean;
@@ -37,6 +39,8 @@ export function BranchView({
   onCopyProxy: () => void;
   onPause: () => void;
   onResume: () => void;
+  onFork?: () => void;
+  onOpenParent?: (name: string) => void;
 }): ReactNode {
   const ready = b.status === "ready";
   return (
@@ -62,6 +66,21 @@ export function BranchView({
         <dd className="mono" title={`snapshot ${b.snapshot}`}>
           {b.base} <span className="muted">@ {b.snapshot}</span>
         </dd>
+        {b.parent_branch && (
+          <>
+            <dt>{t("Forked from")}</dt>
+            <dd className="mono">
+              {onOpenParent ? (
+                <button type="button" className="link-button mono" onClick={() => onOpenParent(b.parent_branch!)}>
+                  {b.parent_branch}
+                </button>
+              ) : (
+                b.parent_branch
+              )}
+              {b.parent_snapshot && <span className="muted"> @ {b.parent_snapshot}</span>}
+            </dd>
+          </>
+        )}
         <dt>{t("Engine")}</dt>
         <dd>
           <Engine runtime={b.runtime} />
@@ -92,8 +111,9 @@ export function BranchView({
         </dd>
       </dl>
       <div className="branch-actions" role="group" aria-label={t("Actions")}>
-        {b.status === "lost" && <button onClick={onRecreate}>{t("Recreate")}</button>}
+        {b.status === "lost" && !b.parent_branch && <button onClick={onRecreate}>{t("Recreate")}</button>}
         {b.proxy && <button onClick={onCopyProxy}>{t("Copy proxy URL")}</button>}
+        {onFork && (b.status === "ready" || b.status === "paused") && b.checkpoints && <button onClick={onFork}>Fork</button>}
         {b.status === "ready" && <button onClick={onPause}>Pause</button>}
         {b.status === "paused" && <button onClick={onResume}>Resume</button>}
         <button onClick={() => onExtend("1h")}>{t("Extend 1h")}</button>

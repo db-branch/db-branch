@@ -17,9 +17,11 @@ type branchView struct {
 	Name     string  `json:"name"`
 	Status   string  `json:"status"`
 	Reason   *string `json:"status_reason"`
-	Base     string  `json:"base"`
-	Snapshot string  `json:"snapshot"`
-	Runtime  string  `json:"runtime"`
+	Base           string  `json:"base"`
+	Snapshot       string  `json:"snapshot"`
+	ParentBranch   *string `json:"parent_branch,omitempty"`
+	ParentSnapshot *string `json:"parent_snapshot,omitempty"`
+	Runtime        string  `json:"runtime"`
 	// BaseRuntime is the base's; it differs once the branch is upgraded.
 	BaseRuntime string  `json:"base_runtime"`
 	Node        string  `json:"node"`
@@ -154,6 +156,81 @@ func (a *App) branchCommand() *cobra.Command {
 	create.Flags().StringVar(&runtime, "runtime", "", "create the branch, then upgrade it to this newer runtime of the base's engine (engine@version), e.g. mysql@8.4.13: an old/new pair from one base")
 	create.Flags().StringVar(&access, "access", "", "private (own password, owner and admins only) or open (anyone, shared password)")
 
+	var forkCP, forkInitSQL, forkInitFile, forkTTL, forkNode, forkOwner, forkAccess string
+	var forkClean, forkRecord bool
+	fork := &cobra.Command{
+		Use:   "fork <source-branch> <new-name>",
+		Short: "Fork an existing branch (current state or checkpoint) into a new independent branch",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			srcArg := args[0]
+			if i := strings.LastIndex(srcArg, "/"); i >= 0 {
+				srcArg = srcArg[i+1:]
+			}
+			src, err := domain.ParseName(srcArg)
+			if err != nil {
+				return err
+			}
+			dst, err := domain.ParseName(args[1])
+			if err != nil {
+				return err
+			}
+			if forkAccess != "" && !domain.ValidAccess(forkAccess) {
+				return fmt.Errorf("--access: %q is neither %s nor %s", forkAccess, domain.AccessPrivate, domain.AccessOpen)
+			}
+			sql := forkInitSQL
+			if forkInitFile != "" {
+				b, err := os.ReadFile(forkInitFile)
+				if err != nil {
+					return err
+				}
+				sql = string(b)
+			}
+			c, err := a.client()
+			if err != nil {
+				return err
+			}
+			body := map[string]any{"name": dst.String()}
+			if forkCP != "" {
+				body["checkpoint"] = forkCP
+			}
+			if forkClean {
+				body["clean"] = true
+			}
+			if sql != "" {
+				body["init_sql"] = sql
+			}
+			if forkTTL != "" {
+				body["ttl"] = forkTTL
+			}
+			if forkNode != "" {
+				body["node"] = forkNode
+			}
+			if forkOwner != "" {
+				body["owner"] = forkOwner
+			}
+			if forkAccess != "" {
+				body["access"] = forkAccess
+			}
+			if forkRecord {
+				body["record"] = true
+			}
+			if err := a.start(cmd.Context(), c, "POST", "/v1/branches/"+src.String()+"/fork", body, noWait); err != nil || noWait {
+				return err
+			}
+			return a.showBranch(cmd, c, dst)
+		},
+	}
+	fork.Flags().StringVar(&forkCP, "checkpoint", "", "parent checkpoint name (or @reset) to fork from (default: current live state)")
+	fork.Flags().BoolVar(&forkClean, "clean", false, "stop a ready parent cleanly before taking the snapshot (ignored with --checkpoint or paused parent)")
+	fork.Flags().StringVar(&forkInitSQL, "init-sql", "", "SQL to run once on the child after cloning")
+	fork.Flags().StringVar(&forkInitFile, "init-file", "", "read --init-sql from a file")
+	fork.Flags().StringVar(&forkTTL, "ttl", "", "delete automatically after this long, e.g. 24h")
+	fork.Flags().StringVar(&forkNode, "node", "", "cluster node (must match the parent's node)")
+	fork.Flags().StringVar(&forkOwner, "owner", "", "who manages the branch (admins only; default: you)")
+	fork.Flags().StringVar(&forkAccess, "access", "", "private (own password, owner and admins only) or open (anyone, shared password)")
+	fork.Flags().BoolVar(&forkRecord, "record", false, "record the forked branch's changes (needs the history module)")
+
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List branches",
@@ -270,12 +347,12 @@ func (a *App) branchCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE:  a.restoreCheckpoint(&noWait),
 	}
-	for _, c := range []*cobra.Command{create, reset, pause, resume, recreate, del, restore} {
+	for _, c := range []*cobra.Command{create, fork, reset, pause, resume, recreate, del, restore} {
 		c.Flags().BoolVar(&noWait, "no-wait", false, "print the operation ID and return immediately")
 	}
 	upgrade := a.upgradeCommand(&noWait)
 	upgrade.Flags().BoolVar(&noWait, "no-wait", false, "print the operation ID and return immediately")
-	cmd.AddCommand(create, list, show, dsn, reset, pause, resume, recreate, del, extend, a.checkpointCommand(), a.checkpointsCommand(), restore, upgrade)
+	cmd.AddCommand(create, fork, list, show, dsn, reset, pause, resume, recreate, del, extend, a.checkpointCommand(), a.checkpointsCommand(), restore, upgrade)
 	return cmd
 }
 
@@ -312,6 +389,13 @@ func (a *App) showBranch(cmd *cobra.Command, c Client, n domain.Name) error {
 	}
 	fmt.Fprintf(tw, "Recording:\t%s\n", map[bool]string{true: "on (since creation)", false: "off"}[b.Record])
 	fmt.Fprintf(tw, "Base:\t%s @ %s\n", b.Base, b.Snapshot)
+	if b.ParentBranch != nil && *b.ParentBranch != "" {
+		if b.ParentSnapshot != nil && *b.ParentSnapshot != "" {
+			fmt.Fprintf(tw, "Parent:\t%s @ %s\n", *b.ParentBranch, *b.ParentSnapshot)
+		} else {
+			fmt.Fprintf(tw, "Parent:\t%s\n", *b.ParentBranch)
+		}
+	}
 	if b.BaseRuntime != "" && b.BaseRuntime != b.Runtime {
 		fmt.Fprintf(tw, "Runtime:\t%s (upgraded; the base runs %s)\n", b.Runtime, b.BaseRuntime)
 	} else {

@@ -26,6 +26,9 @@ export type Branch = {
   checkpoints: boolean;
   // base_runtime: the Base's runtime; runtime differs once the Branch is upgraded.
   base_runtime?: string;
+  // parent_branch and parent_snapshot are set when the branch was forked from another branch.
+  parent_branch?: string | null;
+  parent_snapshot?: string | null;
 };
 
 // ownerLabel returns the human-readable owner label, falling back to owner id.
@@ -398,6 +401,8 @@ export const api = {
   branches: () => call<{ items: Branch[] }>("GET", "/v1/branches").then((r) => r.items),
   upgradeBranch: (name: string, body: { runtime: string; check_only?: boolean; no_rollback?: boolean; force?: boolean }) => call<Operation>("POST", `/v1/branches/${name}/upgrade`, body),
   createBranch: (b: { name: string; base: string; ttl?: string; init_sql?: string; owner?: string; access?: string; record?: boolean; runtime?: string }) => call<Operation>("POST", "/v1/branches", b),
+  forkBranch: (source: string, b: { name: string; checkpoint?: string; clean?: boolean; init_sql?: string; ttl?: string; owner?: string; access?: string; record?: boolean }) =>
+    call<Operation>("POST", `/v1/branches/${encodeURIComponent(source)}/fork`, b),
   recreateBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/recreate`),
   resetBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/reset`),
   query: (name: string, sql: string, maxRows?: number) => call<QueryResult>("POST", `/v1/branches/${name}/query`, { sql, max_rows: maxRows }),

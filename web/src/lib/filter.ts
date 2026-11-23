@@ -43,7 +43,7 @@ export function filterBranches(list: Branch[], f: FilterValues): Branch[] {
       (!f.engine || engineOf(b.runtime) === f.engine) &&
       (!f.base || b.base === f.base) &&
       (!f.owner || ownerLabel(b) === f.owner || b.owner === f.owner) &&
-      matches(f.q ?? "", [b.name, b.id, b.owner ?? "", b.owner_name ?? "", b.base, b.runtime, b.status, b.status_reason ?? "", b.access]),
+      matches(f.q ?? "", [b.name, b.id, b.owner ?? "", b.owner_name ?? "", b.base, b.parent_branch ?? "", b.runtime, b.status, b.status_reason ?? "", b.access]),
   );
 }
 

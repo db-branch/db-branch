@@ -90,5 +90,16 @@ describe("BranchView", () => {
     expect(paused).toMatch(/<button[^>]*disabled[^>]*>Reset/);
     expect(paused).not.toMatch(/<button[^>]*disabled[^>]*>Delete/);
   });
+  it("shows Fork for ready or paused branches with checkpoints, shows parent link, and hides Recreate on lost forks", () => {
+    expect(view(branch(), { onFork: noop })).toContain(">Fork<");
+    expect(view(branch({ status: "paused" }), { onFork: noop })).toContain(">Fork<");
+    expect(view(branch({ checkpoints: false }), { onFork: noop })).not.toContain(">Fork<");
+    expect(view(branch({ status: "restoring" }), { onFork: noop })).not.toContain(">Fork<");
+    const forked = view(branch({ parent_branch: "parent-br", parent_snapshot: "fork-alice-feature-x" }), { onOpenParent: noop });
+    expect(forked).toContain("Forked from");
+    expect(forked).toContain("parent-br");
+    const lostFork = view(branch({ status: "lost", parent_branch: "parent-br" }));
+    expect(lostFork).not.toContain("Recreate");
+  });
 });
 

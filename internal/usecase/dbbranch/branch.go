@@ -186,8 +186,7 @@ func (s *Service) reserveBranch(ctx context.Context, req CreateBranchRequest) (d
 }
 
 func (s *Service) buildBranch(ctx context.Context, br *domain.Branch, initSQL string, report Reporter) error {
-	srv, err := s.server(br.Runtime)
-	if err != nil {
+	if _, err := s.server(br.Runtime); err != nil {
 		return err
 	}
 	base, err := s.Store.GetBase(ctx, br.Base)
@@ -199,6 +198,15 @@ func (s *Service) buildBranch(ctx context.Context, br *domain.Branch, initSQL st
 	if err := s.Storage.Clone(ctx, domain.Snapshot{Dataset: s.sourceDataset(base), Name: br.Snapshot}, ds); err != nil {
 		return err
 	}
+	return s.finishClonedBranch(ctx, br, initSQL, report)
+}
+
+func (s *Service) finishClonedBranch(ctx context.Context, br *domain.Branch, initSQL string, report Reporter) error {
+	srv, err := s.server(br.Runtime)
+	if err != nil {
+		return err
+	}
+	ds := s.branchDataset(br.Name)
 	// A clone takes the properties of its new parent, not of its origin.
 	if err := s.applyEngineProps(ctx, br.Runtime, ds); err != nil {
 		return err
@@ -228,10 +236,22 @@ func (s *Service) buildBranch(ctx context.Context, br *domain.Branch, initSQL st
 	if err := srv.CreateUser(ctx, spec, br.User, br.Password); err != nil {
 		return err
 	}
+	if br.ParentBranch != (domain.Name{}) {
+		if err := s.dropInheritedUsers(ctx, *br, srv, spec); err != nil {
+			return err
+		}
+	}
 	if initSQL != "" {
 		// As the branch login, not the admin: the SQL comes from whoever asked for the branch.
 		if err := srv.ExecAs(ctx, spec, br.User, br.Password, initSQL); err != nil {
 			return fmt.Errorf("init sql: %w", err)
+		}
+	}
+	if br.ParentBranch != (domain.Name{}) && br.Record {
+		if hr, ok := srv.(domain.CloneHistoryResetter); ok {
+			if err := hr.ResetCloneHistory(ctx, spec); err != nil {
+				return fmt.Errorf("reset clone history: %w", err)
+			}
 		}
 	}
 	report.report("stopping")
@@ -240,8 +260,14 @@ func (s *Service) buildBranch(ctx context.Context, br *domain.Branch, initSQL st
 	}
 	started = false
 	report.report("snapshotting")
-	if err := s.Storage.Snapshot(ctx, domain.Snapshot{Dataset: ds, Name: ResetSnapshot}); err != nil {
+	resetSnap := domain.Snapshot{Dataset: ds, Name: ResetSnapshot}
+	if err := s.Storage.Snapshot(ctx, resetSnap); err != nil {
 		return err
+	}
+	if br.ParentBranch != (domain.Name{}) && s.Lineage != nil && br.Runtime != (domain.RuntimeRef{}) {
+		if err := s.Lineage.SetProps(ctx, resetSnap.String(), map[string]string{domain.PropRuntime: domain.RuntimeProp(br.Runtime)}); err != nil {
+			return err
+		}
 	}
 	report.report("starting")
 	return srv.Start(ctx, spec)
@@ -327,9 +353,9 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 			return br, s.fail(ctx, br, err)
 		}
 	}
-	// The reset point is the base's state, made by the base's runtime.
-	if rt := s.runtimeOf(ctx, br, ""); rt != br.Runtime || br.LegacyAuth {
-		br.Runtime, br.LegacyAuth = rt, false
+	// The reset point is the base's state (or the fork state for a forked branch).
+	if rt := s.runtimeOf(ctx, br, ""); rt != br.Runtime || br.LegacyAuth != br.ForkLegacyAuth {
+		br.Runtime, br.LegacyAuth = rt, br.ForkLegacyAuth
 		if err := s.saveBranch(ctx, br); err != nil {
 			return br, s.fail(ctx, br, err)
 		}
@@ -364,7 +390,7 @@ func (s *Service) DeleteBranch(ctx context.Context, name domain.Name, report Rep
 	if done, err := s.abandonLost(ctx, name); done || err != nil {
 		return err
 	}
-	br, err := s.transitionBranch(ctx, name, domain.Branch.CanDelete, domain.BranchDeleting)
+	br, err := s.transitionBranch(ctx, name, domain.Branch.CanDelete, domain.BranchDeleting, s.checkNoForkChildren)
 	if err != nil {
 		return err
 	}
@@ -384,7 +410,11 @@ func (s *Service) doDelete(ctx context.Context, br domain.Branch, report Reporte
 	if err := s.destroyBranchData(ctx, br.Name); err != nil {
 		return s.fail(ctx, br, err)
 	}
-	return s.Store.DeleteBranch(ctx, br.Name)
+	if err := s.Store.DeleteBranch(ctx, br.Name); err != nil {
+		return err
+	}
+	s.cleanupParentFork(ctx, br)
+	return nil
 }
 
 // ExtendBranch moves the expiry to now+ttl.
@@ -410,6 +440,7 @@ func (s *Service) ExtendBranch(ctx context.Context, name domain.Name, ttl time.D
 }
 
 // Expire deletes branches whose TTL has run out and returns their names.
+// Parents with surviving forked children are skipped until their children go.
 func (s *Service) Expire(ctx context.Context) ([]domain.Name, error) {
 	branches, err := s.Store.ListBranches(ctx)
 	if err != nil {
@@ -417,15 +448,28 @@ func (s *Service) Expire(ctx context.Context) ([]domain.Name, error) {
 	}
 	var deleted []domain.Name
 	var errs []error
-	for _, b := range branches {
-		if !s.owns(b.Node) || !b.Expired(s.Clock()) || b.CanDelete() != nil {
-			continue
+	for {
+		progressed := false
+		var deferred []domain.Branch
+		for _, b := range branches {
+			if !s.owns(b.Node) || !b.Expired(s.Clock()) || b.CanDelete() != nil {
+				continue
+			}
+			if err := s.DeleteBranch(ctx, b.Name, nil); err != nil {
+				if errors.Is(err, domain.ErrInUse) {
+					deferred = append(deferred, b)
+					continue
+				}
+				errs = append(errs, err)
+				continue
+			}
+			deleted = append(deleted, b.Name)
+			progressed = true
 		}
-		if err := s.DeleteBranch(ctx, b.Name, nil); err != nil {
-			errs = append(errs, err)
-			continue
+		if !progressed || len(deferred) == 0 {
+			break
 		}
-		deleted = append(deleted, b.Name)
+		branches = deferred
 	}
 	return deleted, errors.Join(errs...)
 }
@@ -458,39 +502,14 @@ func (s *Service) Recover(ctx context.Context) error {
 		return errors.Join(baseErr, err)
 	}
 	errs := []error{baseErr}
+	var deleting []domain.Branch
 	for _, br := range branches {
 		if !s.owns(br.Node) {
 			continue
 		}
 		switch br.Status {
 		case domain.BranchReady:
-			srv, spec, started, err := s.startServerIfDown(ctx, br)
-			if errors.Is(err, ErrRecordRequired) {
-				// Say why it is down; the next start retries (resumeFailedRestore).
-				err = errors.Join(err, s.markFailed(ctx, br, err))
-			}
-			if err != nil {
-				if s.branchRunning(ctx, br) {
-					err = errors.Join(err, s.releaseFreeze(ctx, br))
-				}
-				errs = append(errs, err)
-				break
-			}
-			// Release any leftover live freeze before running writes (ownUser/putLoginRight).
-			if err := s.releaseFreeze(ctx, br); err != nil {
-				if started {
-					_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
-				}
-				errs = append(errs, err)
-				break
-			}
-			errs = append(errs, s.ownUser(ctx, br))
-			if err := s.putLoginRight(ctx, br, srv, spec); err != nil {
-				if started {
-					_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
-				}
-				errs = append(errs, err)
-			}
+			errs = append(errs, s.recoverRunning(ctx, br, true))
 		case domain.BranchResetting:
 			_, err := s.doReset(ctx, br, nil)
 			errs = append(errs, err)
@@ -502,17 +521,57 @@ func (s *Service) Recover(ctx context.Context) error {
 		case domain.BranchResuming:
 			_, err := s.doResume(ctx, br, nil)
 			errs = append(errs, err)
+		case domain.BranchForking:
+			errs = append(errs, s.recoverForking(ctx, br))
 		case domain.BranchUpgrading:
 			errs = append(errs, s.resumeUpgrade(ctx, br))
 		case domain.BranchFailed:
 			errs = append(errs, s.resumeFailedRestore(ctx, br))
 		case domain.BranchDeleting:
-			errs = append(errs, s.doDelete(ctx, br, nil))
+			deleting = append(deleting, br)
 		case domain.BranchProvisioning:
 			errs = append(errs, s.stopBranchImmediate(ctx, br), s.markFailed(ctx, br, errors.New("interrupted by an agent restart; delete and create it again")))
 		}
 	}
+	// Finish interrupted deletes after parents have settled so cleanupParentFork
+	// never races a parent's upgrade/restore/reset/fork recovery.
+	for _, br := range deleting {
+		errs = append(errs, s.doDelete(ctx, br, nil))
+	}
 	return errors.Join(errs...)
+}
+
+func (s *Service) recoverRunning(ctx context.Context, br domain.Branch, withOwnUser bool) error {
+	srv, spec, started, err := s.startServerIfDown(ctx, br)
+	if errors.Is(err, ErrRecordRequired) {
+		// Say why it is down; the next start retries (resumeFailedRestore).
+		err = errors.Join(err, s.markFailed(ctx, br, err))
+	}
+	if err != nil {
+		if s.branchRunning(ctx, br) {
+			err = errors.Join(err, s.releaseFreeze(ctx, br))
+		}
+		return err
+	}
+	stopIfStarted := func() {
+		if started {
+			_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
+		}
+	}
+	// Release any leftover live freeze before running writes (ownUser/putLoginRight).
+	if err := s.releaseFreeze(ctx, br); err != nil {
+		stopIfStarted()
+		return err
+	}
+	var ownErr error
+	if withOwnUser {
+		ownErr = s.ownUser(ctx, br)
+	}
+	if err := s.putLoginRight(ctx, br, srv, spec); err != nil {
+		stopIfStarted()
+		return errors.Join(ownErr, err)
+	}
+	return ownErr
 }
 
 func (s *Service) branchRunning(ctx context.Context, br domain.Branch) bool {
@@ -616,6 +675,9 @@ func (s *Service) abandonLost(ctx context.Context, name domain.Name) (bool, erro
 	br, err := s.Store.GetBranch(ctx, name)
 	if err != nil || br.Status != domain.BranchLost || s.owns(br.Node) {
 		return false, nil
+	}
+	if err := s.checkNoForkChildren(ctx, br); err != nil {
+		return true, err
 	}
 	br.Status, br.Error = domain.BranchDeleting, abandoned
 	return true, s.Store.PutBranch(ctx, br)

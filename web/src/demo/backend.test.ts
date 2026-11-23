@@ -843,3 +843,37 @@ describe("sql runner", () => {
   });
 });
 
+describe("branch fork", () => {
+  const settle = (ms = 2300) => vi.advanceTimersByTime(ms);
+
+  it("forks a live branch, blocks parent deletion with 409 in_use, and allows parent deletion after child goes", () => {
+    const r = call("POST", "/v1/branches/report-fix/fork", { name: "report-exp", ttl: "24h" });
+    expect(r.status).toBe(202);
+    const o = r.body as Operation;
+    expect(o).toMatchObject({ kind: "branch.fork", target: { resource: "branch", name: "report-exp" } });
+    settle();
+    const child = branch("report-exp")!;
+    expect(child).toMatchObject({ status: "ready", parent_branch: "report-fix", parent_snapshot: "fork-report-exp", base: "orders", node: branch("report-fix")!.node });
+    expect(call("DELETE", "/v1/branches/report-fix")).toMatchObject({ status: 409, body: { error: { code: "in_use" } } });
+    expect(call("DELETE", "/v1/branches/report-exp").status).toBe(202);
+    settle();
+    expect(call("DELETE", "/v1/branches/report-fix").status).toBe(202);
+  });
+
+  it("forks from a checkpoint or @reset and prefixes non-admin names", () => {
+    const r1 = call("POST", "/v1/branches/migration-test/fork", { name: "from-cp", checkpoint: "before-migration" });
+    expect(r1.status).toBe(202);
+    settle();
+    expect(branch("from-cp")).toMatchObject({ parent_branch: "migration-test", parent_snapshot: "ckpt-before-migration" });
+    expect(call("POST", "/v1/branches/from-cp/recreate")).toMatchObject({ status: 409, body: { error: { code: "conflict" } } });
+    expect(call("POST", "/v1/branches/migration-test/fork", { name: "bad-cp", checkpoint: "nope" }).status).toBe(404);
+
+    b.signIn("developer");
+    const r2 = call("POST", "/v1/branches/alex-checkout-fix/fork", { name: "try1", checkpoint: "@reset" });
+    expect(r2.status).toBe(202);
+    settle();
+    expect(branch("alex-try1")).toMatchObject({ parent_branch: "alex-checkout-fix", parent_snapshot: "reset", owner: "alex@example.com" });
+    expect(call("POST", "/v1/branches/alex-checkout-fix/fork", { name: "try1" })).toMatchObject({ status: 409, body: { error: { code: "already_exists" } } });
+  });
+});
+

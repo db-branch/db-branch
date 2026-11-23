@@ -18,7 +18,8 @@ import (
 
 // mcpInstructions tell an LLM agent how to use the tools.
 const mcpInstructions = `db-branch gives you disposable copies (branches) of real databases.
-Create a branch from a base, work in it freely (query, change data or schema),
+Create a branch from a base, or fork an existing branch with fork_branch to try
+an alternative without touching the original. Work in it freely (query, change data or schema),
 reset it to start over, and delete it when done. Branches are isolated: nothing
 you do reaches the base or other branches. Prefer a short ttl (e.g. "4h").
 Before risky work (a migration, a bulk update) take a checkpoint with
@@ -187,6 +188,17 @@ type createIn struct {
 	Runtime  string `json:"runtime,omitempty" jsonschema:"create the branch on a newer version of the base's engine, e.g. mysql@8.4.13 (upgraded right after creation)"`
 }
 
+type forkIn struct {
+	Source     string `json:"source" jsonschema:"the existing branch to fork from"`
+	Name       string `json:"name" jsonschema:"new branch name: lowercase letters, digits and hyphens"`
+	Checkpoint string `json:"checkpoint,omitempty" jsonschema:"parent checkpoint name (or @reset); default the parent's current state"`
+	Clean      bool   `json:"clean,omitempty" jsonschema:"stop a ready parent cleanly before taking the snapshot (ignored with checkpoint or paused parent)"`
+	InitSQL    string `json:"init_sql,omitempty" jsonschema:"SQL run once on the child after cloning; reset returns here"`
+	TTL        string `json:"ttl,omitempty" jsonschema:"delete automatically after this long, e.g. 4h"`
+	Access     string `json:"access,omitempty" jsonschema:"private (default) or open"`
+	Record     bool   `json:"record,omitempty" jsonschema:"record the forked branch's changes (needs the history module)"`
+}
+
 type extendIn struct {
 	Name string `json:"name" jsonschema:"the branch name"`
 	TTL  string `json:"ttl" jsonschema:"new time to live from now, e.g. 24h"`
@@ -258,6 +270,36 @@ func (s *Server) mcpServer(r *http.Request) *mcp.Server {
 				body["runtime"] = in.Runtime
 			}
 			if err := s.startAndWait(ctx, r, http.MethodPost, "/v1/branches", body); err != nil {
+				return nil, nil, err
+			}
+			info, err := s.branchInfo(ctx, r, in.Name)
+			if err != nil {
+				return nil, nil, err
+			}
+			return text(info), nil, nil
+		})
+	mcp.AddTool(srv, &mcp.Tool{Name: "fork_branch", Description: "Fork an existing branch (its current state or a checkpoint) into a new independent branch without touching the original, and return how to connect."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in forkIn) (*mcp.CallToolResult, any, error) {
+			body := map[string]any{"name": in.Name}
+			if in.Checkpoint != "" {
+				body["checkpoint"] = in.Checkpoint
+			}
+			if in.Clean {
+				body["clean"] = true
+			}
+			if in.InitSQL != "" {
+				body["init_sql"] = in.InitSQL
+			}
+			if in.TTL != "" {
+				body["ttl"] = in.TTL
+			}
+			if in.Access != "" {
+				body["access"] = in.Access
+			}
+			if in.Record {
+				body["record"] = true
+			}
+			if err := s.startAndWait(ctx, r, http.MethodPost, "/v1/branches/"+url.PathEscape(in.Source)+"/fork", body); err != nil {
 				return nil, nil, err
 			}
 			info, err := s.branchInfo(ctx, r, in.Name)

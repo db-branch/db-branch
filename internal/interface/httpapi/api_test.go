@@ -49,6 +49,11 @@ type fakeBranches struct {
 	graph domain.Graph
 	// lastCreate is the latest CreateBranch request.
 	lastCreate dbbranch.CreateBranchRequest
+	// lastFork is the latest ForkBranch request; forkErr fails ValidateFork/ForkBranch.
+	lastFork       dbbranch.ForkBranchRequest
+	forkErr        error
+	forkFailKeep   bool
+	forkFailCancel bool
 	// noCheckpoints makes the node report no checkpoint support.
 	noCheckpoints bool
 	// upErr fails the upgrade validations; upResultErr makes the upgrade
@@ -142,6 +147,74 @@ func (f *fakeBranches) PauseBranch(_ context.Context, n domain.Name, _ dbbranch.
 func (f *fakeBranches) ResumeBranch(_ context.Context, n domain.Name, _ dbbranch.Reporter) (domain.Branch, error) {
 	f.record("resume " + n.String())
 	return f.GetBranch(context.Background(), n)
+}
+
+func (f *fakeBranches) ValidateFork(_ context.Context, r dbbranch.ForkBranchRequest) error {
+	if f.forkErr != nil {
+		return f.forkErr
+	}
+	if f.noCheckpoints {
+		return domain.ErrCheckpointsUnavailable
+	}
+	if _, err := f.GetBranch(context.Background(), r.Source); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (f *fakeBranches) ForkBranch(_ context.Context, r dbbranch.ForkBranchRequest, rep dbbranch.Reporter) (domain.Branch, error) {
+	f.record(fmt.Sprintf("fork %s->%s cp=%s clean=%v ttl=%s sql=%q", r.Source, r.Name, r.Checkpoint, r.Clean, r.TTL, r.InitSQL))
+	f.mu.Lock()
+	f.lastFork = r
+	f.mu.Unlock()
+	if rep != nil {
+		rep("cloning")
+	}
+	if f.forkErr != nil {
+		return domain.Branch{}, f.forkErr
+	}
+	if f.fail != nil {
+		return domain.Branch{}, f.fail
+	}
+	if f.forkFailCancel {
+		return domain.Branch{}, errors.New("fork cancelled")
+	}
+	parent, err := f.GetBranch(context.Background(), r.Source)
+	if err != nil {
+		return domain.Branch{}, err
+	}
+	if f.forkFailKeep {
+		f.mu.Lock()
+		f.branches[r.Name.String()] = domain.Branch{
+			Name: r.Name, Base: parent.Base, Snapshot: parent.Snapshot, Runtime: parent.Runtime,
+			Status: domain.BranchFailed, Error: "fork failed", Node: parent.Node, Owner: r.Owner, CreatedAt: t0,
+			ParentBranch: parent.Name,
+		}
+		f.mu.Unlock()
+		return domain.Branch{}, errors.New("fork failed after clone")
+	}
+	snap := domain.ForkSnapshotName(r.Name)
+	if r.Checkpoint != "" {
+		if r.Checkpoint == domain.ResetPoint {
+			snap = domain.ResetSnapshot
+		} else {
+			snap = domain.CheckpointSnapshot(r.Checkpoint)
+		}
+	}
+	b := domain.Branch{
+		Name: r.Name, Base: parent.Base, Snapshot: parent.Snapshot, Runtime: parent.Runtime,
+		Status: domain.BranchReady, Port: 40002, Node: parent.Node, User: r.Name.String(), Password: "pw",
+		CreatedAt: t0, Owner: r.Owner, OwnerName: r.OwnerName, Access: r.Access, Record: r.Record,
+		ParentBranch: parent.Name, ParentSnapshot: snap, ForkRuntime: parent.Runtime,
+	}
+	if r.TTL > 0 {
+		exp := t0.Add(r.TTL)
+		b.ExpiresAt = &exp
+	}
+	f.mu.Lock()
+	f.branches[r.Name.String()] = b
+	f.mu.Unlock()
+	return b, nil
 }
 
 func (f *fakeBranches) DeleteBranch(_ context.Context, n domain.Name, _ dbbranch.Reporter) error {

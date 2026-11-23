@@ -61,6 +61,11 @@ describe("filterBranches", () => {
     expect(run({ q: "example.com" })).toEqual(["alice-report"]);
     expect(run({ q: "token:abc123" })).toEqual(["ci-run"]);
   });
+  it("matches parent_branch in search queries", () => {
+    const forked = [br("parent"), br("child", { parent_branch: "parent" }), br("other")];
+    const run = (q: string) => filterBranches(forked, { q, status: "", engine: "", base: "", owner: "" }).map((b) => b.name);
+    expect(run("parent")).toEqual(["parent", "child"]);
+  });
 });
 
 describe("filterBases", () => {

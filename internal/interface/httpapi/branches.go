@@ -15,6 +15,7 @@ import (
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/usecase/dbbranch"
 	"github.com/db-branch/db-branch/internal/usecase/operation"
+	"github.com/db-branch/db-branch/pkg/ext"
 )
 
 type storageJSON struct {
@@ -39,7 +40,10 @@ type branchJSON struct {
 	StatusReason *string `json:"status_reason"`
 	Base         string  `json:"base"`
 	Snapshot     string  `json:"snapshot"`
-	Runtime      string  `json:"runtime"`
+	// ParentBranch and ParentSnapshot are set when the branch was forked from another branch.
+	ParentBranch   *string `json:"parent_branch,omitempty"`
+	ParentSnapshot *string `json:"parent_snapshot,omitempty"`
+	Runtime        string  `json:"runtime"`
 	// BaseRuntime is the runtime of the base; Runtime differs once the branch is upgraded.
 	BaseRuntime string         `json:"base_runtime"`
 	Node        string         `json:"node"`
@@ -90,6 +94,10 @@ func (s *Server) branchView(ctx context.Context, svc Branches, b domain.Branch) 
 		CreatedAt: ts(b.CreatedAt), ExpiresAt: optTS(b.ExpiresAt), ResetAt: optTS(b.ResetAt),
 		Connection: connectionJSON{Host: s.hostOf(b.Node), Port: b.Port, User: b.User},
 		Owner:      optString(b.Owner), OwnerName: optString(b.DisplayOwner()), ID: b.Name.String(), Access: domain.AccessPrivate, Record: b.Record,
+	}
+	if b.ParentBranch != (domain.Name{}) {
+		v.ParentBranch = optString(b.ParentBranch.String())
+		v.ParentSnapshot = optString(b.ParentSnapshot)
 	}
 	if display := b.DisplayOwner(); display != "" {
 		// An email owner shows as its local part; owner_name keeps the display label.
@@ -457,10 +465,208 @@ func (s *Server) resumeBranch(w http.ResponseWriter, r *http.Request, svc Branch
 }
 
 func (s *Server) deleteBranch(w http.ResponseWriter, r *http.Request, svc Branches, n domain.Name) {
-	s.branchAction(w, r, svc, n, "branch.delete", domain.Branch.CanDelete,
+	check := func(b domain.Branch) error {
+		if err := b.CanDelete(); err != nil {
+			return err
+		}
+		return checkNoForkChildren(r.Context(), svc, b.Name)
+	}
+	s.branchAction(w, r, svc, n, "branch.delete", check,
 		func(ctx context.Context, svc Branches, n domain.Name, report func(string)) error {
 			return svc.DeleteBranch(ctx, n, report)
 		})
+}
+
+func checkNoForkChildren(ctx context.Context, svc Branches, parent domain.Name) error {
+	list, err := svc.ListBranches(ctx)
+	if err != nil {
+		return err
+	}
+	var children []string
+	for _, b := range list {
+		if b.ParentBranch == parent {
+			children = append(children, b.Name.String())
+		}
+	}
+	if len(children) == 0 {
+		return nil
+	}
+	sort.Strings(children)
+	return fmt.Errorf("%w: branch %s has forked child branch(es): %s; delete them first", domain.ErrInUse, parent, strings.Join(children, ", "))
+}
+
+type forkBranchJSON struct {
+	Name       string `json:"name"`
+	Checkpoint string `json:"checkpoint,omitempty"`
+	Clean      bool   `json:"clean,omitempty"`
+	InitSQL    string `json:"init_sql,omitempty"`
+	TTL        string `json:"ttl,omitempty"`
+	Node       string `json:"node,omitempty"`
+	Owner      string `json:"owner,omitempty"`
+	OwnerName  string `json:"owner_name,omitempty"`
+	Access     string `json:"access,omitempty"`
+	Record     bool   `json:"record,omitempty"`
+}
+
+func (s *Server) forkBranch(w http.ResponseWriter, r *http.Request, svc Branches, source domain.Name) {
+	var in forkBranchJSON
+	if !decode(w, r, &in) {
+		return
+	}
+	parent, err := svc.GetBranch(r.Context(), source)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.requireFeature(r.Context(), parent.Runtime.Engine, "checkpoints"); err != nil {
+		fail(w, err)
+		return
+	}
+	if err := parent.CanFork(); err != nil {
+		fail(w, err)
+		return
+	}
+	parentNode := s.nodeOf(parent.Node)
+	if in.Node != "" && in.Node != parentNode {
+		fail(w, fmt.Errorf("%w: forked branch must be created on parent's node %s, not %s", domain.ErrConflict, parentNode, in.Node))
+		return
+	}
+	ttl, err := parseTTL(in.TTL)
+	if in.TTL == "" && s.DefaultTTL != nil {
+		ttl = s.DefaultTTL()
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	p := principalOf(r)
+	if err := resolveNamedOwner(p, &in.Owner, &in.OwnerName, in.Access); err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.prefixUserBranchName(p, r, &in.Name); err != nil {
+		fail(w, err)
+		return
+	}
+	childName, err := domain.ParseName(in.Name)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if in.Checkpoint != "" && in.Checkpoint != domain.ResetPoint {
+		if _, err := domain.ParseCheckpointName(in.Checkpoint); err != nil {
+			fail(w, err)
+			return
+		}
+	}
+	if in.Record {
+		rt, exact := s.forkRecordRuntime(r.Context(), svc, parent, in.Checkpoint)
+		if err := s.checkForkRecord(r.Context(), p, in.Name, in.Owner, rt, exact); err != nil {
+			fail(w, err)
+			return
+		}
+	}
+	snap := parent.Snapshot
+	if err := s.checkBranchPolicy(r.Context(), svc, p, createBranchJSON{
+		Name: in.Name, Base: parent.Base.String(), Snapshot: &snap, Owner: in.Owner, OwnerName: in.OwnerName, Access: in.Access,
+	}, ttl); err != nil {
+		fail(w, err)
+		return
+	}
+	if _, err := svc.GetBranch(r.Context(), childName); err == nil {
+		fail(w, fmt.Errorf("branch %s: %w; names are unique across the cluster, so pick another name or delete the existing branch first", childName, domain.ErrAlreadyExists))
+		return
+	}
+	if s.Cluster != nil {
+		st, err := s.Cluster.Status(r.Context())
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		if st.Protocol > 0 && st.Protocol < domain.ProtocolBranchFork {
+			fail(w, fmt.Errorf("%w: a branch can only be forked once every node runs the new version", domain.ErrClusterUpgrading))
+			return
+		}
+	}
+	if s.remote(parent.Node) {
+		if in.TTL == "" && ttl > 0 {
+			in.TTL = ttl.String()
+		}
+		body, _ := json.Marshal(in)
+		r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(body)), int64(len(body))
+		s.forward(w, r, parent.Node)
+		return
+	}
+	req := dbbranch.ForkBranchRequest{
+		Source: source, Name: childName, Checkpoint: in.Checkpoint, Clean: in.Clean,
+		InitSQL: in.InitSQL, TTL: ttl, Node: in.Node, Owner: in.Owner, OwnerName: in.OwnerName,
+		Access: in.Access, Record: in.Record,
+	}
+	if err := svc.ValidateFork(r.Context(), req); err != nil {
+		fail(w, err)
+		return
+	}
+	s.accepted(w, r, "branch.fork", operation.Target{Resource: "branch", Name: req.Name.String()},
+		func(ctx context.Context, report func(string)) error {
+			b, err := svc.ForkBranch(ctx, req, report)
+			if b.Name != (domain.Name{}) {
+				s.publishBranch(ctx, svc, b.Name)
+			} else if _, gerr := svc.GetBranch(ctx, req.Name); gerr == nil {
+				s.publishBranch(ctx, svc, req.Name)
+			}
+			s.publishBranch(ctx, svc, source)
+			return err
+		})
+}
+
+// forkRecordRuntime resolves the runtime the forked child will actually run so
+// history-recording checks use the checkpoint's runtime instead of the parent's
+// current one. When forwarding a named checkpoint to another node, exact is
+// false because the checkpoint's metadata lives only on the parent's node; the
+// owner node runs the version-specific check after forwarding.
+func (s *Server) forkRecordRuntime(ctx context.Context, svc Branches, parent domain.Branch, checkpoint string) (domain.RuntimeRef, bool) {
+	if checkpoint == "" {
+		return parent.Runtime, true
+	}
+	fallback := func() domain.RuntimeRef {
+		if parent.ForkRuntime != (domain.RuntimeRef{}) {
+			return parent.ForkRuntime
+		}
+		if base, err := svc.GetBase(ctx, parent.Base); err == nil && base.Runtime != (domain.RuntimeRef{}) {
+			return base.Runtime
+		}
+		return parent.Runtime
+	}
+	if checkpoint == domain.ResetPoint {
+		return fallback(), true
+	}
+	if s.remote(parent.Node) {
+		return parent.Runtime, false
+	}
+	if cps, err := svc.ListCheckpoints(ctx, parent.Name); err == nil {
+		for _, c := range cps {
+			if c.Name == checkpoint {
+				if rt, err := domain.ParseRuntimeRef(c.Runtime); err == nil {
+					return rt, true
+				}
+				return fallback(), true
+			}
+		}
+	}
+	return parent.Runtime, false
+}
+
+func (s *Server) checkForkRecord(ctx context.Context, p ext.Principal, name, owner string, rt domain.RuntimeRef, exact bool) error {
+	if exact {
+		return s.checkRecordRuntime(ctx, p, name, owner, rt)
+	}
+	if p.ID == Anonymous.ID {
+		return fmt.Errorf("%w: recording needs a login", ext.ErrForbidden)
+	}
+	if s.Ext.ServerOptioner == nil {
+		return fmt.Errorf("%w: recording needs the history module, which is not installed (db-branch module install history)", domain.ErrInvalidName)
+	}
+	return s.requireFeature(ctx, rt.Engine, "history_record")
 }
 
 // recreateBranch builds a lost branch again on a node holding its snapshot

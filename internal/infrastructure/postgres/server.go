@@ -54,7 +54,10 @@ type Server struct {
 	PollInterval time.Duration
 }
 
-var _ domain.DBServer = (*Server)(nil)
+var (
+	_ domain.DBServer         = (*Server)(nil)
+	_ domain.CloneUserCleaner = (*Server)(nil)
+)
 
 // Superuser is the local admin initdb creates (trusted on the socket only).
 const Superuser = "postgres"
@@ -427,6 +430,49 @@ END`, uLit, uIdent, pwLit, oLit, oIdent)
 		return err
 	}
 	return p.ownObjects(ctx, s)
+}
+
+// DropUser removes an inherited branch login role from a cloned server after
+// transferring any remaining owned objects to OwnerRole and revoking grants, so
+// the parent's credentials cannot reach a forked child.
+func (p *Server) DropUser(ctx context.Context, s domain.Server, user string) error {
+	if err := validateUser(user); err != nil {
+		return err
+	}
+	if user == Superuser || user == OwnerRole {
+		return fmt.Errorf("postgres cannot drop reserved role %q", user)
+	}
+	uLit, uIdent := quotePGLiteral(user), quotePGIdent(user)
+	oLit, oIdent := quotePGLiteral(OwnerRole), quotePGIdent(OwnerRole)
+	dbs, err := p.databases(ctx, s)
+	if err != nil {
+		return err
+	}
+	dbBody := fmt.Sprintf(`BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = %[1]s) THEN
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname = %[3]s) THEN
+      REASSIGN OWNED BY %[2]s TO %[4]s;
+    END IF;
+    DROP OWNED BY %[2]s;
+  END IF;
+END`, uLit, uIdent, oLit, oIdent)
+	dbSQL := fmt.Sprintf("DO %[1]s\n%[2]s\n%[1]s;", dollarTag(dbBody), dbBody)
+	for _, db := range dbs {
+		name, args := p.tool(s, "psql", "-h", p.sockDir(s), "-p", fmt.Sprint(s.Port), "-U", Superuser, "-d", db,
+			"-X", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-")
+		if _, err := p.Run.RunInput(ctx, strings.NewReader(dbSQL), name, args...); err != nil {
+			return fmt.Errorf("database %s: %w", db, err)
+		}
+	}
+	dropBody := fmt.Sprintf(`BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = %[1]s) THEN
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname = %[3]s) THEN
+      REVOKE %[4]s FROM %[2]s;
+    END IF;
+    DROP ROLE %[2]s;
+  END IF;
+END`, uLit, uIdent, oLit, oIdent)
+	return p.Exec(ctx, s, fmt.Sprintf("DO %[1]s\n%[2]s\n%[1]s;", dollarTag(dropBody), dropBody))
 }
 
 // Load streams a SQL dump (plain or .gz) into psql.

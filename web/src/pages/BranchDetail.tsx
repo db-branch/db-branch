@@ -3,6 +3,7 @@ import { api, can } from "../api";
 import { BranchView, BranchSection } from "../components/branchview";
 import { CheckpointPanel } from "../components/checkpoints";
 import { ConnectPanel } from "../components/connect";
+import { ForkBranch } from "../components/forkbranch";
 import { UpgradePanel } from "../components/upgrade";
 import { BranchHistory } from "../components/branchhistory";
 import { SqlRunner } from "../components/sqlrunner";
@@ -22,6 +23,7 @@ export function BranchDetail({ name }: { name: string }) {
   const { data: branches, error } = useLive(api.branches, ["branch", "operation"]);
   const { data: cluster } = useLive(api.cluster, ["node"]);
   const [deleting, setDeleting] = useState(false);
+  const [forking, setForking] = useState<{ checkpoint?: string } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const caps = useCapabilities();
   useNow();
@@ -40,7 +42,11 @@ export function BranchDetail({ name }: { name: string }) {
   const sections: BranchSection[] = [];
   if (ready) sections.push({ id: "connect", title: t("Connect"), body: <ConnectPanel branch={b.name} /> });
   if (["ready", "restoring"].includes(b.status) && showCheckpoints(b, can)) {
-    sections.push({ id: "checkpoints", title: "Checkpoints", body: <CheckpointPanel branch={b} ready={ready} allow={can} /> });
+    sections.push({
+      id: "checkpoints",
+      title: "Checkpoints",
+      body: <CheckpointPanel branch={b} ready={ready} allow={can} onFork={can("branch.fork") ? (cp) => setForking({ checkpoint: cp }) : undefined} />,
+    });
   }
   if (ready && can("branch.query")) sections.push({ id: "sql", title: "SQL", body: <SqlRunner name={b.name} /> });
   if (b.record && hasHistoryModule(caps) && can("ext.history.read")) sections.push({ id: "history", title: t("Transactions"), body: <BranchHistory name={b.name} /> });
@@ -61,9 +67,12 @@ export function BranchDetail({ name }: { name: string }) {
         onResume={() => run(api.resumeBranch(b.name))}
         onRecreate={() => run(api.recreateBranch(b.name))}
         onDelete={() => setDeleting(true)}
+        onFork={can("branch.fork") ? () => setForking({}) : undefined}
+        onOpenParent={(parent) => go(`${ADMIN}/branches/${encodeURIComponent(parent)}`)}
         onCopyProxy={() => run(api.dsn(b.name, "proxy").then((d) => navigator.clipboard.writeText(d)))}
       />
       {deleting && <DeleteBranch branch={b} onClose={() => setDeleting(false)} onDeleted={back} />}
+      {forking && <ForkBranch branch={b} initialCheckpoint={forking.checkpoint} onClose={() => setForking(null)} onForked={(made) => go(`${ADMIN}/branches/${encodeURIComponent(made)}`)} />}
     </>
   );
 }

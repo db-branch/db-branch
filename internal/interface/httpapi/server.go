@@ -29,6 +29,8 @@ type Branches interface {
 	ResetBranch(ctx context.Context, name domain.Name, report dbbranch.Reporter) (domain.Branch, error)
 	PauseBranch(ctx context.Context, name domain.Name, report dbbranch.Reporter) (domain.Branch, error)
 	ResumeBranch(ctx context.Context, name domain.Name, report dbbranch.Reporter) (domain.Branch, error)
+	ValidateFork(ctx context.Context, req dbbranch.ForkBranchRequest) error
+	ForkBranch(ctx context.Context, req dbbranch.ForkBranchRequest, report dbbranch.Reporter) (domain.Branch, error)
 	PlaceRecreate(ctx context.Context, name domain.Name) (string, error)
 	RecreateBranch(ctx context.Context, name domain.Name, report dbbranch.Reporter) (domain.Branch, error)
 	DeleteBranch(ctx context.Context, name domain.Name, report dbbranch.Reporter) error
@@ -275,6 +277,7 @@ func (s *Server) routes(mux router, local bool) {
 	r("POST /v1/branches/{name}/reset", "branch.reset", s.named(s.resetBranch))
 	r("POST /v1/branches/{name}/pause", "branch.update", s.named(s.pauseBranch))
 	r("POST /v1/branches/{name}/resume", "branch.update", s.named(s.resumeBranch))
+	r("POST /v1/branches/{name}/fork", "branch.fork", s.named(s.forkBranch))
 	r("POST /v1/branches/{name}/recreate", "branch.recreate", s.named(s.recreateBranch))
 	r("GET /v1/branches/{name}/checkpoints", "branch.checkpoint.read", s.named(s.listCheckpoints))
 	r("POST /v1/branches/{name}/checkpoints", "branch.checkpoint", s.named(s.createCheckpoint))

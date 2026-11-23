@@ -44,7 +44,7 @@ const ANON_TTL = 4 * 3600e3;
 const DAY = 24 * 3600e3;
 const CHECKPOINT_NAME = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const MAX_CHECKPOINT_NAME = 40;
-const CONSOLE_ACTIONS = ["base.read", "base.create", "base.delete", "base.load", "base.snapshot", "base.publish", "base.refresh", "base.refresh.read", "runtime.install", "cluster.read", "setting.write", "module.install", "token.write", "backup.read", "route-user.write", "update.read", "update.check", "update.apply", "branch.checkpoint", "branch.checkpoint_delete", "branch.restore", "branch.upgrade"];
+const CONSOLE_ACTIONS = ["base.read", "base.create", "base.delete", "base.load", "base.snapshot", "base.publish", "base.refresh", "base.refresh.read", "runtime.install", "cluster.read", "setting.write", "module.install", "token.write", "backup.read", "route-user.write", "update.read", "update.check", "update.apply", "branch.checkpoint", "branch.checkpoint_delete", "branch.restore", "branch.upgrade", "branch.fork"];
 const BASE_ACTIONS = ["base.snapshot", "base.load", "base.delete", "base.describe", "base.publish", "base.sql", "base.start", "base.stop", "base.refresh", "base.refresh.read", "base.snapshot_delete", "base.replicas"];
 
 /** Go-style durations: "4h", "90m", "1h30m0s". Null when it is not one. */
@@ -428,7 +428,14 @@ export class DemoBackend {
       this.emit("branch.updated", { name: b.name });
       return ok(b);
     });
-    a("DELETE", "/v1/branches/:name", "user", (c) => this.branchAction(c, "branch.delete", "deleting", TIMING.branchDelete, { k: "branch.delete", name: c.p.name }, true));
+    a("DELETE", "/v1/branches/:name", "user", (c) => {
+      const b = this.branchFor(c);
+      if (!b) return notFound("branch");
+      const kids = s().branches.filter((x) => x.parent_branch === b.name).map((x) => x.name).sort();
+      if (kids.length > 0) return fail(409, "in_use", `branch ${b.name} has forked child branch(es): ${kids.join(", ")}; delete them first`);
+      return this.branchAction(c, "branch.delete", "deleting", TIMING.branchDelete, { k: "branch.delete", name: c.p.name }, true);
+    });
+    a("POST", "/v1/branches/:name/fork", "user", (c) => this.forkBranch(c));
     a("POST", "/v1/branches/:name/reset", "user", (c) => this.branchAction(c, "branch.reset", "resetting", TIMING.branchReset, { k: "branch.ready", name: c.p.name, reset: true }));
     a("POST", "/v1/branches/:name/query", "user", (c) => {
       const br = this.branchFor(c);
@@ -446,7 +453,11 @@ export class DemoBackend {
       if (br && br.status !== "paused") return fail(409, "conflict", `branch ${br.name} is ${br.status}; only a paused branch can be resumed`);
       return this.branchAction(c, "branch.resume", "resuming", TIMING.branchPause, { k: "branch.ready", name: c.p.name }, true);
     });
-    a("POST", "/v1/branches/:name/recreate", "user", (c) => this.branchAction(c, "branch.create", "provisioning", TIMING.branchCreate, { k: "branch.ready", name: c.p.name }));
+    a("POST", "/v1/branches/:name/recreate", "user", (c) => {
+      const br = this.branchFor(c);
+      if (br && br.parent_branch) return fail(409, "conflict", `forked branch ${br.name} cannot be recreated on another node`);
+      return this.branchAction(c, "branch.create", "provisioning", TIMING.branchCreate, { k: "branch.ready", name: c.p.name });
+    });
     a("GET", "/v1/branches/:name/dsn", "anon", (c) => {
       const b = this.branchFor(c);
       if (!b) return notFound("branch");
@@ -774,6 +785,78 @@ export class DemoBackend {
       id: newId(this.state),
       access: !who || body.access === "open" ? "open" : "private",
       // Decided here, once: the branch asked to, or record_all is on right now.
+      record: (body.record === true || this.recordAll()) && !!who && !pg && this.state.modules.history === "on" ? true : undefined,
+      checkpoints: true,
+    };
+    this.state.branches.push(b);
+    this.schedule(op, TIMING.branchCreate, { k: "branch.ready", name });
+    this.emit("branch.updated", { name });
+    return ok(op, 202);
+  }
+
+  private forkBranch(c: Ctx): Reply {
+    const { who, body } = c;
+    const parent = this.branchFor(c);
+    if (!parent) return notFound("branch");
+    if (parent.status !== "ready" && parent.status !== "paused") {
+      return fail(409, "conflict", `branch ${parent.name} is ${parent.status}; only a ready or paused branch can be forked`);
+    }
+    const node = body.node ? String(body.node) : "";
+    if (node && node !== parent.node) {
+      return fail(409, "conflict", `forked branch must be created on parent's node ${parent.node}, not ${node}`);
+    }
+    const ttl = body.ttl ? parseDuration(String(body.ttl)) : 7 * DAY;
+    if (ttl === null) return fail(400, "invalid_request", "invalid ttl");
+    let name = String(body.name ?? "");
+    if (who && !who.admin) {
+      const prefix = prefixOf(who);
+      const typed = name.startsWith(prefix) ? name.slice(prefix.length) : name;
+      if (typed.length > MAX_NAME - prefix.length) return fail(400, "invalid_request", `names made here start with ${prefix}, so the part you type may have at most ${MAX_NAME - prefix.length} characters`);
+      name = prefix + typed;
+    }
+    if (name.length > MAX_NAME || !NAME.test(name)) return fail(400, "invalid_request", "invalid branch name: use lowercase letters, digits and single hyphens, starting with a letter (32 characters at most)");
+    if (this.state.branches.some((b) => b.name === name)) return fail(409, "already_exists", `branch ${name}: already exists; names are unique across the cluster, so pick another name or delete the existing branch first`);
+    const cp = body.checkpoint ? String(body.checkpoint) : "";
+    let childRuntime = parent.runtime;
+    let parentSnap = `fork-${name}`;
+    if (cp === "@reset") {
+      childRuntime = parent.base_runtime ?? parent.runtime;
+      parentSnap = "reset";
+    } else if (cp !== "") {
+      if (cp.length > MAX_CHECKPOINT_NAME || !CHECKPOINT_NAME.test(cp)) {
+        return fail(400, "invalid_request", `invalid name "${cp}"`);
+      }
+      const found = this.checkpointsOf(parent.name).list.find((x) => x.name === cp);
+      if (!found) return notFound("checkpoint");
+      childRuntime = found.runtime ?? parent.base_runtime ?? parent.runtime;
+      parentSnap = `ckpt-${cp}`;
+    }
+    const pg = runtimeEngine(childRuntime) === "postgres";
+    const n = this.state.seq++;
+    const op = this.newOp("branch.fork", "branch", name);
+    const owner = who ? (who.admin && body.owner ? String(body.owner) : who.id) : null;
+    const b: Branch = {
+      name,
+      status: "provisioning",
+      status_reason: null,
+      base: parent.base,
+      snapshot: parent.snapshot,
+      parent_branch: parent.name,
+      parent_snapshot: parentSnap,
+      runtime: childRuntime,
+      base_runtime: parent.base_runtime,
+      node: parent.node,
+      created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + ttl).toISOString(),
+      reset_at: null,
+      storage: null,
+      connection: { host: DEMO_HOST, port: 41100 + (n % 800), user: pg ? name : "branch" },
+      proxy: { host: DEMO_HOST, port: pg ? 6432 : 6033, user: name },
+      operation: { id: op.id, kind: op.kind },
+      owner,
+      owner_name: owner,
+      id: newId(this.state),
+      access: body.access === "open" ? "open" : "private",
       record: (body.record === true || this.recordAll()) && !!who && !pg && this.state.modules.history === "on" ? true : undefined,
       checkpoints: true,
     };

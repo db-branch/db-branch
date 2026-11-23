@@ -83,6 +83,12 @@ export function Branches() {
                     <span className="mono muted" title={`snapshot ${b.snapshot}`}>
                       {b.base}
                     </span>
+                    {b.parent_branch && (
+                      <span className="muted small mono" title={t("Forked from {name}", { name: b.parent_branch })}>
+                        {" "}
+                        ← {b.parent_branch}
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}
