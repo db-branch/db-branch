@@ -8,6 +8,7 @@ import { AccountMenu, AccountPage, LanguagePicker } from "../components/account"
 import { allowed, BranchRow, Job, SnapInfo } from "../components/branchcard";
 import { BranchHistory } from "../components/branchhistory";
 import { SqlRunner } from "../components/sqlrunner";
+import { engineLabel } from "../lib/format";
 import { hasHistoryModule } from "../lib/history";
 import { Empty, ErrorLine } from "../components/ui";
 import { Limits, NewBranch, NewBranchSkeleton } from "../components/newbranch";
@@ -305,7 +306,7 @@ export function Portal() {
                     snapshot={bases.data?.snaps[b.base]?.[b.snapshot]}
                     fresh={b.name === fresh}
                     mode="page"
-                    sql={session && b.status === "ready" && allowed(session.can, "branch.query") ? <SqlRunner name={b.name} /> : undefined}
+                    sql={session && b.status === "ready" && allowed(session.can, "branch.query") ? <SqlRunner name={b.name} engine={engineLabel(b.runtime).engine} /> : undefined}
                     onChange={mine.reload}
                     onDismiss={job ? () => setJobs((js) => js.filter((j) => j.name !== b.name)) : undefined}
                     prefix={session?.branch_prefix}

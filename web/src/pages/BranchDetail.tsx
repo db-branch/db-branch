@@ -7,6 +7,7 @@ import { ForkBranch } from "../components/forkbranch";
 import { UpgradePanel } from "../components/upgrade";
 import { BranchHistory } from "../components/branchhistory";
 import { SqlRunner } from "../components/sqlrunner";
+import { engineLabel } from "../lib/format";
 import { hasHistoryModule } from "../lib/history";
 import { useCapabilities } from "../lib/caps";
 import { Empty, ErrorLine } from "../components/ui";
@@ -48,7 +49,7 @@ export function BranchDetail({ name }: { name: string }) {
       body: <CheckpointPanel branch={b} ready={ready} allow={can} onFork={can("branch.fork") ? (cp) => setForking({ checkpoint: cp }) : undefined} />,
     });
   }
-  if (ready && can("branch.query")) sections.push({ id: "sql", title: "SQL", body: <SqlRunner name={b.name} /> });
+  if (ready && can("branch.query")) sections.push({ id: "sql", title: "SQL", body: <SqlRunner name={b.name} engine={engineLabel(b.runtime).engine} /> });
   if (b.record && hasHistoryModule(caps) && can("ext.history.read")) sections.push({ id: "history", title: t("Transactions"), body: <BranchHistory name={b.name} /> });
   if (ready && can("branch.upgrade")) sections.push({ id: "upgrade", title: t("Upgrade"), body: <UpgradePanel branch={b} ready={ready} allow={can} onChange={() => undefined} /> });
   const max = Math.max(1, ...branches.map((x) => x.storage?.referenced ?? 0));

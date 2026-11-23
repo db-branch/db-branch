@@ -236,11 +236,30 @@ type CatalogEntry struct {
 	Size     int64
 }
 
+// ErrInvalidDatabase is returned when a query targets an unsafe database name.
+var ErrInvalidDatabase = errors.New("invalid database name")
+
+// ValidateDatabaseName rejects database names with control characters or
+// DSN/path delimiters to prevent DSN parameter injection.
+func ValidateDatabaseName(db string) error {
+	if db == "" {
+		return nil
+	}
+	if len(db) > 128 {
+		return fmt.Errorf("%w: longer than 128 bytes", ErrInvalidDatabase)
+	}
+	if hasControl(db) || strings.ContainsAny(db, `/\?&#=;`) {
+		return fmt.Errorf("%w: contains disallowed characters", ErrInvalidDatabase)
+	}
+	return nil
+}
+
 // QueryRequest is one statement to run on an instance as a login.
 type QueryRequest struct {
 	// Host is the address the instance is reached at (the node it runs on);
 	// empty: this node.
 	Host           string
+	Database       string
 	User, Password string
 	SQL            string
 	MaxRows        int

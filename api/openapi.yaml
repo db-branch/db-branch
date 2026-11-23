@@ -3848,6 +3848,7 @@ components:
       type: object
       properties:
         sql: {type: string, description: One SQL statement.}
+        database: {type: string, description: Optional database name on the branch (defaults to `postgres` on PostgreSQL).}
         max_rows:
           type: integer
           default: 1000

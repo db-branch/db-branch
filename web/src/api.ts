@@ -321,11 +321,11 @@ export class ApiError extends Error {
 
 let csrf = "";
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (method !== "GET") headers["X-CSRF-Token"] = csrf;
-  const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: "same-origin" });
+  const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: "same-origin", signal });
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -456,7 +456,8 @@ export const api = {
     call<Operation>("POST", `/v1/branches/${encodeURIComponent(source)}/fork`, b),
   recreateBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/recreate`),
   resetBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/reset`),
-  query: (name: string, sql: string, maxRows?: number) => call<QueryResult>("POST", `/v1/branches/${name}/query`, { sql, max_rows: maxRows }),
+  query: (name: string, sql: string, maxRows?: number, database?: string, signal?: AbortSignal) =>
+    call<QueryResult>("POST", `/v1/branches/${name}/query`, database ? { sql, max_rows: maxRows, database } : { sql, max_rows: maxRows }, signal),
   pauseBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/pause`),
   resumeBranch: (name: string) => call<Operation>("POST", `/v1/branches/${name}/resume`),
   deleteBranch: (name: string) => call<Operation>("DELETE", `/v1/branches/${name}`),
