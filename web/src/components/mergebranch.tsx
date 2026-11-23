@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, Branch, MergeOperation, MergeResult } from "../api";
 import { t } from "../lib/i18n";
 import { Modal } from "./modal";
@@ -25,6 +25,13 @@ export function MergeBranchModal({
   const [result, setResult] = useState<MergeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewTick, setPreviewTick] = useState(0);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const pollOperation = async (initial: MergeOperation, alive: () => boolean): Promise<MergeOperation | null> => {
     let cur = initial;
@@ -82,8 +89,8 @@ export function MergeBranchModal({
         allow_ddl: allowDDL,
         ignore_triggers: ignoreTriggers,
       });
-      const done = await pollOperation(started, () => true);
-      if (!done) return;
+      const done = await pollOperation(started, () => mounted.current);
+      if (!done || !mounted.current) return;
       if (done.result) setResult(done.result);
       if (done.state === "failed") {
         setError(done.result?.error ?? done.error ?? "Merge failed");
@@ -91,10 +98,12 @@ export function MergeBranchModal({
         onMerged?.();
       }
     } catch (e) {
-      setError((e as Error).message);
+      if (mounted.current) setError((e as Error).message);
     } finally {
-      setBusy(false);
-      setApplying(false);
+      if (mounted.current) {
+        setBusy(false);
+        setApplying(false);
+      }
     }
   };
 
@@ -104,7 +113,7 @@ export function MergeBranchModal({
   const applied = result?.status === "merged";
 
   return (
-    <Modal title={`Merge into ${branch.name}`} onClose={onClose}>
+    <Modal title={t("Merge into {name}", { name: branch.name })} onClose={onClose}>
       <div className="form">
         <p className="small muted">
           {t("Merge changes from this checkpoint's line into the live branch.")} ({checkpoint} · line {sourceLine})
@@ -171,10 +180,10 @@ export function MergeBranchModal({
         {!applied && (
           <div className="cp-merge-opts small">
             <label>
-              <input type="checkbox" checked={allowDDL} disabled={busy} onChange={(e) => setAllowDDL(e.target.checked)} /> Allow DDL
+              <input type="checkbox" checked={allowDDL} disabled={busy} onChange={(e) => setAllowDDL(e.target.checked)} /> {t("Allow DDL")}
             </label>{" "}
             <label>
-              <input type="checkbox" checked={ignoreTriggers} disabled={busy} onChange={(e) => setIgnoreTriggers(e.target.checked)} /> Ignore triggers
+              <input type="checkbox" checked={ignoreTriggers} disabled={busy} onChange={(e) => setIgnoreTriggers(e.target.checked)} /> {t("Ignore triggers")}
             </label>
           </div>
         )}
@@ -183,15 +192,15 @@ export function MergeBranchModal({
           {!applied && (
             <>
               <button type="button" disabled={busy} onClick={() => setPreviewTick((n) => n + 1)}>
-                Preview again
+                {t("Preview again")}
               </button>
               <button type="button" className="primary" disabled={busy || !result || hasConflicts} onClick={applyMerge}>
-                Apply Merge
+                {t("Apply Merge")}
               </button>
             </>
           )}
           <button type="button" onClick={onClose}>
-            Close
+            {t("Close")}
           </button>
         </div>
       </div>

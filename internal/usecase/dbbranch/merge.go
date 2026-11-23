@@ -339,7 +339,11 @@ func (s *Service) MergeBranch(ctx context.Context, req MergeBranchRequest, repor
 			restoreErrs = append(restoreErrs, s.ensureRunning(wctx, br))
 		}
 		br.Status = prevStatus
-		restoreErrs = append(restoreErrs, s.clearMergeIntent(wctx, br.Name), s.saveBranch(wctx, br))
+		if err := s.saveBranch(wctx, br); err != nil {
+			restoreErrs = append(restoreErrs, err)
+		} else {
+			restoreErrs = append(restoreErrs, s.clearMergeIntent(wctx, br.Name))
+		}
 		s.collectIfSettled(wctx, br.Name)
 		return res, errors.Join(append([]error{cause}, restoreErrs...)...)
 	}
@@ -419,8 +423,9 @@ func (s *Service) MergeBranch(ctx context.Context, req MergeBranchRequest, repor
 				}
 			}
 			br.Status = prevStatus
-			_ = s.clearMergeIntent(wctx, br.Name)
-			_ = s.saveBranch(wctx, br)
+			if s.saveBranch(wctx, br) == nil {
+				_ = s.clearMergeIntent(wctx, br.Name)
+			}
 			s.collectIfSettled(wctx, br.Name)
 		}
 		return res, fmt.Errorf("%w: %s", domain.ErrMergeConflict, res.Error)
@@ -469,10 +474,7 @@ func (s *Service) MergeBranch(ctx context.Context, req MergeBranchRequest, repor
 		return s.failMergeAndRollback(ctx, br, in, res, errors.Join(applyErr, stopErr), report)
 	}
 
-	// Step 6: Clear merge intent and restore branch to pre-merge status.
-	if err := s.clearMergeIntent(mergeCtx, br.Name); err != nil {
-		return s.failMergeAndRollback(ctx, br, in, res, err, report)
-	}
+	// Step 6: Restore branch to pre-merge status, then clear merge intent.
 	if prevStatus == domain.BranchReady {
 		normalSpec, err := s.branchSpec(mergeCtx, br, liveDS, false, false)
 		if err != nil {
@@ -487,6 +489,7 @@ func (s *Service) MergeBranch(ctx context.Context, req MergeBranchRequest, repor
 	if err := s.saveBranch(mergeCtx, br); err != nil {
 		return res, err
 	}
+	_ = s.clearMergeIntent(mergeCtx, br.Name)
 	res.Status = domain.MergeMerged
 	s.rotateAuto(ctx, br.Name)
 	s.collectIfSettled(ctx, br.Name)
@@ -700,11 +703,11 @@ func (s *Service) rollbackMerge(ctx context.Context, br domain.Branch, in mergeI
 	} else {
 		_ = s.stopBranchImmediate(ctx, br)
 	}
-	if err := s.clearMergeIntent(ctx, br.Name); err != nil {
-		return err
-	}
 	br.Status, br.Error = in.PrevStatus, ""
 	if err := s.saveBranch(ctx, br); err != nil {
+		return err
+	}
+	if err := s.clearMergeIntent(ctx, br.Name); err != nil {
 		return err
 	}
 	s.collectIfSettled(ctx, br.Name)
@@ -750,11 +753,11 @@ func (s *Service) resumeMerge(ctx context.Context, br domain.Branch) error {
 	} else {
 		_ = s.stopBranchImmediate(ctx, br)
 	}
-	if err := s.clearMergeIntent(ctx, br.Name); err != nil {
-		return err
-	}
 	br.Status, br.Error = prev, ""
 	if err := s.saveBranch(ctx, br); err != nil {
+		return err
+	}
+	if err := s.clearMergeIntent(ctx, br.Name); err != nil {
 		return err
 	}
 	s.collectIfSettled(ctx, br.Name)
@@ -788,6 +791,7 @@ func (s *Service) sweepMergeWork(ctx context.Context) {
 				suffix := path.Base(ch)
 				srvID := "m-" + shortID + "-" + suffix
 				for _, srv := range s.Servers {
+					_ = srv.Stop(ctx, domain.Server{ID: srvID}, domain.StopImmediate)
 					_ = srv.Remove(ctx, domain.Server{ID: srvID})
 				}
 				_ = s.destroyIfExists(ctx, ch)

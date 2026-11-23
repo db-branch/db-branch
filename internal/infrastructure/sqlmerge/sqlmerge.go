@@ -715,7 +715,7 @@ ORDER BY ns.nspname, t.relname, a.attnum`, func(r *sql.Rows) error {
 	}
 	for _, sm := range seqList {
 		q := fmt.Sprintf("/* db-branch:seq-val %s.%s */ SELECT COALESCE(last_value, 0) FROM pg_catalog.pg_sequences WHERE schemaname = %s AND sequencename = %s",
-			sm.SeqSchema, sm.SeqName, mustLiteral(domain.Postgres, sm.SeqSchema), mustLiteral(domain.Postgres, sm.SeqName))
+			sanitizeCommentLabel(sm.SeqSchema), sanitizeCommentLabel(sm.SeqName), mustLiteral(domain.Postgres, sm.SeqSchema), mustLiteral(domain.Postgres, sm.SeqName))
 		var lastVal sql.NullInt64
 		_ = db.QueryRowContext(ctx, q).Scan(&lastVal)
 		sm.LastValue = lastVal.Int64
@@ -723,6 +723,10 @@ ORDER BY ns.nspname, t.relname, a.attnum`, func(r *sql.Rows) error {
 		sch.Sequences[key] = sm
 	}
 	return nil
+}
+
+func sanitizeCommentLabel(s string) string {
+	return strings.NewReplacer("/*", "", "*/", "", "--", "", ";", "", "\n", " ", "\r", " ").Replace(s)
 }
 
 func quoteIdent(engine domain.Engine, s string) string {
@@ -1188,6 +1192,13 @@ func (m *Merger) diffExistingTable(
 			plan.Code = "schema_no_primary_key"
 			plan.Message = fmt.Sprintf("table %s.%s has changes but no primary key or NOT NULL unique key", ref.Database, ref.Table)
 			return *plan, fmt.Errorf("%w: %s.%s", domain.ErrSchemaNoPrimaryKey, ref.Database, ref.Table)
+		}
+		if ddlLabel != "" {
+			plan.Tables = append(plan.Tables, domain.MergeTableSummary{
+				Database: ref.Database,
+				Table:    ref.Table,
+				DDL:      ddlLabel,
+			})
 		}
 		return domain.MergePlan{}, nil
 	}
@@ -2040,7 +2051,7 @@ func (m *Merger) openTableCursorWithAdded(ctx context.Context, db *sql.DB, engin
 		orderClause = " ORDER BY " + strings.Join(orderParts, ", ")
 	}
 	q := fmt.Sprintf("/* db-branch:scan %s.%s */ SELECT %s FROM %s.%s%s",
-		tm.Database, tm.Name, strings.Join(selectCols, ", "), qDB, qTbl, orderClause)
+		sanitizeCommentLabel(tm.Database), sanitizeCommentLabel(tm.Name), strings.Join(selectCols, ", "), qDB, qTbl, orderClause)
 	rows, err := db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("select %s.%s: %w", tm.Database, tm.Name, err)

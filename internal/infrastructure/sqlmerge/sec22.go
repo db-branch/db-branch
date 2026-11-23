@@ -110,8 +110,7 @@ func scanSafeSQL(s string, isType bool) error {
 			closed := false
 			for i < n {
 				if s[i] == '\\' {
-					i += 2
-					continue
+					return fmt.Errorf("%w: backslash escape in string literal %q", ErrUnsafeDDL, s)
 				}
 				if s[i] == '\'' {
 					if i+1 < n && s[i+1] == '\'' {

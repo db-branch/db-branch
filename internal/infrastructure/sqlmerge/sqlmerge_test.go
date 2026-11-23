@@ -75,7 +75,7 @@ func TestSEC22_識別子クォートとDEFAULT式および生成列式のSQLイ�
 		"now()", "gen_random_uuid()", "(price * qty)", "COALESCE(discount, 0) + 10",
 		"'pending'::character varying", "'{}'::jsonb", "CASE WHEN qty > 0 THEN price ELSE 0 END",
 		"nextval('orders_id_seq'::regclass)", "(`qty` * 2)", `("qty" * 2)`, "ARRAY[1, 2]",
-		`'escaped \' quote'`, "`col``1` + 1", `"col""1" + 1`,
+		"`col``1` + 1", `"col""1" + 1`,
 	} {
 		if err := sqlmerge.ValidateSQLExpression(okExpr); err != nil {
 			t.Errorf("ValidateSQLExpression(%q) unexpected error: %v", okExpr, err)
@@ -1807,5 +1807,47 @@ func TestDiffAndApply_追加分岐_PKLessエラーとColDroppedInBothとEmptyDef
 	globalMock.register("fkc-err", fkChkErr)
 	if err := m.Apply(context.Background(), domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fkc-err"}, apPlan, nil); err == nil {
 		t.Error("expected FOREIGN_KEY_CHECKS error")
+	}
+
+	// Finding 1 & 2: SQL comment label sanitization & backslash inside single-quoted literals rejected
+	if err := sqlmerge.ValidateSQLExpression(`'foo\'; DROP TABLE users; --'`); !errors.Is(err, sqlmerge.ErrUnsafeDDL) {
+		t.Errorf("ValidateSQLExpression backslash escape should be rejected as ErrUnsafeDDL, got %v", err)
+	}
+	cmtS := &mockInstance{
+		tables:  [][]any{{"shop", "t*/; DROP TABLE x; --", int64(0)}},
+		columns: [][]any{{"shop", "t*/; DROP TABLE x; --", "id", 1, "int", "int", "NO", nil, "", ""}},
+		indexes: [][]any{{"shop", "t*/; DROP TABLE x; --", "PRIMARY", 0, 1, "id", 1}},
+	}
+	globalMock.register("cmt-a", &mockInstance{tables: cmtS.tables, columns: cmtS.columns, indexes: cmtS.indexes})
+	if _, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/cmt-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/cmt-a"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/cmt-a"},
+	}); err != nil {
+		t.Errorf("table name with comment meta-chars should succeed safely: %v", err)
+	}
+
+	// Finding 5: Empty PK-less table with AllowDDL adding a column keeps MergeTableSummary in plan.Tables
+	pkeA := &mockInstance{
+		tables:  [][]any{{"shop", "events", int64(0)}},
+		columns: [][]any{{"shop", "events", "id", 1, "int", "int", "NO", nil, "", ""}},
+	}
+	pkeS2 := &mockInstance{
+		tables: [][]any{{"shop", "events", int64(0)}},
+		columns: [][]any{
+			{"shop", "events", "id", 1, "int", "int", "NO", nil, "", ""},
+			{"shop", "events", "note", 2, "varchar", "varchar(64)", "YES", nil, "", ""},
+		},
+	}
+	globalMock.register("pkemp-a", pkeA)
+	globalMock.register("pkemp-s", pkeS2)
+	ddlEmptyPlan, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/pkemp-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/pkemp-s"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/pkemp-a"},
+		AllowDDL: true,
+	})
+	if err != nil || ddlEmptyPlan.DDL != 1 || len(ddlEmptyPlan.Tables) != 1 || ddlEmptyPlan.Tables[0].DDL != "ALTER TABLE ADD COLUMN" {
+		t.Errorf("empty pk-less DDL plan = %+v err=%v", ddlEmptyPlan, err)
 	}
 }
