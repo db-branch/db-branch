@@ -9,7 +9,7 @@
 //
 // Needs ffmpeg on PATH and a Playwright Chromium (npx playwright install chromium).
 // Env: DEMO_URL (use a running demo instead of serving web/dist-demo),
-//      GIF_WIDTH (default 1200), GIF_FPS (default 12), CHROMIUM_CHANNEL (default chromium).
+//      GIF_WIDTH (default 1200), GIF_FPS (default 8), CHROMIUM_CHANNEL (default chromium).
 const http = require("node:http");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -21,7 +21,7 @@ const root = path.resolve(__dirname, "..");
 const dist = path.join(root, "web", "dist-demo");
 const out = path.resolve(process.argv[2] || path.join(root, "docs", "assets", "demo.gif"));
 const width = Number(process.env.GIF_WIDTH || 1200);
-const fps = Number(process.env.GIF_FPS || 10);
+const fps = Number(process.env.GIF_FPS || 8);
 const view = { width: 1200, height: 760 };
 
 const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".txt": "text/plain", ".xml": "application/xml" };
@@ -30,7 +30,7 @@ const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/cs
 function serve() {
   const server = http.createServer((req, res) => {
     const file = path.join(dist, decodeURIComponent(new URL(req.url, "http://x").pathname));
-    const real = file.startsWith(dist) && fs.existsSync(file) && fs.statSync(file).isFile() ? file : path.join(dist, "index.html");
+    const real = file.startsWith(dist + path.sep) && fs.existsSync(file) && fs.statSync(file).isFile() ? file : path.join(dist, "index.html");
     res.setHeader("content-type", types[path.extname(real)] || "application/octet-stream");
     res.end(fs.readFileSync(real));
   });
@@ -110,9 +110,11 @@ async function main() {
   // webm -> GIF with a palette made from the video itself; loops forever.
   const filters = `fps=${fps},scale=${width}:-1:flags=lanczos`;
   fs.mkdirSync(path.dirname(out), { recursive: true });
-  execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-i", webm, "-vf", `${filters},split[a][b];[a]palettegen=max_colors=96:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle`, "-loop", "0", out]);
+  execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-i", webm, "-vf", `${filters},split[a][b];[a]palettegen=max_colors=64:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle`, "-loop", "0", out]);
   fs.rmSync(tmp, { recursive: true, force: true });
-  console.log(`${out}: ${(fs.statSync(out).size / 1024 / 1024).toFixed(2)} MB`);
+  const mb = fs.statSync(out).size / 1024 / 1024;
+  console.log(`${out}: ${mb.toFixed(2)} MB`);
+  if (mb > 5) console.warn("warning: over 5 MB; lower GIF_WIDTH or GIF_FPS");
 }
 
 main().catch((e) => {

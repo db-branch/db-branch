@@ -20,4 +20,4 @@ body { padding-top: var(--demo-bar); }
 .demo-home { color: inherit; text-underline-offset: 3px; }
 .portal-get { top: calc(var(--s4) + var(--demo-bar)); }
 .module-frame { height: calc(100vh - 48px - var(--demo-bar)); }
-@media (max-width: 640px) { .demo-spacer { display: none; } }
+@media (max-width: 640px) { .demo-spacer, .demo-note { display: none; } .demo-banner { gap: 4px 10px; padding: 5px 10px; } }
