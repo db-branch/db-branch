@@ -228,6 +228,7 @@ export const ja: Record<string, string> = {
 
   // Demo (the static build at demo.db-branch.com)
   "Run it on your own machine": "手元で試す",
+  "Interested in Team / Business?": "Team / Business に興味がありますか？",
   "Nothing here is real. Data resets when you reload.": "ここにあるものはすべて架空です。再読み込みするとデータは元に戻ります。",
   "Demo: any user name and password will do.": "デモ：ユーザー名もパスワードも何でも構いません。",
   "This page is served by the {module} module on a real cluster. Here it shows sample data.": "実際のクラスタでは、このページは {module} モジュールが提供します。ここではサンプルのデータを表示しています。",

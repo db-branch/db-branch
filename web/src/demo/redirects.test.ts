@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import redirectsRaw from "../../demo-worker/_redirects?raw";
-import { tryLocallyUrl } from "./tryurl";
+import { interestUrl, tryLocallyUrl } from "./tryurl";
 
 // Cloudflare _redirects: "source destination [status]", one rule per line, # for comments.
 const rules = redirectsRaw
@@ -21,11 +21,21 @@ describe("demo-worker _redirects (paths the analytics can count)", () => {
     expect(rule("/go/getting-started")).toEqual({ from: "/go/getting-started", to: "https://db-branch.com/docs/getting-started/", status: 302 });
     expect(rule("/go/getting-started-ja")).toEqual({ from: "/go/getting-started-ja", to: "https://db-branch.com/ja/docs/getting-started/", status: 302 });
   });
+  it("sends /go/interest to the Discussions category for people interested in Team / Business", () => {
+    expect(rule("/go/interest")).toEqual({ from: "/go/interest", to: "https://github.com/db-branch/db-branch/discussions/new?category=interested-in-team-business", status: 302 });
+  });
+  it("sends /go/contact to the pricing page where both ways to get in touch are, English and Japanese", () => {
+    expect(rule("/go/contact")).toEqual({ from: "/go/contact", to: "https://db-branch.com/plans/#interested", status: 302 });
+    expect(rule("/go/contact-ja")).toEqual({ from: "/go/contact-ja", to: "https://db-branch.com/ja/plans/#interested", status: 302 });
+  });
   it("has a rule for every link the banner can show", () => {
-    for (const lang of ["en", "ja"] as const) expect(rule(tryLocallyUrl(lang))).toBeDefined();
+    for (const lang of ["en", "ja"] as const) {
+      expect(rule(tryLocallyUrl(lang))).toBeDefined();
+      expect(rule(interestUrl(lang))).toBeDefined();
+    }
   });
   it("has nothing else (every rule is a 302, no query strings in sources)", () => {
-    expect(rules).toHaveLength(3);
+    expect(rules).toHaveLength(6);
     for (const r of rules) {
       expect(r.status).toBe(302);
       expect(r.from).not.toContain("?");

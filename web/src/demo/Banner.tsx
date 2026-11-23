@@ -2,7 +2,7 @@
 // way back to the real site.
 import { useEffect, useRef, useState } from "react";
 import { language, t } from "../lib/i18n";
-import { tryLocallyUrl } from "./tryurl";
+import { interestUrl, tryLocallyUrl } from "./tryurl";
 
 export type Role = "admin" | "developer";
 
@@ -38,6 +38,9 @@ export function Banner({ role, onSwitch, home }: { role: Role | null; onSwitch: 
       </span>
       <a className="demo-try" href={tryLocallyUrl(language())}>
         {t("Run it on your own machine")}
+      </a>
+      <a className="demo-interest" href={interestUrl(language())}>
+        {t("Interested in Team / Business?")}
       </a>
       <a className="demo-home" href={home}>
         Back to db-branch.com

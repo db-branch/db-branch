@@ -1,0 +1,51 @@
+# Form for the Discussions category "Interested in Team / Business".
+# The file name must match the category's slug. Discussions are public: do not ask for an email address here
+# (people who prefer private contact write to sales@db-branch.com).
+title: "Interested in: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for telling us you are interested. Team and Business are not on sale yet and their prices are not announced; what you write here helps us decide what to build first.
+
+        **This is a public place.** Anything you write here can be read by anyone. If you would rather talk privately, or want to give your email address, write to sales@db-branch.com instead.
+
+        Team / Business は販売前で、価格は未定です。ここに書いていただいた内容は、何を先に作るかの判断に使います。
+        **この場所は公開されています。** 非公開でやり取りしたい場合や、メールアドレスを伝えたい場合は sales@db-branch.com へ。
+  - type: dropdown
+    id: plan
+    attributes:
+      label: Which plan are you interested in? / 関心のあるプラン
+      options:
+        - Lite
+        - Team
+        - Business
+        - Staying on the open-source core / OSS のまま使う
+    validations:
+      required: true
+  - type: input
+    id: company
+    attributes:
+      label: Company and your role (optional, public) / 会社名・役割(任意、公開されます)
+      description: Skip this if you do not want it to be public. / 公開したくない場合は書かなくて構いません。
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Database / データベースの種類
+      multiple: true
+      options:
+        - MySQL
+        - PostgreSQL
+        - Other / その他
+  - type: input
+    id: scale
+    attributes:
+      label: Database size and number of nodes / DB のサイズとノード数
+      placeholder: "e.g. 800 GB, 3 nodes"
+  - type: textarea
+    id: usecase
+    attributes:
+      label: How would you use it? / どんな用途で使いたいですか
+      description: For example, a branch per pull request, QA environments, letting AI agents try SQL. / 例: PR ごとのブランチ、QA 環境、AI エージェントの試し打ち。
+    validations:
+      required: true
