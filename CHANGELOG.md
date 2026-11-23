@@ -2,6 +2,32 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to follow [Semantic Versioning](https://semver.org/) from 1.0. Until then (Beta), APIs may change.
 
+## [0.3.1] - 2026-11-24
+
+Patch release following `v0.3.0` with faster `branch merge`, SQL query / Web SQL runner fixes, module sync hardening, and CI/packaging reliability improvements.
+
+### Performance
+
+- **Faster Branch Line Merge (`F-03`)**: `sqlmerge` now skips row-by-row comparison for tables whose digest is unchanged, speeding up `branch merge`.
+
+### Fixed
+
+- **SQL Query & Web SQL Runner (`W-11`)**:
+  - Fixed a `sqlquery` panic on empty or comment-only inputs and improved `CRLF`, line comment, nested block comment, and `RETURNING` detection.
+  - Added optional `database` targeting for PostgreSQL and MySQL across `POST /v1/branches/{name}/query`, MCP `query`, and the Web SQL runner, with database name validation to prevent DSN parameter injection.
+  - Fixed Web SQL runner statement splitting for PostgreSQL JSONB `#` operators, dollar-quoted strings, trailing backslashes, and nested comments, and added **Stop** / unmount cancellation.
+- **Module Sync & Rolling Upgrade (`F-04`)**:
+  - Prevented downgrading installed packages that are already ahead of the cluster record during module sync and rolling updates.
+  - Serialized `apt-get` / `apt-cache` operations via a context-aware semaphore to avoid lock contention.
+  - Added bounded exponential backoff (1m to 30m) on module sync failures, along with SSE/notification events and `dbbranch_module_problem` metrics.
+- **Restore & Merge Guidance (`F-05`)**: Clarified `branch restore` checkpoint behavior in documentation/UI and aligned `branch merge` error messages when no changes exist past the common ancestor.
+- **CI & Packaging (`W-24`)**: Hardened `scripts/apt-restore-pool.sh` against transient HTTP errors and path traversal, pinned GitHub Actions to commit SHAs, enabled `go test -race ./...` in CI, and fixed test race conditions.
+
+### Changed
+
+- **Compatibility & Raft Protocol (`26`)**: No Raft protocol or state format changes since `0.3.0`.
+- **Upgrade**: Upgrade cluster nodes one by one (leader last) via `apt-get update && apt-get install db-branch` (or `apt upgrade`). See [docs/distribution.md](docs/distribution.md) and [docs/updates.md](docs/updates.md).
+
 ## [0.3.0] - 2026-11-23
 
 This release includes **Branch Fork**, **Branch Line Merge**, **External Runtime Modules (Experimental)**, and a comprehensive set of **security, reliability, and API/CLI hardening fixes** for GA readiness.
