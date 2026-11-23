@@ -155,9 +155,16 @@ func TestQuery_任意database指定をRESTとMCPの両方からプロバイダ�
 	f.srv.Providers = providersOf(q)
 	f.srv.TokenAuth = &fakeTokens{}
 
-	resp, _ := f.do(t, "POST", "/v1/branches/x/query", map[string]any{"sql": "SELECT 1", "database": "app"})
+	resp, _ := f.do(t, "POST", "/v1/branches/x/query", map[string]any{"sql": "SELECT 1", "database": "  app  "})
 	if resp.StatusCode != 200 || q.got.Database != "app" {
 		t.Fatalf("REST database: status=%d got=%+v", resp.StatusCode, q.got)
+	}
+	for _, bad := range []string{"app?allowAllFiles=true", "bad/db", "bad\ndb"} {
+		q.got.Database = "untouched"
+		resp, body := f.do(t, "POST", "/v1/branches/x/query", map[string]any{"sql": "SELECT 1", "database": bad})
+		if resp.StatusCode != 400 || errCode(body) != "bad_request" || q.got.Database != "untouched" {
+			t.Fatalf("bad database %q: status=%d body=%v got=%+v", bad, resp.StatusCode, body, q.got)
+		}
 	}
 	resp, _ = f.do(t, "POST", "/v1/branches/x/query", map[string]any{"sql": "SELECT 1"})
 	if resp.StatusCode != 200 || q.got.Database != "" {

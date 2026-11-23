@@ -35,7 +35,7 @@ export function splitStatements(text: string, engine?: string): string[] {
     if (c === "'" || c === '"' || c === "`") {
       code = true;
       const pgEscape = engine === "postgres" && c === "'" && i > 0 && (text[i - 1] === "e" || text[i - 1] === "E") && (i === 1 || !/[A-Za-z0-9_$]/.test(text[i - 2]));
-      const backslashEscape = c !== "`" && (engine === "postgres" ? pgEscape : true);
+      const backslashEscape = c === "'" ? (engine === "postgres" ? pgEscape : true) : c === '"' ? engine === "mysql" : false;
       i++;
       while (i < text.length) {
         if (backslashEscape && text[i] === "\\") i += 2;
@@ -67,7 +67,7 @@ export function splitStatements(text: string, engine?: string): string[] {
           }
         }
       }
-    } else if (c === "$") {
+    } else if (c === "$" && engine !== "mysql") {
       const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(text.slice(i));
       code = true;
       if (m) {
@@ -112,7 +112,7 @@ export async function runStatements(
       done.push({ sql: st, result });
       onProgress?.([...done]);
       if (signal.aborted) {
-        return { items: done, stopped: true };
+        return { items: done, stopped: done.length < statements.length };
       }
     } catch (e) {
       if (signal.aborted || (e instanceof Error && e.name === "AbortError")) {

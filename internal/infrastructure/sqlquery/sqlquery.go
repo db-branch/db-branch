@@ -49,6 +49,9 @@ type Runner struct {
 const MaxRows = 1000
 
 func (r Runner) open(t Target) (*sql.DB, error) {
+	if err := domain.ValidateDatabaseName(t.Database); err != nil {
+		return nil, err
+	}
 	open := r.Open
 	if open == nil {
 		open = sql.Open
@@ -76,8 +79,10 @@ func (r Runner) open(t Target) (*sql.DB, error) {
 // (otherwise the affected row count is reported).
 func returnsRows(q, engine string) bool {
 	tokens := scanSQLTokens(q, engine)
+	baseDepth := 0
 	for len(tokens) > 0 && tokens[0].text == "(" {
 		tokens = tokens[1:]
+		baseDepth++
 	}
 	if len(tokens) == 0 {
 		return false
@@ -87,7 +92,7 @@ func returnsRows(q, engine string) bool {
 		return true
 	case "insert", "update", "delete", "merge":
 		for _, tok := range tokens[1:] {
-			if tok.depth == 0 && strings.EqualFold(tok.text, "returning") {
+			if tok.depth == baseDepth && strings.EqualFold(tok.text, "returning") {
 				return true
 			}
 		}
@@ -129,7 +134,7 @@ func scanSQLTokens(q, engine string) []sqlToken {
 			i = skipQuoted(q, i, c, backslashEscape)
 			continue
 		}
-		if c == '$' {
+		if c == '$' && engine == "postgres" {
 			if next, ok := skipDollarQuoted(q, i); ok {
 				i = next
 				continue
@@ -169,7 +174,11 @@ func isPGCEscape(q string, quoteIdx int) bool {
 	if quoteIdx == 0 || (q[quoteIdx-1] != 'e' && q[quoteIdx-1] != 'E') {
 		return false
 	}
-	return quoteIdx == 1 || !isWordChar(q[quoteIdx-2])
+	if quoteIdx == 1 {
+		return true
+	}
+	prev := q[quoteIdx-2]
+	return !isWordChar(prev) && prev != '$'
 }
 
 func skipBlockComment(q string, start int, nested bool) int {

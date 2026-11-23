@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { QueryResult } from "../api";
+import { api, type QueryResult } from "../api";
 import { createSqlRunnerController, runStatements } from "../lib/sqlrun";
 import { SqlResultView, SqlRunnerView } from "./sqlrunner";
 
@@ -78,6 +78,49 @@ describe("TestSqlRunner_Stopとアンマウントで後続クエリ実行を中�
     expect(ran).toEqual(["SELECT 1"]);
     expect(res.stopped).toBe(true);
     expect(res.items).toHaveLength(1);
+  });
+
+  it("does not mark stopped when all statements already completed before abort", async () => {
+    const controller = new AbortController();
+    const res = await runStatements(
+      ["SELECT 1"],
+      async () => {
+        controller.abort();
+        return { columns: ["n"], rows: [["1"]], millis: 1 };
+      },
+      controller.signal,
+    );
+    expect(res.stopped).toBe(false);
+    expect(res.items).toHaveLength(1);
+  });
+
+  it("forwards trimmed database and AbortSignal via controller and api.query", async () => {
+    const origFetch = globalThis.fetch;
+    const calls: { url: string; init?: RequestInit }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({ columns: ["ok"], rows: [["1"]], millis: 1 }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      let latest = { running: false, stopped: false, items: [] as unknown[], total: 0 };
+      const ctrl = createSqlRunnerController(
+        (st, db, signal) => api.query("b1", st, 500, db, signal),
+        (s) => {
+          latest = s;
+        },
+        "postgres",
+      );
+      await ctrl.run("SELECT 'C:\\'; SELECT 2", "  app_db  ");
+      expect(calls).toHaveLength(2);
+      expect(calls[0].url).toBe("/v1/branches/b1/query");
+      expect(JSON.parse(String(calls[0].init?.body))).toEqual({ sql: "SELECT 'C:\\'", max_rows: 500, database: "app_db" });
+      expect(calls[0].init?.signal).toBeInstanceOf(AbortSignal);
+      expect(latest.running).toBe(false);
+      expect(latest.stopped).toBe(false);
+      expect(latest.items).toHaveLength(2);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
   });
 
   it("aborts in-flight query and skips remaining statements on unmount/dispose", async () => {

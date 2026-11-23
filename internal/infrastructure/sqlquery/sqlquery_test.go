@@ -200,7 +200,9 @@ func TestSQLQuery_空文字およびコメントのみ入力でpanicせずCRLF�
 		{pg, "INSERT INTO t (a) VALUES ('C:\\') RETURNING id"},
 		{pg, "INSERT INTO t (a) VALUES (E'it\\'s ''ok'' RETURNING') RETURNING id"},
 		{my, "INSERT INTO t (a) VALUES ('it\\'s ''ok'' RETURNING') RETURNING id"},
+		{my, "INSERT INTO t (a) VALUES ($$) RETURNING id"},
 		{pg, "(SELECT 1)"},
+		{pg, "(INSERT INTO t (a) VALUES (1) RETURNING id)"},
 	} {
 		res, err := r.Run(ctx, tc.target, tc.q, 10)
 		if err != nil {
@@ -225,6 +227,8 @@ func TestSQLQuery_空文字およびコメントのみ入力でpanicせずCRLF�
 		{pg, "UPDATE t SET a = $q$unclosed"},
 		{pg, "UPDATE t SET a = 'unclosed"},
 		{pg, "UPDATE t SET a = $unclosed"},
+		{pg, "UPDATE t SET a = foo$e'RETURNING'"},
+		{pg, "INSERT INTO t (a) VALUES (E'x')"},
 	} {
 		res, err := r.Run(ctx, tc.target, tc.q, 10)
 		if err != nil {
@@ -271,5 +275,14 @@ func TestSQLQuery_PostgreSQLおよびMySQLで任意database指定クエリを実
 	}
 	if !strings.HasPrefix((*dsns)[4], "mysql u:p@tcp(h:40001)/custom_my?") {
 		t.Errorf("hook mysql custom db dsn = %q", (*dsns)[4])
+	}
+
+	// Unsafe database names (DSN parameter injection, slashes, control chars, >128 bytes) must be rejected.
+	for _, bad := range []string{"app?allowAllFiles=true", "app&tls=false", "app/other", "app\\other", "app#x", "app=1", "app;x", "app\n", "app\x00", strings.Repeat("a", 129)} {
+		for _, eng := range []string{"mysql", "postgres"} {
+			if _, err := r.Run(ctx, sqlquery.Target{Engine: eng, Host: "h", Port: 3306, Database: bad, User: "u", Password: "p"}, "SELECT 1", 10); !errors.Is(err, domain.ErrInvalidDatabase) {
+				t.Errorf("%s bad database %q: got %v, want ErrInvalidDatabase", eng, bad, err)
+			}
+		}
 	}
 }

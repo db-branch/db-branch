@@ -79,8 +79,10 @@ describe("TestSplitStatements_PostgreSQLのJSONBシャープ演算子と末尾�
   it("handles trailing backslash in PostgreSQL string literals and E-strings", () => {
     expect(splitStatements("SELECT 'C:\\'; SELECT 2", "postgres")).toEqual(["SELECT 'C:\\'", "SELECT 2"]);
     expect(splitStatements('SELECT "col\\"; SELECT 2', "postgres")).toEqual(['SELECT "col\\"', "SELECT 2"]);
+    expect(splitStatements('SELECT "col\\"; SELECT 2')).toEqual(['SELECT "col\\"', "SELECT 2"]);
     expect(splitStatements("SELECT E'a\\'b;c'; SELECT 2", "postgres")).toEqual(["SELECT E'a\\'b;c'", "SELECT 2"]);
     expect(splitStatements("SELECT 'back\\'s;x'; SELECT 2", "mysql")).toEqual(["SELECT 'back\\'s;x'", "SELECT 2"]);
+    expect(splitStatements("SELECT $a$; SELECT 2", "mysql")).toEqual(["SELECT $a$", "SELECT 2"]);
   });
 
   it("handles nested block comments in PostgreSQL without splitting inside them", () => {

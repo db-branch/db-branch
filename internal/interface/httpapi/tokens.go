@@ -112,6 +112,11 @@ func (s *Server) queryBranch(w http.ResponseWriter, r *http.Request, svc Branche
 	if !decode(w, r, &in) {
 		return
 	}
+	in.Database = strings.TrimSpace(in.Database)
+	if err := domain.ValidateDatabaseName(in.Database); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	if s.Providers == nil {
 		writeError(w, http.StatusServiceUnavailable, "not_initialized", "queries are not available on this node")
 		return
