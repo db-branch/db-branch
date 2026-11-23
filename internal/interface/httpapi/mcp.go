@@ -357,7 +357,7 @@ func (s *Server) mcpServer(r *http.Request) *mcp.Server {
 			}
 			return text(out["items"]), nil, nil
 		})
-	mcp.AddTool(srv, &mcp.Tool{Name: "restore_checkpoint", Description: "Put a branch back to a checkpoint (it restarts briefly). The current state is replaced and not saved: call create_checkpoint first if it may be needed. Every checkpoint already taken stays restorable."},
+	mcp.AddTool(srv, &mcp.Tool{Name: "restore_checkpoint", Description: "Put a branch back to a checkpoint (it restarts briefly). Changes after the last checkpoint are lost on restore: call create_checkpoint first if you want to keep them. Every checkpoint already taken stays restorable."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in restoreIn) (*mcp.CallToolResult, any, error) {
 			path := "/v1/branches/" + url.PathEscape(in.Branch) + "/checkpoints/" + url.PathEscape(in.Checkpoint) + "/restore"
 			if err := s.startAndWait(ctx, r, http.MethodPost, path, nil); err != nil {

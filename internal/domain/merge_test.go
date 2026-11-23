@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -338,9 +339,26 @@ func TestResolveLineAncestor_親子_兄弟_削除済みgoneチェックポイン
 		t.Errorf("expected ErrInvalidMergeSource for sourceLine == liveLine, got %v", err)
 	}
 
-	// Case 5: Checkpoint equals ancestor -> ErrInvalidMergeSource
+	// Case 5: Checkpoint equals ancestor -> ErrInvalidMergeSource with guidance
 	if _, err := ResolveLineAncestor(lines, nil, "c1"); !errors.Is(err, ErrInvalidMergeSource) {
 		t.Errorf("expected ErrInvalidMergeSource when checkpoint is the ancestor itself, got %v", err)
+	}
+	// Case 5b: Promoted-away source line with only the branch-point checkpoint (no checkpoint taken before restore)
+	linesNoNewCP := []Line{
+		{
+			Dataset: "tank/db-branch/branches/x",
+			Live:    true,
+			Props:   map[string]string{PropLine: "1", PropParent: "0", PropFrom: "ckpt-c1"},
+			Snapshots: []SnapshotInfo{
+				{Name: ResetSnapshot, Created: t0, Props: map[string]string{PropLine: "0"}},
+				{Name: "ckpt-c1", Created: t0.Add(time.Minute), Props: map[string]string{PropLine: "0"}},
+			},
+		},
+	}
+	if _, err := ResolveLineAncestor(linesNoNewCP, &src0, ""); !errors.Is(err, ErrInvalidMergeSource) {
+		t.Errorf("expected ErrInvalidMergeSource when source line has no changes past ancestor, got %v", err)
+	} else if !strings.Contains(err.Error(), "has no changes past common ancestor") || !strings.Contains(err.Error(), "checkpoint before restore") {
+		t.Errorf("expected error to explain cause and taking a checkpoint before restore, got %v", err)
 	}
 
 	// Case 6: No common ancestor (missing PropParent / PropFrom)

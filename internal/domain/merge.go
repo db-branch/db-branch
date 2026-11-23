@@ -818,7 +818,7 @@ func ResolveLineAncestor(lines []Line, sourceLine *int, checkpoint string) (Line
 		ancDS, ancInfo, ancLabel = ds, info, label
 		if hasSrcSnap && !snapshotOlder(ancInfo, srcSnapInfo) {
 			// The source snapshot is at or before the branch point, so Target already descends from it.
-			return LineMergePlan{}, fmt.Errorf("%w: source snapshot %s has no changes past common ancestor %s", ErrInvalidMergeSource, srcSnapInfo.Name, ancInfo.Name)
+			return LineMergePlan{}, fmt.Errorf("%w: source snapshot %s has no changes past common ancestor %s (changes after the last checkpoint are discarded on restore; take a checkpoint before restore to keep and merge them)", ErrInvalidMergeSource, srcSnapInfo.Name, ancInfo.Name)
 		}
 
 	case idxL == 0:

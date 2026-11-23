@@ -345,7 +345,7 @@ export function PanelBody({ p, modal, onExpand, expandRef, onFork, onMerge }: { 
                 <div className="confirm" role="group" aria-label={asking.what === "restore" ? `Restore ${c.name}` : `Delete ${c.name}`} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), p.setAsking(null))}>
                   <span role="alert">
                     {asking.what === "restore"
-                      ? t("Restore {name} to {checkpoint}? The current state of {name} is replaced and is not saved. Save a checkpoint first if you may need it. Every checkpoint you already have stays.", { name: b.name, checkpoint: c.name })
+                      ? t("Restore {name} to {checkpoint}? The current state of {name} is replaced and is not saved; changes after the last checkpoint are lost. Save a checkpoint first if you want to keep them. Every checkpoint you already have stays.", { name: b.name, checkpoint: c.name })
                       : t("Delete checkpoint {checkpoint}? The other checkpoints are not affected.", { checkpoint: c.name })}
                   </span>
                   <span className="confirm-buttons">
@@ -426,7 +426,7 @@ function CheckpointDetail({ c, line, liveLine, branch, asking, working, why, for
       {asking ? (
         <Confirm
           label={`Restore ${c.name}`}
-          text={t("Restore {name} to {checkpoint}? The current state of {name} is replaced and is not saved. Save a checkpoint first if you may need it. Every checkpoint you already have stays.", { name: branch, checkpoint: c.name })}
+          text={t("Restore {name} to {checkpoint}? The current state of {name} is replaced and is not saved; changes after the last checkpoint are lost. Save a checkpoint first if you want to keep them. Every checkpoint you already have stays.", { name: branch, checkpoint: c.name })}
           action="Confirm restore"
           working={working}
           onCancel={() => onAsk(false)}
