@@ -99,7 +99,7 @@ describe("seed", () => {
     const lic = get("/v1/license");
     expect(lic.configured).toBe(false);
     expect(lic.report.trial).toBe(true);
-    expect(get("/v1/modules").items.filter((m: any) => m.wanted).map((m: any) => m.name)).toEqual(["audit", "auth", "history", "masking", "proxysql"]);
+    expect(get("/v1/modules").items.filter((m: any) => m.wanted).map((m: any) => m.name)).toEqual(["audit", "auth", "history", "proxysql"]);
   });
   it("only ever shows the fake host and password", () => {
     const text = JSON.stringify([branches(), get("/v1/bases"), get("/v1/cluster")]);
@@ -395,6 +395,23 @@ describe("cluster, engines, modules, settings, tokens", () => {
     expect(call("PUT", "/v1/settings/core", { values: { "backup.keep": "many" } }).status).toBe(400);
     expect(call("PUT", "/v1/settings/core", { values: { "nope": "1" } }).status).toBe(400);
     expect(call("PUT", "/v1/settings/nope", { values: {} }).status).toBe(404);
+  });
+  it("keeps a secret setting write-only: the value never comes back, only whether one is set, and an empty one keeps it", () => {
+    const find = () => (get("/v1/settings").items as any[]).flatMap((s) => s.settings).find((x) => x.key === "license.key");
+    expect(find()).toMatchObject({ value: "", secret_set: false });
+    const put = call("PUT", "/v1/settings/core", { values: { "license.key": "dbbl1.abc" } });
+    expect(JSON.stringify(put.body)).not.toContain("dbbl1.abc");
+    expect(find()).toMatchObject({ value: "", secret_set: true });
+    call("PUT", "/v1/settings/core", { values: { "license.key": "" } });
+    expect(find().secret_set).toBe(true);
+    call("PUT", "/v1/settings/core", { values: {}, clear: ["license.key"] });
+    expect(find().secret_set).toBe(false);
+    expect(call("PUT", "/v1/settings/core", { values: {}, clear: ["backup.keep"] }).status).toBe(400);
+  });
+  it("does not offer masking in 1.0: no masking module, no base.mask action", () => {
+    expect(get("/v1/modules").items.map((m: any) => m.name)).not.toContain("masking");
+    expect(get("/v1/settings").items.map((sc: any) => sc.scope)).not.toContain("masking");
+    expect(JSON.stringify(get("/v1/bases"))).not.toContain("base.mask");
   });
   it("creates a service token (secret shown once, obviously fake) and revokes it", () => {
     const r = call("POST", "/v1/tokens", { name: "deploy", scope: "branches", ttl: "720h" });
@@ -728,6 +745,16 @@ describe("history graph and module", () => {
     settle();
     const g = graph("alex-orders-report");
     expect(g.lines.find((l) => l.line === g.live)).toMatchObject({ parent: 0, from: "reset" });
+  });
+});
+
+describe("branch owner", () => {
+  it("returns the owner's id and a display name apart, as the real API does", () => {
+    b.signIn("developer");
+    expect(branches().length).toBeGreaterThan(0);
+    for (const x of branches()) expect(x.owner_name).toBe(x.owner);
+    call("POST", "/v1/branches", { name: "owner-check", base: "orders" });
+    expect(branch("alex-owner-check")).toMatchObject({ owner: "alex@example.com", owner_name: "alex@example.com" });
   });
 });
 

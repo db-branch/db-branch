@@ -1,7 +1,8 @@
 // The strip across the top of the demo: what it is, who you are in it, and the
 // way back to the real site.
 import { useState } from "react";
-import { t } from "../lib/i18n";
+import { language, t } from "../lib/i18n";
+import { tryLocallyUrl } from "./tryurl";
 
 export type Role = "admin" | "developer";
 
@@ -24,6 +25,9 @@ export function Banner({ role, onSwitch, home }: { role: Role | null; onSwitch: 
           </button>
         ))}
       </span>
+      <a className="demo-try" href={tryLocallyUrl(language())}>
+        {t("Run it on your own machine")}
+      </a>
       <a className="demo-home" href={home}>
         Back to db-branch.com
       </a>

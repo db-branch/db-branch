@@ -5,17 +5,19 @@
 [![Stars](https://img.shields.io/github/stars/db-branch/db-branch?style=flat)](https://github.com/db-branch/db-branch/stargazers)
 [![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=githubsponsors)](https://github.com/sponsors/MaSuCcHI)
 
-Instant database branches for MySQL and PostgreSQL, on your own servers.
+**Instant database branches for MySQL and PostgreSQL, on your own servers.** Create a copy-on-write branch of a large database in seconds, break it, reset it, throw it away.
 
-Test a migration, let an AI agent loose, or give every pull request its own copy of the database. db-branch creates a copy-on-write branch of a large database in seconds, with nothing copied. Break it, reset it, throw it away. Built on ZFS clones, self-hosted, Apache-2.0.
+**Try it in your browser in 10 seconds: <https://demo.db-branch.com/?ref=readme>** (nothing real is created).
+
+![Create a branch, see how to connect, save a checkpoint, reset the branch](docs/assets/demo.gif)
+
+Test a migration, let an AI agent loose, or give every pull request its own copy of the database. db-branch creates a branch with nothing copied. Built on ZFS clones, self-hosted, Apache-2.0.
 
 **Status: Beta.** db-branch is usable today, but APIs and command-line details may still change before 1.0. It is an independent open-source project, built from scratch.
 
-![Create a branch, drop a table, reset the branch, delete it](docs/assets/demo.gif)
-
 ## Try it
 
-1. **In your browser, 0 minutes.** A live console demo runs entirely in the page (nothing real is created): <https://demo.db-branch.com/>
+1. **In your browser, 0 minutes.** A live console demo runs entirely in the page (nothing real is created): <https://demo.db-branch.com/?ref=readme>
 2. **On a Mac or Windows machine, about 2 minutes.** db-branch needs Linux and ZFS, so run it in an Ubuntu VM with [Multipass](https://multipass.run/). One command makes the VM, installs db-branch, initialises it on a file-backed ZFS pool and loads a small sample base, `shop` (MySQL 8.4):
 
    ```sh
