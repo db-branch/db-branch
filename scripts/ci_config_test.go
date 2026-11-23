@@ -4,11 +4,31 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
-func TestWorkflows_全Actionが40桁SHAで固定されている(t *testing.T) {
+type actionsLock struct {
+	Workflows    map[string][]string `yaml:"workflows"`
+	Dependencies map[string]struct {
+		Ref    string `yaml:"ref"`
+		Commit string `yaml:"commit"`
+	} `yaml:"dependencies"`
+}
+
+func TestWorkflows_全ActionがactionsLockでSHA固定されている(t *testing.T) {
+	lockRaw, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "actions.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lock actionsLock
+	if err := yaml.Unmarshal(lockRaw, &lock); err != nil {
+		t.Fatalf("parse actions.lock: %v", err)
+	}
+
 	files, err := filepath.Glob(filepath.Join("..", ".github", "workflows", "*.yml"))
 	if err != nil {
 		t.Fatal(err)
@@ -16,7 +36,7 @@ func TestWorkflows_全Actionが40桁SHAで固定されている(t *testing.T) {
 	if len(files) == 0 {
 		t.Fatal("no workflow files found")
 	}
-	shaPin := regexp.MustCompile(`^[^\s@]+@[0-9a-f]{40}(\s+#.*)?$`)
+	shaCommit := regexp.MustCompile(`^sha1-[0-9a-f]{40}$`)
 	usesLine := regexp.MustCompile(`^\s*-?\s*uses:\s*(.+?)\s*$`)
 
 	for _, f := range files {
@@ -24,14 +44,31 @@ func TestWorkflows_全Actionが40桁SHAで固定されている(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		wfKey := ".github/workflows/" + filepath.Base(f)
+		lockedRefs, ok := lock.Workflows[wfKey]
+		if !ok {
+			t.Errorf("%s is missing from actions.lock workflows", wfKey)
+			continue
+		}
 		for i, line := range strings.Split(string(raw), "\n") {
 			m := usesLine.FindStringSubmatch(line)
 			if m == nil {
 				continue
 			}
 			ref := strings.Trim(m[1], `"'`)
-			if !shaPin.MatchString(ref) {
-				t.Errorf("%s:%d uses %q is not pinned to a 40-char commit SHA", filepath.Base(f), i+1, ref)
+			if idx := strings.Index(ref, " #"); idx >= 0 {
+				ref = strings.TrimSpace(ref[:idx])
+			}
+			if !slices.Contains(lockedRefs, ref) {
+				t.Errorf("%s:%d uses %q not listed in actions.lock workflows[%q]", filepath.Base(f), i+1, ref, wfKey)
+			}
+			dep, ok := lock.Dependencies[ref]
+			if !ok {
+				t.Errorf("%s:%d uses %q missing from actions.lock dependencies", filepath.Base(f), i+1, ref)
+				continue
+			}
+			if !shaCommit.MatchString(dep.Commit) {
+				t.Errorf("actions.lock dependencies[%q].commit = %q, want sha1-<40 hex>", ref, dep.Commit)
 			}
 		}
 	}
