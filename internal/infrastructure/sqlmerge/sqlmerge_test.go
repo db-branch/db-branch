@@ -128,6 +128,10 @@ type mockInstance struct {
 	enums       [][]any
 	sequences   [][]any
 	tableRows   map[string][][]any // "db.table" -> rows
+	checksums   map[string]any     // "db.table" -> MySQL CHECKSUM TABLE value (nil => NULL)
+	digests     map[string][]any   // "db.table" -> [count, sum1, sum2, xor3, xor4]
+	fkLookups   map[string][][]any // "db.table" -> existing parent ref rows for fk-lookup
+	fkOrphans   map[string][][]any // "db.table" -> matching child orphan rows for fk-orphans
 	maxValues   map[string]int64   // "db.table" -> MAX(col)
 	seqValues   map[string]int64   // "schema.seq" -> last_value
 	orphanCount int64
@@ -135,8 +139,26 @@ type mockInstance struct {
 	execErrOn   string
 	queryErr    string
 
-	mu    sync.Mutex
-	execs []string
+	mu      sync.Mutex
+	execs   []string
+	queries []string
+}
+
+func (m *mockInstance) recordQuery(q string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.queries = append(m.queries, q)
+}
+
+func (m *mockInstance) hasQuerySubstr(sub string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, q := range m.queries {
+		if strings.Contains(q, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *mockInstance) recordExec(q string, args []driver.NamedValue) {
@@ -204,6 +226,7 @@ func (c *mockConn) ExecContext(_ context.Context, q string, args []driver.NamedV
 }
 
 func (c *mockConn) QueryContext(_ context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
+	c.inst.recordQuery(q)
 	if c.inst.queryErr != "" && strings.Contains(q, c.inst.queryErr) {
 		return nil, errors.New("simulated query error")
 	}
@@ -244,6 +267,63 @@ func (c *mockConn) QueryContext(_ context.Context, q string, args []driver.Named
 		return newMockRows([]string{"v"}, [][]any{{int64(1)}}), nil
 	case strings.Contains(q, "/* db-branch:verify-fk */"):
 		return newMockRows([]string{"cnt"}, [][]any{{c.inst.orphanCount}}), nil
+	case strings.Contains(q, "/* db-branch:checksum-table "):
+		start := strings.Index(q, "/* db-branch:checksum-table ") + len("/* db-branch:checksum-table ")
+		end := strings.Index(q[start:], " */")
+		key := q[start : start+end]
+		if c.inst.checksums == nil {
+			return newMockRows([]string{"Table", "Checksum"}, nil), nil
+		}
+		v, ok := c.inst.checksums[key]
+		if !ok {
+			return newMockRows([]string{"Table", "Checksum"}, nil), nil
+		}
+		return newMockRows([]string{"Table", "Checksum"}, [][]any{{key, v}}), nil
+	case strings.Contains(q, "/* db-branch:has-rows "):
+		start := strings.Index(q, "/* db-branch:has-rows ") + len("/* db-branch:has-rows ")
+		end := strings.Index(q[start:], " */")
+		key := q[start : start+end]
+		if len(c.inst.tableRows[key]) > 0 {
+			return newMockRows([]string{"one"}, [][]any{{int64(1)}}), nil
+		}
+		return newMockRows([]string{"one"}, nil), nil
+	case strings.Contains(q, "/* db-branch:table-digest "):
+		start := strings.Index(q, "/* db-branch:table-digest ") + len("/* db-branch:table-digest ")
+		end := strings.Index(q[start:], " */")
+		key := q[start : start+end]
+		if row, ok := c.inst.digests[key]; ok {
+			if len(row) == 1 {
+				return newMockRows([]string{"cnt"}, [][]any{row}), nil
+			}
+			return newMockRows([]string{"cnt", "s1", "s2", "x3", "x4"}, [][]any{row}), nil
+		}
+		return newMockRows([]string{"cnt", "s1", "s2", "x3", "x4"}, nil), nil
+	case strings.Contains(q, "/* db-branch:fk-lookup "):
+		start := strings.Index(q, "/* db-branch:fk-lookup ") + len("/* db-branch:fk-lookup ")
+		end := strings.Index(q[start:], " */")
+		key := q[start : start+end]
+		rows := c.inst.fkLookups[key]
+		cols := []string{"c1"}
+		if len(rows) > 0 {
+			cols = make([]string, len(rows[0]))
+			for i := range cols {
+				cols[i] = fmt.Sprintf("c%d", i)
+			}
+		}
+		return newMockRows(cols, rows), nil
+	case strings.Contains(q, "/* db-branch:fk-orphans "):
+		start := strings.Index(q, "/* db-branch:fk-orphans ") + len("/* db-branch:fk-orphans ")
+		end := strings.Index(q[start:], " */")
+		key := q[start : start+end]
+		rows := c.inst.fkOrphans[key]
+		cols := []string{"c1", "c2"}
+		if len(rows) > 0 {
+			cols = make([]string, len(rows[0]))
+			for i := range cols {
+				cols[i] = fmt.Sprintf("c%d", i)
+			}
+		}
+		return newMockRows(cols, rows), nil
 	case strings.Contains(q, "/* db-branch:scan "):
 		// Extract table key from comment /* db-branch:scan db.table */
 		start := strings.Index(q, "/* db-branch:scan ") + len("/* db-branch:scan ")
@@ -1849,5 +1929,542 @@ func TestDiffAndApply_追加分岐_PKLessエラーとColDroppedInBothとEmptyDef
 	})
 	if err != nil || ddlEmptyPlan.DDL != 1 || len(ddlEmptyPlan.Tables) != 1 || ddlEmptyPlan.Tables[0].DDL != "ALTER TABLE ADD COLUMN" {
 		t.Errorf("empty pk-less DDL plan = %+v err=%v", ddlEmptyPlan, err)
+	}
+}
+
+func TestDiff_変更のないテーブルはダイジェスト一致で行走査をスキップする(t *testing.T) {
+	m := newTestMerger()
+
+	// 1. MySQL: big_users (unchanged, digest matches) + orders (modified, FK -> big_users) + big_audit (unchanged, FK -> orders)
+	tables := [][]any{
+		{"shop", "big_users", int64(100)},
+		{"shop", "orders", int64(10)},
+		{"shop", "big_audit", int64(200)},
+	}
+	cols := [][]any{
+		{"shop", "big_users", "id", 1, "int", "int", "NO", nil, "", ""},
+		{"shop", "big_users", "name", 2, "varchar", "varchar(64)", "NO", nil, "", ""},
+		{"shop", "orders", "id", 1, "int", "int", "NO", nil, "", ""},
+		{"shop", "orders", "user_id", 2, "int", "int", "NO", nil, "", ""},
+		{"shop", "big_audit", "id", 1, "int", "int", "NO", nil, "", ""},
+		{"shop", "big_audit", "order_id", 2, "int", "int", "NO", nil, "", ""},
+	}
+	idxs := [][]any{
+		{"shop", "big_users", "PRIMARY", 0, 1, "id", 1},
+		{"shop", "orders", "PRIMARY", 0, 1, "id", 1},
+		{"shop", "big_audit", "PRIMARY", 0, 1, "id", 1},
+	}
+	fks := [][]any{
+		{"shop", "orders", "fk_orders_user", "user_id", "shop", "big_users", "id", 1},
+		{"shop", "big_audit", "fk_audit_order", "order_id", "shop", "orders", "id", 1},
+	}
+	a := &mockInstance{
+		tables: tables, columns: cols, indexes: idxs, fks: fks,
+		checksums: map[string]any{
+			"shop.big_users": "12345678901234567890",
+			"shop.orders":    "111",
+			"shop.big_audit": "9876543210",
+		},
+		tableRows: map[string][][]any{
+			"shop.big_users": {{int64(1), "alice"}},
+			"shop.orders":    {{int64(1), int64(1)}},
+			"shop.big_audit": {{int64(1), int64(1)}},
+		},
+	}
+	s := &mockInstance{
+		tables: tables, columns: cols, indexes: idxs, fks: fks,
+		checksums: map[string]any{
+			"shop.big_users": "12345678901234567890",
+			"shop.orders":    "222",
+			"shop.big_audit": "9876543210",
+		},
+		tableRows: map[string][][]any{
+			"shop.big_users": {{int64(1), "alice"}},
+			"shop.orders":    {{int64(1), int64(1)}, {int64(2), int64(1)}},
+			"shop.big_audit": {{int64(1), int64(1)}},
+		},
+	}
+	tInst := &mockInstance{
+		tables: tables, columns: cols, indexes: idxs, fks: fks,
+		checksums: map[string]any{
+			"shop.big_users": "12345678901234567890",
+			"shop.orders":    "111",
+			"shop.big_audit": "9876543210",
+		},
+		fkLookups: map[string][][]any{
+			"shop.big_users": {{int64(1)}},
+		},
+		tableRows: map[string][][]any{
+			"shop.big_users": {{int64(1), "alice"}},
+			"shop.orders":    {{int64(1), int64(1)}},
+			"shop.big_audit": {{int64(1), int64(1)}},
+		},
+	}
+	globalMock.register("fast-a", a)
+	globalMock.register("fast-s", s)
+	globalMock.register("fast-t", tInst)
+
+	plan, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-s"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-t"},
+	})
+	if err != nil {
+		t.Fatalf("Diff failed: %v", err)
+	}
+	if plan.TotalConflicts != 0 || plan.Inserted != 1 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	if a.hasQuerySubstr("/* db-branch:scan shop.big_users */") || s.hasQuerySubstr("/* db-branch:scan shop.big_users */") || tInst.hasQuerySubstr("/* db-branch:scan shop.big_users */") {
+		t.Errorf("expected scan of unchanged shop.big_users to be skipped")
+	}
+	if a.hasQuerySubstr("/* db-branch:scan shop.big_audit */") || s.hasQuerySubstr("/* db-branch:scan shop.big_audit */") || tInst.hasQuerySubstr("/* db-branch:scan shop.big_audit */") {
+		t.Errorf("expected scan of unchanged shop.big_audit to be skipped")
+	}
+	if !s.hasQuerySubstr("/* db-branch:scan shop.orders */") {
+		t.Errorf("expected modified shop.orders to be scanned")
+	}
+
+	// 2. FK conflict still detected when child (orders) inserts missing parent (user_id=99) in skipped big_users
+	sBadFK := &mockInstance{
+		tables: tables, columns: cols, indexes: idxs, fks: fks,
+		checksums: map[string]any{
+			"shop.big_users": "12345678901234567890",
+			"shop.orders":    "333",
+			"shop.big_audit": "9876543210",
+		},
+		tableRows: map[string][][]any{
+			"shop.big_users": {{int64(1), "alice"}},
+			"shop.orders":    {{int64(1), int64(1)}, {int64(2), int64(99)}},
+			"shop.big_audit": {{int64(1), int64(1)}},
+		},
+	}
+	globalMock.register("fast-s-badfk", sBadFK)
+	badFKPlan, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-s-badfk"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-t"},
+	})
+	if err != nil || badFKPlan.TotalConflicts != 1 || badFKPlan.Conflicts[0].Type != domain.ConflictForeignKey {
+		t.Fatalf("expected FK conflict against skipped parent, got err=%v plan=%+v", err, badFKPlan)
+	}
+
+	// 3. FK conflict still detected when parent (orders) deletes id=1 referenced by skipped child (big_audit)
+	sDelOrder := &mockInstance{
+		tables: tables, columns: cols, indexes: idxs, fks: fks,
+		checksums: map[string]any{
+			"shop.big_users": "12345678901234567890",
+			"shop.orders":    "444",
+			"shop.big_audit": "9876543210",
+		},
+		tableRows: map[string][][]any{
+			"shop.big_users": {{int64(1), "alice"}},
+			"shop.orders":    {},
+			"shop.big_audit": {{int64(1), int64(1)}},
+		},
+	}
+	tWithOrphan := &mockInstance{
+		tables: tables, columns: cols, indexes: idxs, fks: fks,
+		checksums: tInst.checksums, fkLookups: tInst.fkLookups, tableRows: tInst.tableRows,
+		fkOrphans: map[string][][]any{
+			"shop.big_audit": {{int64(1), int64(1)}},
+		},
+	}
+	globalMock.register("fast-s-del", sDelOrder)
+	globalMock.register("fast-t-orp", tWithOrphan)
+	orphanPlan, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-s-del"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-t-orp"},
+	})
+	if err != nil || orphanPlan.TotalConflicts != 1 || orphanPlan.Conflicts[0].Type != domain.ConflictForeignKey {
+		t.Fatalf("expected FK conflict against skipped child, got err=%v plan=%+v", err, orphanPlan)
+	}
+
+	// 4. Schema difference (e.g., default changed) prevents skipping even if checksums match
+	colsDiff := append([][]any(nil), cols...)
+	colsDiff[1] = []any{"shop", "big_users", "name", 2, "varchar", "varchar(64)", "NO", "anon", "", ""}
+	sSchemaDiff := &mockInstance{
+		tables: tables, columns: colsDiff, indexes: idxs, fks: fks,
+		checksums: a.checksums,
+		tableRows: map[string][][]any{
+			"shop.big_users": {{int64(1), "alice"}, {int64(2), "bob"}},
+			"shop.orders":    {{int64(1), int64(1)}},
+			"shop.big_audit": {{int64(1), int64(1)}},
+		},
+	}
+	globalMock.register("fast-s-sch", sSchemaDiff)
+	schPlan, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-s-sch"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-t"},
+	})
+	if err != nil || schPlan.Inserted != 1 || !sSchemaDiff.hasQuerySubstr("/* db-branch:scan shop.big_users */") {
+		t.Fatalf("expected schema diff to force scan, got err=%v plan=%+v", err, schPlan)
+	}
+
+	// 5. Checksum 0 with hasRows difference forces scan (prevents empty vs CRC=0 collision)
+	zeroA := &mockInstance{
+		tables:    [][]any{{"shop", "items", int64(0)}},
+		columns:   [][]any{{"shop", "items", "id", 1, "int", "int", "NO", nil, "", ""}},
+		indexes:   [][]any{{"shop", "items", "PRIMARY", 0, 1, "id", 1}},
+		checksums: map[string]any{"shop.items": "0"},
+		tableRows: map[string][][]any{"shop.items": {}},
+	}
+	zeroS := &mockInstance{
+		tables:    zeroA.tables,
+		columns:   zeroA.columns,
+		indexes:   zeroA.indexes,
+		checksums: map[string]any{"shop.items": "0"},
+		tableRows: map[string][][]any{"shop.items": {{int64(1)}}},
+	}
+	globalMock.register("zero-a", zeroA)
+	globalMock.register("zero-s", zeroS)
+	zeroPlan, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/zero-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/zero-s"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/zero-a"},
+	})
+	if err != nil || zeroPlan.Inserted != 1 || !zeroS.hasQuerySubstr("/* db-branch:scan shop.items */") {
+		t.Fatalf("expected checksum=0 with different row presence to scan, got err=%v plan=%+v", err, zeroPlan)
+	}
+
+	// 6. PostgreSQL: table-digest match skips scan, differing digest scans
+	pgTables := [][]any{{"public", "big_pg"}, {"public", "small_pg"}}
+	pgCols := [][]any{
+		{"public", "big_pg", "id", 1, "integer", false, "", "", ""},
+		{"public", "small_pg", "id", 1, "integer", false, "", "", ""},
+	}
+	pgIdxs := [][]any{
+		{"public", "big_pg", "big_pg_pkey", true, false, "id", 1},
+		{"public", "small_pg", "small_pg_pkey", true, false, "id", 1},
+	}
+	pgA := &mockInstance{
+		pgDBs: [][]any{{"postgres"}}, tables: pgTables, columns: pgCols, indexes: pgIdxs,
+		digests: map[string][]any{
+			"public.big_pg":   {int64(100000), "111", "222", int64(333), int64(444)},
+			"public.small_pg": {int64(1), "10", "20", int64(30), int64(40)},
+		},
+		tableRows: map[string][][]any{
+			"public.big_pg":   {{int64(1)}},
+			"public.small_pg": {{int64(1)}},
+		},
+	}
+	pgS := &mockInstance{
+		pgDBs: [][]any{{"postgres"}}, tables: pgTables, columns: pgCols, indexes: pgIdxs,
+		digests: map[string][]any{
+			"public.big_pg":   {int64(100000), "111", "222", int64(333), int64(444)},
+			"public.small_pg": {int64(2), "11", "22", int64(33), int64(44)},
+		},
+		tableRows: map[string][][]any{
+			"public.big_pg":   {{int64(1)}},
+			"public.small_pg": {{int64(1)}, {int64(2)}},
+		},
+	}
+	pgT := &mockInstance{
+		pgDBs: [][]any{{"postgres"}}, tables: pgTables, columns: pgCols, indexes: pgIdxs,
+		digests:   pgA.digests,
+		tableRows: pgA.tableRows,
+	}
+	globalMock.register("pgfast-a", pgA)
+	globalMock.register("pgfast-s", pgS)
+	globalMock.register("pgfast-t", pgT)
+	pgPlan, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.Postgres, Socket: "/run/pgfast-a", Port: 5432},
+		Source:   domain.AdminAccess{Engine: domain.Postgres, Socket: "/run/pgfast-s", Port: 5432},
+		Target:   domain.AdminAccess{Engine: domain.Postgres, Socket: "/run/pgfast-t", Port: 5432},
+	})
+	if err != nil {
+		t.Fatalf("PG Diff failed: %v", err)
+	}
+	if pgPlan.TotalConflicts != 0 || pgPlan.Inserted != 1 {
+		t.Fatalf("pgPlan = %+v", pgPlan)
+	}
+	if pgA.hasQuerySubstr("/* db-branch:scan public.big_pg */") || pgS.hasQuerySubstr("/* db-branch:scan public.big_pg */") || pgT.hasQuerySubstr("/* db-branch:scan public.big_pg */") {
+		t.Errorf("expected PG scan of unchanged public.big_pg to be skipped")
+	}
+	if !pgS.hasQuerySubstr("/* db-branch:scan public.small_pg */") {
+		t.Errorf("expected modified public.small_pg to be scanned")
+	}
+
+	// 7. Edge cases: NULL checksum fallback, query error fallback, ctx cancel, PG empty DataColumns, skipped child with dropped parent, unique/PK schema diffs
+	// 7a: MySQL NULL checksum falls back to scan
+	nullA := &mockInstance{
+		tables: zeroA.tables, columns: zeroA.columns, indexes: zeroA.indexes,
+		checksums: map[string]any{"shop.items": nil},
+		tableRows: map[string][][]any{"shop.items": {{int64(1)}}},
+	}
+	globalMock.register("nullcs-a", nullA)
+	if _, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/nullcs-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/nullcs-a"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/nullcs-a"},
+	}); err != nil || !nullA.hasQuerySubstr("/* db-branch:scan shop.items */") {
+		t.Fatalf("expected NULL checksum to fall back to scan, err=%v", err)
+	}
+
+	// 7b: MySQL checksum query error falls back to scan; canceled ctx propagates error
+	errCS := &mockInstance{
+		tables: zeroA.tables, columns: zeroA.columns, indexes: zeroA.indexes,
+		queryErr:  "/* db-branch:checksum-table",
+		tableRows: map[string][][]any{"shop.items": {{int64(1)}}},
+	}
+	globalMock.register("errcs-a", errCS)
+	if _, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/errcs-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/errcs-a"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/errcs-a"},
+	}); err != nil || !errCS.hasQuerySubstr("/* db-branch:scan shop.items */") {
+		t.Fatalf("expected checksum error to fall back to scan, err=%v", err)
+	}
+
+	// 7c: Child skipped, parent dropped (--allow-ddl) -> detects orphan rows in skipped child
+	dropPA := &mockInstance{
+		tables: [][]any{{"shop", "p", int64(0)}, {"shop", "c", int64(0)}},
+		columns: [][]any{
+			{"shop", "p", "id", 1, "int", "int", "NO", nil, "", ""},
+			{"shop", "c", "id", 1, "int", "int", "NO", nil, "", ""},
+			{"shop", "c", "pid", 2, "int", "int", "YES", nil, "", ""},
+		},
+		indexes: [][]any{
+			{"shop", "p", "PRIMARY", 0, 1, "id", 1},
+			{"shop", "c", "PRIMARY", 0, 1, "id", 1},
+		},
+		fks:       [][]any{{"shop", "c", "fk_c_p", "pid", "shop", "p", "id", 1}},
+		checksums: map[string]any{"shop.p": "10", "shop.c": "20"},
+		tableRows: map[string][][]any{"shop.p": {{int64(1)}}, "shop.c": {{int64(1), int64(1)}}},
+	}
+	dropPS := &mockInstance{
+		tables:    [][]any{{"shop", "c", int64(0)}},
+		columns:   dropPA.columns[1:],
+		indexes:   dropPA.indexes[1:],
+		fks:       dropPA.fks,
+		checksums: map[string]any{"shop.c": "20"},
+	}
+	dropPT := &mockInstance{
+		tables: dropPA.tables, columns: dropPA.columns, indexes: dropPA.indexes, fks: dropPA.fks,
+		checksums: dropPA.checksums, tableRows: dropPA.tableRows,
+		fkOrphans: map[string][][]any{"shop.c": {{int64(1), int64(1)}}},
+	}
+	globalMock.register("dropp-a", dropPA)
+	globalMock.register("dropp-s", dropPS)
+	globalMock.register("dropp-t", dropPT)
+	dropPlan, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/dropp-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/dropp-s"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/dropp-t"},
+		AllowDDL: true,
+	})
+	if err != nil || dropPlan.TotalConflicts != 1 || dropPlan.Conflicts[0].Type != domain.ConflictForeignKey {
+		t.Fatalf("expected FK conflict when parent dropped and child skipped, got err=%v plan=%+v", err, dropPlan)
+	}
+
+	// 7d: PG empty DataColumns (generated-only table) and query error fallback
+	pgGenTables := [][]any{{"public", "gen_only"}}
+	pgGenCols := [][]any{
+		{"public", "gen_only", "g", 1, "integer", true, "1", "", "s"},
+	}
+	pgGenA := &mockInstance{
+		pgDBs: [][]any{{"postgres"}}, tables: pgGenTables, columns: pgGenCols,
+		digests: map[string][]any{"public.gen_only": {int64(0)}},
+	}
+	globalMock.register("pggen-a", pgGenA)
+	if _, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.Postgres, Socket: "/run/pggen-a", Port: 5432},
+		Source:   domain.AdminAccess{Engine: domain.Postgres, Socket: "/run/pggen-a", Port: 5432},
+		Target:   domain.AdminAccess{Engine: domain.Postgres, Socket: "/run/pggen-a", Port: 5432},
+	}); err != nil {
+		t.Fatalf("PG gen_only Diff failed: %v", err)
+	}
+
+	// 7e: PG >5000 distinct FK tuples falls back to loading skipped parent
+	manyRows := make([][]any, 5005)
+	for i := range manyRows {
+		manyRows[i] = []any{int64(i + 1), int64(i + 1)}
+	}
+	manyParentRows := [][]any{{int64(1), "alice"}}
+	manyA := &mockInstance{
+		tables: tables[:2], columns: cols[:4], indexes: idxs[:2], fks: fks[:1],
+		checksums: map[string]any{"shop.big_users": "999", "shop.orders": "1"},
+		tableRows: map[string][][]any{"shop.big_users": manyParentRows, "shop.orders": {}},
+	}
+	manyS := &mockInstance{
+		tables: tables[:2], columns: cols[:4], indexes: idxs[:2], fks: fks[:1],
+		checksums: map[string]any{"shop.big_users": "999", "shop.orders": "2"},
+		tableRows: map[string][][]any{"shop.big_users": manyParentRows, "shop.orders": manyRows},
+	}
+	globalMock.register("many-a", manyA)
+	globalMock.register("many-s", manyS)
+	manyPlan, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/many-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/many-s"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/many-a"},
+	})
+	if err != nil || manyPlan.TotalConflicts == 0 || !manyA.hasQuerySubstr("/* db-branch:scan shop.big_users */") {
+		t.Fatalf("expected >5000 FK tuples to fall back to scan big_users, got err=%v plan=%+v", err, manyPlan)
+	}
+
+	// 7f: Unique constraint schema diff prevents skip
+	uIdxA := append([][]any(nil), idxs[:1]...)
+	uIdxS := append([][]any(nil), idxs[:1]...)
+	uIdxS = append(uIdxS, []any{"shop", "big_users", "uq_name", 0, 1, "name", 1})
+	uA := &mockInstance{
+		tables: tables[:1], columns: cols[:2], indexes: uIdxA,
+		checksums: map[string]any{"shop.big_users": "123"},
+		tableRows: map[string][][]any{"shop.big_users": {{int64(1), "alice"}}},
+	}
+	uS := &mockInstance{
+		tables: tables[:1], columns: cols[:2], indexes: uIdxS,
+		checksums: map[string]any{"shop.big_users": "123"},
+		tableRows: map[string][][]any{"shop.big_users": {{int64(1), "alice"}, {int64(2), "bob"}}},
+	}
+	globalMock.register("uqdiff-a", uA)
+	globalMock.register("uqdiff-s", uS)
+	uqPlan, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/uqdiff-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/uqdiff-s"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/uqdiff-a"},
+	})
+	if err != nil || uqPlan.Inserted != 1 || !uS.hasQuerySubstr("/* db-branch:scan shop.big_users */") {
+		t.Fatalf("expected unique constraint diff to force scan, err=%v plan=%+v", err, uqPlan)
+	}
+
+	// 8. Additional coverage: both child and parent skipped, skipped child with parent update (no removed ref),
+	// child with NULL FK vs skipped parent, canceled ctx during digest, PG digest error fallback, >1600 cols,
+	// fk-lookup/fk-orphans query errors, and dropped table fast digest match.
+	// 8a: Both big_users and big_audit skipped, plus orders modified with NULL user_id (len(order)==0 path)
+	nullableOrdersCols := append([][]any(nil), cols...)
+	nullableOrdersCols[3] = []any{"shop", "orders", "user_id", 2, "int", "int", "YES", nil, "", ""}
+	bothA := &mockInstance{
+		tables: tables, columns: nullableOrdersCols, indexes: idxs, fks: fks,
+		checksums: map[string]any{"shop.big_users": "123", "shop.orders": "1", "shop.big_audit": "456"},
+		tableRows: map[string][][]any{"shop.big_users": {{int64(1), "alice"}}, "shop.orders": {{int64(1), nil}}, "shop.big_audit": {}},
+	}
+	bothS := &mockInstance{
+		tables: tables, columns: nullableOrdersCols, indexes: idxs, fks: fks,
+		checksums: map[string]any{"shop.big_users": "123", "shop.orders": "2", "shop.big_audit": "456"},
+		tableRows: map[string][][]any{"shop.big_users": {{int64(1), "alice"}}, "shop.orders": {{int64(1), nil}, {int64(2), nil}}, "shop.big_audit": {}},
+	}
+	globalMock.register("both-a", bothA)
+	globalMock.register("both-s", bothS)
+	if pBoth, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/both-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/both-s"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/both-a"},
+	}); err != nil || pBoth.Inserted != 1 || pBoth.TotalConflicts != 0 {
+		t.Fatalf("both skipped / NULL FK failed: err=%v plan=%+v", err, pBoth)
+	}
+
+	// 8b: Child (big_audit) skipped, parent (orders) updates non-referenced column (or NULL) -> removed==0
+	updOrderA := &mockInstance{
+		tables: tables, columns: nullableOrdersCols, indexes: idxs, fks: fks,
+		checksums: map[string]any{"shop.big_users": "123", "shop.orders": "1", "shop.big_audit": "456"},
+		fkLookups: map[string][][]any{"shop.big_users": {{int64(1)}}},
+		tableRows: map[string][][]any{"shop.big_users": {{int64(1), "alice"}}, "shop.orders": {{int64(1), nil}}, "shop.big_audit": {}},
+	}
+	updOrderS := &mockInstance{
+		tables: tables, columns: nullableOrdersCols, indexes: idxs, fks: fks,
+		checksums: map[string]any{"shop.big_users": "123", "shop.orders": "2", "shop.big_audit": "456"},
+		tableRows: map[string][][]any{"shop.big_users": {{int64(1), "alice"}}, "shop.orders": {{int64(1), int64(1)}}, "shop.big_audit": {}},
+	}
+	globalMock.register("updo-a", updOrderA)
+	globalMock.register("updo-s", updOrderS)
+	if pUpdO, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/updo-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/updo-s"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/updo-a"},
+	}); err != nil || pUpdO.Updated != 1 || pUpdO.TotalConflicts != 0 {
+		t.Fatalf("parent non-PK update with skipped child failed: err=%v plan=%+v", err, pUpdO)
+	}
+
+	// 8c: Child skipped, parent deletes id=1, target fk-orphans query fails -> error propagated
+	tOrpErr := &mockInstance{
+		tables: tables, columns: cols, indexes: idxs, fks: fks,
+		checksums: tInst.checksums, fkLookups: tInst.fkLookups, tableRows: tInst.tableRows,
+		queryErr: "/* db-branch:fk-orphans",
+	}
+	globalMock.register("fast-t-orperr", tOrpErr)
+	if _, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-s-del"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-t-orperr"},
+	}); err == nil {
+		t.Error("expected fk-orphans error to propagate")
+	}
+
+	// 8d: Child modified, parent skipped, fk-lookup query fails -> error propagated
+	tLookErr := &mockInstance{
+		tables: tables, columns: cols, indexes: idxs, fks: fks,
+		checksums: tInst.checksums, tableRows: tInst.tableRows,
+		queryErr: "/* db-branch:fk-lookup",
+	}
+	globalMock.register("fast-t-lookerr", tLookErr)
+	if _, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-s"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-t-lookerr"},
+	}); err == nil {
+		t.Error("expected fk-lookup error to propagate")
+	}
+
+	// 8e: Canceled context propagates during MySQL/PG digest queries; PG digest error falls back to scan
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := m.Diff(cctx, domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-s"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-t"},
+	}); err == nil {
+		t.Error("expected canceled context error")
+	}
+	pgErrDigest := &mockInstance{
+		pgDBs: [][]any{{"postgres"}}, tables: pgTables, columns: pgCols, indexes: pgIdxs,
+		queryErr:  "/* db-branch:table-digest",
+		tableRows: pgA.tableRows,
+	}
+	globalMock.register("pgerrdig", pgErrDigest)
+	if _, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.Postgres, Socket: "/run/pgerrdig", Port: 5432},
+		Source:   domain.AdminAccess{Engine: domain.Postgres, Socket: "/run/pgerrdig", Port: 5432},
+		Target:   domain.AdminAccess{Engine: domain.Postgres, Socket: "/run/pgerrdig", Port: 5432},
+	}); err != nil || !pgErrDigest.hasQuerySubstr("/* db-branch:scan public.big_pg */") {
+		t.Fatalf("expected PG digest error to fall back to scan, err=%v", err)
+	}
+
+	// 8f: PK column mismatch prevents skip; dropped table fast digest match skips scan in tableModifiedBetween
+	diffPKIdx := [][]any{{"shop", "big_users", "PRIMARY", 0, 1, "name", 1}}
+	sPKDiff := &mockInstance{
+		tables: tables[:1], columns: cols[:2], indexes: diffPKIdx,
+		checksums: map[string]any{"shop.big_users": "12345678901234567890"},
+		tableRows: map[string][][]any{"shop.big_users": {{int64(1), "alice"}}},
+	}
+	globalMock.register("pkdiff-s", sPKDiff)
+	pPKDiff, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/pkdiff-s"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/fast-t"},
+	})
+	if err != nil || pPKDiff.TotalConflicts == 0 {
+		t.Fatalf("expected schema conflict for PK diff, err=%v plan=%+v", err, pPKDiff)
+	}
+
+	// Dropped table fast digest match in tableModifiedBetween
+	dropFastA := &mockInstance{
+		tables:    [][]any{{"shop", "old_tbl", int64(0)}},
+		columns:   [][]any{{"shop", "old_tbl", "id", 1, "int", "int", "NO", nil, "", ""}},
+		indexes:   [][]any{{"shop", "old_tbl", "PRIMARY", 0, 1, "id", 1}},
+		checksums: map[string]any{"shop.old_tbl": "777"},
+	}
+	dropFastS := &mockInstance{}
+	globalMock.register("dropfast-a", dropFastA)
+	globalMock.register("dropfast-s", dropFastS)
+	dropFastPlan, err := m.Diff(context.Background(), domain.MergeDiffRequest{
+		Ancestor: domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/dropfast-a"},
+		Source:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/dropfast-s"},
+		Target:   domain.AdminAccess{Engine: domain.MySQL, Socket: "/run/dropfast-a"},
+		AllowDDL: true,
+	})
+	if err != nil || dropFastPlan.DDL != 1 || dropFastA.hasQuerySubstr("/* db-branch:scan shop.old_tbl */") {
+		t.Fatalf("expected dropped unchanged table to skip scan via digest, err=%v plan=%+v", err, dropFastPlan)
 	}
 }

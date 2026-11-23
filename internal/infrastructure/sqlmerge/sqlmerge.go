@@ -898,6 +898,8 @@ func (m *Merger) Diff(ctx context.Context, req domain.MergeDiffRequest) (domain.
 	}
 
 	mergedRowsByTable := map[string][]mergedRowInfo{}
+	targetRowsByTable := map[string][]mergedRowInfo{}
+	skippedTables := map[string]tableMeta{}
 	droppedTables := map[string]bool{}
 
 	getDB := func(p *dbConnPool, pgDB string) *sql.DB {
@@ -989,14 +991,16 @@ func (m *Merger) Diff(ctx context.Context, req domain.MergeDiffRequest) (domain.
 			if err != nil {
 				return domain.MergePlan{}, err
 			}
-			if abortPlan, derr := m.diffExistingTable(ctx, dbA, dbS, dbT, engine, req, ref, tmA, tmS, tmT, schS, schT, &plan, &op, mergedRowsByTable, addConflict); derr != nil {
+			if abortPlan, derr := m.diffExistingTable(ctx, dbA, dbS, dbT, engine, req, ref, tmA, tmS, tmT, schS, schT, &plan, &op, mergedRowsByTable, targetRowsByTable, skippedTables, addConflict); derr != nil {
 				return abortPlan, derr
 			}
 		}
 	}
 
 	_ = allFKs
-	precheckForeignKeys(allFKMetas, filterSet, droppedTables, mergedRowsByTable, &op, addConflict)
+	if fkErr := m.precheckForeignKeys(ctx, poolT, engine, allFKMetas, filterSet, droppedTables, skippedTables, targetRowsByTable, mergedRowsByTable, &op, addConflict); fkErr != nil {
+		return domain.MergePlan{}, fkErr
+	}
 
 	if plan.TotalConflicts > 0 {
 		plan.Code = "merge_conflict"
@@ -1167,6 +1171,7 @@ func (m *Merger) diffExistingTable(
 	ctx context.Context, dbA, dbS, dbT *sql.DB, engine domain.Engine, req domain.MergeDiffRequest,
 	ref domain.TableRef, tmA, tmS, tmT tableMeta, schS, schT instanceSchema,
 	plan *domain.MergePlan, op *opaquePlan, mergedRowsByTable map[string][]mergedRowInfo,
+	targetRowsByTable map[string][]mergedRowInfo, skippedTables map[string]tableMeta,
 	addConflict func(domain.MergeConflict),
 ) (domain.MergePlan, error) {
 	alterStmts, addedCols, schemaConflictMsg := compareTableSchema(engine, tmA, tmS, tmT, req.AllowDDL)
@@ -1181,6 +1186,19 @@ func (m *Merger) diffExistingTable(
 		}
 		plan.DDL += len(alterStmts)
 		ddlLabel = "ALTER TABLE ADD COLUMN"
+	}
+
+	// Fast path: if schemas match across A/S/T and the table digest in Source matches Ancestor,
+	// Source introduced no row changes, so skip the 3-way streaming row scan.
+	if len(alterStmts) == 0 && len(addedCols) == 0 && schemasIdentical(tmA, tmS, tmT) {
+		matched, err := m.digestsMatch(ctx, dbA, dbS, engine, tmA, tmS)
+		if err != nil {
+			return domain.MergePlan{}, err
+		}
+		if matched {
+			skippedTables[tmS.key()] = tmT
+			return domain.MergePlan{}, nil
+		}
 	}
 
 	if len(tmS.PKColumns) == 0 {
@@ -1239,6 +1257,9 @@ func (m *Merger) diffExistingTable(
 
 	mergedRows := buildMergedTableRows(trackT.rows, diffRes.Actions, tmS.PKColumns)
 	mergedRowsByTable[tmS.key()] = mergedRows
+	if diffRes.Deleted > 0 || diffRes.Updated > 0 {
+		targetRowsByTable[tmS.key()] = trackT.rows
+	}
 
 	for _, u := range tmS.UniqueConstraints {
 		for _, c := range checkUniqueConstraint(ref, u, mergedRows, tmS.PKColumns) {
@@ -1312,10 +1333,12 @@ func rowTupleSignature(vals map[string]domain.RowValue, cols []string) string {
 	return b.String()
 }
 
-func precheckForeignKeys(
+func (m *Merger) precheckForeignKeys(
+	ctx context.Context, poolT *dbConnPool, engine domain.Engine,
 	allFKMetas []fkMeta, filterSet map[string]bool, droppedTables map[string]bool,
+	skippedTables map[string]tableMeta, targetRowsByTable map[string][]mergedRowInfo,
 	mergedRowsByTable map[string][]mergedRowInfo, op *opaquePlan, addConflict func(domain.MergeConflict),
-) {
+) error {
 	parentIndexCache := map[string]map[string]bool{}
 	for _, fk := range allFKMetas {
 		cKey := fk.Database + "." + fk.Table
@@ -1324,6 +1347,30 @@ func precheckForeignKeys(
 			continue
 		}
 		op.VerifyFKs = append(op.VerifyFKs, fk)
+
+		tmC, cSkipped := skippedTables[cKey]
+		tmP, pSkipped := skippedTables[pKey]
+
+		if cSkipped && pSkipped {
+			continue
+		}
+
+		if cSkipped && !pSkipped {
+			if err := m.checkSkippedChildFK(ctx, poolT, engine, fk, tmC, pKey, droppedTables, targetRowsByTable, mergedRowsByTable, addConflict); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if !cSkipped && pSkipped {
+			fallback, err := m.checkSkippedParentFK(ctx, poolT, engine, fk, tmP, cKey, pKey, skippedTables, mergedRowsByTable, addConflict)
+			if err != nil {
+				return err
+			}
+			if !fallback {
+				continue
+			}
+		}
 
 		cacheKey := pKey + "\x00" + strings.Join(fk.RefColumns, ",")
 		idx, ok := parentIndexCache[cacheKey]
@@ -1355,6 +1402,7 @@ func precheckForeignKeys(
 			}
 		}
 	}
+	return nil
 }
 
 func (m *Merger) recordSequenceSync(op *opaquePlan, engine domain.Engine, tmS, tmT tableMeta, schS, schT instanceSchema) {
@@ -1881,6 +1929,15 @@ func (m *Merger) tableModifiedBetween(ctx context.Context, dbLeft, dbRight *sql.
 		if tmLeft.Columns[i].Name != tmRight.Columns[i].Name ||
 			!strings.EqualFold(tmLeft.Columns[i].ColumnType, tmRight.Columns[i].ColumnType) {
 			return true, nil
+		}
+	}
+	if tableSchemasEqual(tmLeft, tmRight) {
+		matched, err := m.digestsMatch(ctx, dbLeft, dbRight, engine, tmLeft, tmRight)
+		if err != nil {
+			return false, err
+		}
+		if matched {
+			return false, nil
 		}
 	}
 	if len(tmLeft.PKColumns) == 0 {
