@@ -221,6 +221,9 @@ const (
 	BranchPausing  BranchStatus = "pausing"
 	BranchPaused   BranchStatus = "paused"
 	BranchResuming BranchStatus = "resuming"
+	// BranchForking: the branch's server is stopped briefly while a clean fork
+	// snapshot is taken and cloned.
+	BranchForking BranchStatus = "forking"
 )
 
 // Branch is a writable clone of a base snapshot served by its own database server.
@@ -258,9 +261,17 @@ type Branch struct {
 	// answering, kept only for the quiet ones (paused, failed) so that the
 	// node coming back restores that status instead of starting the branch.
 	// Older nodes drop it, and then treat the branch as they always did.
-	LostFrom  BranchStatus `json:"lost_from,omitempty"`
-	CreatedAt time.Time    `json:"created_at"`
-	ResetAt   *time.Time   `json:"reset_at,omitempty"`
+	LostFrom       BranchStatus `json:"lost_from,omitempty"`
+	// ParentBranch and ParentSnapshot record the parent branch and its snapshot
+	// when this branch was forked from another branch.
+	ParentBranch   Name       `json:"parent_branch,omitzero"`
+	ParentSnapshot string     `json:"parent_snapshot,omitempty"`
+	// ForkRuntime and ForkLegacyAuth remember the runtime and legacy_auth setting
+	// the forked branch started with, so reset returns to them rather than the base's.
+	ForkRuntime    RuntimeRef `json:"fork_runtime,omitzero"`
+	ForkLegacyAuth bool       `json:"fork_legacy_auth,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	ResetAt        *time.Time `json:"reset_at,omitempty"`
 }
 
 // ProtocolBranchOwnerID is the cluster protocol from which branch owners use
@@ -271,6 +282,11 @@ const ProtocolBranchOwnerID = 23
 // ProtocolSessionRevocation is the cluster protocol from which revoke_session
 // (a logout shared by every node) is understood by every node.
 const ProtocolSessionRevocation = 24
+
+// ProtocolBranchFork is the cluster protocol from which a branch may be forked
+// from another branch (carrying parent_branch, parent_snapshot, fork_runtime,
+// fork_legacy_auth and the forking status inside put_branch / insert_branch).
+const ProtocolBranchFork = 25
 
 // DisplayOwner returns the human-readable owner label: OwnerName when set,
 // otherwise Owner.
@@ -338,9 +354,23 @@ func (b Branch) CanResume() error {
 	return nil
 }
 
+// CanFork reports whether a child branch may be forked from this branch:
+// ready or paused only.
+func (b Branch) CanFork() error {
+	switch b.Status {
+	case BranchReady, BranchPaused:
+		return nil
+	}
+	return fmt.Errorf("%w: branch %s is %s; only a ready or paused branch can be forked", ErrConflict, b.Name, b.Status)
+}
+
 // CanRecreate reports whether the branch may be built again elsewhere: only
-// when the node holding it is gone.
+// when the node holding it is gone, and never for a forked branch (whose origin
+// snapshot lives only on its parent's node).
 func (b Branch) CanRecreate() error {
+	if b.ParentBranch != (Name{}) {
+		return fmt.Errorf("%w: forked branch %s cannot be recreated on another node", ErrConflict, b.Name)
+	}
 	if b.Status != BranchLost {
 		return fmt.Errorf("%w: branch %s is %s; only a lost branch can be recreated", ErrConflict, b.Name, b.Status)
 	}
@@ -429,6 +459,20 @@ type Server struct {
 // read of each page in every branch rewrites it to set hint bits.
 type StatsUpdater interface {
 	UpdateStats(ctx context.Context, s Server) error
+}
+
+// CloneHistoryResetter is a DBServer that can clear inherited replication /
+// binary logs and GTID history on a freshly forked branch before its reset
+// point is taken, so a recorded child starts its own history cleanly.
+type CloneHistoryResetter interface {
+	ResetCloneHistory(ctx context.Context, s Server) error
+}
+
+// CloneUserCleaner is a DBServer that can drop inherited branch logins from a
+// freshly forked branch before its reset point is taken, so the parent's
+// credentials cannot connect to the child.
+type CloneUserCleaner interface {
+	DropUser(ctx context.Context, s Server, user string) error
 }
 
 type DBServer interface {

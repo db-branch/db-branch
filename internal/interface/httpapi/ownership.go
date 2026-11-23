@@ -192,32 +192,44 @@ func (o ownership) Authorize(ctx context.Context, p ext.Principal, action string
 	return fmt.Errorf("%w: branch %s belongs to another user", ext.ErrForbidden, b.Name)
 }
 
+// resolveNamedOwner sets owner/ownerName for an authenticated caller and
+// rejects invalid access or non-admins attempting to name another owner.
+func resolveNamedOwner(p ext.Principal, owner, ownerName *string, access string) error {
+	if !domain.ValidAccess(access) {
+		return fmt.Errorf("%w: access must be %q or %q", errInvalidAccess, domain.AccessPrivate, domain.AccessOpen)
+	}
+	if p.ID == Anonymous.ID {
+		return fmt.Errorf("%w: log in first", ext.ErrForbidden)
+	}
+	id, display := ownerID(p), ownerDisplayName(p)
+	switch {
+	case *owner == "":
+		*owner = id
+		*ownerName = display
+	case *owner == id:
+		if !isAdmin(p) || *ownerName == "" {
+			*ownerName = display
+		}
+	case !isAdmin(p):
+		return fmt.Errorf("%w: only an admin may make a branch for %s", ext.ErrForbidden, *owner)
+	default:
+		if *ownerName == "" {
+			*ownerName = *owner
+		}
+	}
+	return nil
+}
+
 // branchOwner decides the owner and access of a new branch for p: people
 // may name another owner only as an admin; anonymous callers get an open
 // branch from a public snapshot, within the anonymous limits.
 func (s *Server) branchOwner(ctx context.Context, svc Branches, p ext.Principal, in *createBranchJSON, ttl *time.Duration) (unreserve func(), err error) {
 	unreserve = func() {}
+	if p.ID != Anonymous.ID {
+		return unreserve, resolveNamedOwner(p, &in.Owner, &in.OwnerName, in.Access)
+	}
 	if !domain.ValidAccess(in.Access) {
 		return unreserve, fmt.Errorf("%w: access must be %q or %q", errInvalidAccess, domain.AccessPrivate, domain.AccessOpen)
-	}
-	if p.ID != Anonymous.ID {
-		id, display := ownerID(p), ownerDisplayName(p)
-		switch {
-		case in.Owner == "":
-			in.Owner = id
-			in.OwnerName = display
-		case in.Owner == id:
-			if !isAdmin(p) || in.OwnerName == "" {
-				in.OwnerName = display
-			}
-		case !isAdmin(p):
-			return unreserve, fmt.Errorf("%w: only an admin may make a branch for %s", ext.ErrForbidden, in.Owner)
-		default:
-			if in.OwnerName == "" {
-				in.OwnerName = in.Owner
-			}
-		}
-		return unreserve, nil
 	}
 	if strings.TrimSpace(in.InitSQL) != "" {
 		return unreserve, fmt.Errorf("%w: log in to run SQL after the copy (init_sql); branches made without a login take none", ext.ErrForbidden)
@@ -309,14 +321,18 @@ func anonymousCounts(list []domain.Branch) (int, map[string]int) {
 // CLI, MCP, CI), admins and anonymous callers name branches exactly, so
 // scripts keep using the names they chose.
 func (s *Server) userBranchName(p ext.Principal, r *http.Request, in *createBranchJSON) error {
+	return s.prefixUserBranchName(p, r, &in.Name)
+}
+
+func (s *Server) prefixUserBranchName(p ext.Principal, r *http.Request, name *string) error {
 	if _, session := s.current(r); !session || p.ID == Anonymous.ID || isAdmin(p) {
 		return nil
 	}
-	full, err := domain.PrefixedName(ownerDisplayName(p), in.Name)
+	full, err := domain.PrefixedName(ownerDisplayName(p), *name)
 	if err != nil {
 		return err
 	}
-	in.Name = full
+	*name = full
 	return nil
 }
 

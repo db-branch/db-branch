@@ -641,7 +641,7 @@ func TestProtocol_未使用の版を予約せず新機能は現行より大き�
 		t.Fatal("fsm.go reserves protocol numbers; new features take the next number above Protocol instead")
 	}
 	// Every protocol a domain constant names is one this binary speaks.
-	for _, p := range []int{domain.ProtocolBranchRuntime, domain.ProtocolBranchPause, domain.ProtocolRuntimeModules, domain.ProtocolModuleForget, domain.ProtocolBranchOwnerID} {
+	for _, p := range []int{domain.ProtocolBranchRuntime, domain.ProtocolBranchPause, domain.ProtocolRuntimeModules, domain.ProtocolModuleForget, domain.ProtocolBranchOwnerID, domain.ProtocolSessionRevocation, domain.ProtocolBranchFork} {
 		if p > raftstore.Protocol {
 			t.Fatalf("protocol %d is above Protocol %d", p, raftstore.Protocol)
 		}
@@ -685,5 +685,48 @@ func TestFSM_revoke_sessionはログアウト済みセッションを記録し�
 	// Without its data the command fails cleanly.
 	if _, ok := f.Apply(&raft.Log{Data: []byte(`{"op":"revoke_session"}`)}).(error); !ok {
 		t.Error("revoke_session without data must fail")
+	}
+}
+
+func TestFSM_フォークしたブランチの項目がスナップショットでも失われずプロトコル25を要求する(t *testing.T) {
+	parent, _ := domain.ParseName("parent")
+	child, _ := domain.ParseName("child")
+	rt := domain.RuntimeRef{Engine: domain.MySQL, Version: "8.4.13"}
+	forked := domain.Branch{
+		Name: child, Base: name("prod"), Snapshot: "s1", Runtime: rt, Status: domain.BranchReady,
+		ParentBranch: parent, ParentSnapshot: "fork-child", ForkRuntime: rt, ForkLegacyAuth: true,
+	}
+	if got := raftstore.InsertBranch(forked).Needs(); got != domain.ProtocolBranchFork {
+		t.Fatalf("InsertBranch(forked).Needs() = %d, want %d", got, domain.ProtocolBranchFork)
+	}
+	if got := raftstore.PutBranch(forked).Needs(); got != domain.ProtocolBranchFork {
+		t.Fatalf("PutBranch(forked).Needs() = %d, want %d", got, domain.ProtocolBranchFork)
+	}
+	forkingParent := domain.Branch{Name: parent, Status: domain.BranchForking}
+	if got := raftstore.PutBranch(forkingParent).Needs(); got != domain.ProtocolBranchFork {
+		t.Fatalf("PutBranch(forking).Needs() = %d, want %d", got, domain.ProtocolBranchFork)
+	}
+	plain := domain.Branch{Name: parent, Status: domain.BranchReady}
+	if got := raftstore.PutBranch(plain).Needs(); got != 1 {
+		t.Fatalf("PutBranch(plain).Needs() = %d, want 1", got)
+	}
+	f := raftstore.NewFSM()
+	apply(t, f, raftstore.InsertBranch(forked))
+	snap, err := f.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := snap.Persist(&sink{Buffer: &buf}); err != nil {
+		t.Fatal(err)
+	}
+	snap.Release()
+	g := raftstore.NewFSM()
+	if err := g.Restore(io.NopCloser(&buf)); err != nil {
+		t.Fatal(err)
+	}
+	got := g.State().Branches["child"]
+	if got.ParentBranch != parent || got.ParentSnapshot != "fork-child" || got.ForkRuntime != rt || !got.ForkLegacyAuth {
+		t.Fatalf("after restore = %+v", got)
 	}
 }

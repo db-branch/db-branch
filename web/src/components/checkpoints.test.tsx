@@ -31,6 +31,7 @@ function panel(over: Partial<Panel> = {}): Panel {
     saveWhy: undefined,
     restoreWhy: undefined,
     deleteWhy: undefined,
+    forkWhy: undefined,
     txRestoreWhy: undefined,
     save: noop,
     saveFirst: noop,
@@ -73,6 +74,13 @@ describe("PanelBody inline", () => {
   it("draws no graph for recorded branch whose log is still empty", () => {
     const h = body(panel({ graph: { items: [], lines: [lines[0]], live: 0, head: null }, rows: [], events: { 0: [] } }));
     expect(h).not.toContain("Expand");
+  });
+  it("shows a Fork button in checkpoint details and disables it when forkWhy is set", () => {
+    const enabled = renderToStaticMarkup(<PanelBody p={panel({ selected: selectedNode("checkpoint:d1") })} onExpand={noop} onFork={noop} />);
+    expect(enabled).toMatch(/<button[^>]*>Fork<\/button>/);
+    const disabled = renderToStaticMarkup(<PanelBody p={panel({ selected: selectedNode("checkpoint:d1"), forkWhy: "Available once it is ready." })} onExpand={noop} onFork={noop} />);
+    expect(disabled).toContain('disabled=""');
+    expect(disabled).toContain('title="Available once it is ready."');
   });
 });
 

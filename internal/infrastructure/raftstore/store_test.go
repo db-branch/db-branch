@@ -926,3 +926,27 @@ func TestSessionRevocations_ログアウトは全ノードがプロトコル24�
 		t.Error("s1 must be revoked and only s1")
 	}
 }
+
+func TestBranchFork_フォークブランチは全ノードがプロトコル25になるまで書かれない(t *testing.T) {
+	if raftstore.Protocol < domain.ProtocolBranchFork {
+		t.Fatalf("Protocol = %d, below domain.ProtocolBranchFork (%d)", raftstore.Protocol, domain.ProtocolBranchFork)
+	}
+	cl := newCluster(t, 1)
+	l := cl.leader(t)
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: domain.ProtocolBranchFork - 1})
+	forked := domain.Branch{
+		Name: name("child"), Base: name("prod"), ParentBranch: name("parent"),
+		ParentSnapshot: "fork-child", Status: domain.BranchProvisioning,
+	}
+	if err := l.InsertBranch(ctx, forked); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("with old node: %v, want ErrClusterUpgrading", err)
+	}
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: domain.ProtocolBranchFork})
+	if err := l.InsertBranch(ctx, forked); err != nil {
+		t.Fatalf("after upgrade to 25: %v", err)
+	}
+	got, err := l.GetBranch(ctx, name("child"))
+	if err != nil || got.ParentBranch != name("parent") || got.ParentSnapshot != "fork-child" {
+		t.Fatalf("got = %+v, err = %v", got, err)
+	}
+}

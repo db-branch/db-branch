@@ -234,7 +234,11 @@ func (s *Service) runRestore(ctx context.Context, br domain.Branch, in restoreIn
 		now := s.Clock()
 		br.ResetAt = &now
 	}
-	return br, s.saveBranch(ctx, br)
+	if err := s.saveBranch(ctx, br); err != nil {
+		return br, err
+	}
+	s.collectIfSettled(ctx, br.Name)
+	return br, nil
 }
 
 // swapped reports whether the live dataset already holds the restored data.
@@ -492,7 +496,11 @@ func (s *Service) abortRestore(ctx context.Context, br domain.Branch, in restore
 		return s.fail(ctx, br, err)
 	}
 	br.Status, br.Error = domain.BranchReady, ""
-	return s.saveBranch(ctx, br)
+	if err := s.saveBranch(ctx, br); err != nil {
+		return err
+	}
+	s.collectIfSettled(ctx, br.Name)
+	return nil
 }
 
 // resumeRestore finishes a restore the agent was interrupted in.
@@ -507,7 +515,11 @@ func (s *Service) resumeRestore(ctx context.Context, br domain.Branch) error {
 			return err
 		}
 		br.Status, br.Error = domain.BranchReady, ""
-		return s.saveBranch(ctx, br)
+		if err := s.saveBranch(ctx, br); err != nil {
+			return err
+		}
+		s.collectIfSettled(ctx, br.Name)
+		return nil
 	}
 	_, err = s.runRestore(ctx, br, in, nil)
 	return err

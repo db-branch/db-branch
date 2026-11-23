@@ -6,6 +6,7 @@ import { t } from "../lib/i18n";
 import { splitOwned } from "../lib/branchname";
 import { showCheckpoints } from "../lib/checkpoints";
 import { CheckpointPanel } from "./checkpoints";
+import { ForkBranch } from "./forkbranch";
 import { UpgradePanel } from "./upgrade";
 import { isUpgraded } from "../lib/upgrade";
 import { ConnectPanel } from "./connect";
@@ -52,6 +53,9 @@ export function BranchRow({
   onChange,
   onDismiss,
   tourAnchor,
+  prefix: ownerPrefix,
+  onOpenParent,
+  onForked,
 }: {
   branch: Branch;
   job?: Job;
@@ -71,8 +75,12 @@ export function BranchRow({
   onChange: () => void;
   onDismiss?: () => void;
   tourAnchor?: boolean;
+  prefix?: string;
+  onOpenParent?: (name: string) => void;
+  onForked?: (job: Job, operationId: string) => void;
 }) {
   const [confirm, ask] = useReducer(confirmReducer, null);
+  const [forking, setForking] = useState<{ checkpoint?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [working, setWorking] = useState(false);
@@ -201,6 +209,11 @@ export function BranchRow({
         <div className="brow-side">
           <span className="brow-actions">
             <CopyButton text={t("Copy URL")} label={t("Copy connection URL")} load={() => api.dsn(b.name)} disabled={!ready} />
+            {open && manage && (ready || paused) && b.checkpoints && allowed(can, "branch.fork") && (
+              <button type="button" disabled={working} onClick={() => setForking({})}>
+                Fork
+              </button>
+            )}
             {manage && ready && !extendWhy && (
               <button type="button" disabled={working} onClick={() => run(api.pauseBranch(b.name))}>
                 Pause
@@ -255,6 +268,21 @@ export function BranchRow({
               {snapshot && <span className="muted"> · {relative(snapshot.created_at)}</span>}
               {snapshot?.masked && <span className="badge on">masked</span>}
             </dd>
+            {b.parent_branch && (
+              <>
+                <dt>Forked from</dt>
+                <dd className="mono">
+                  {onOpenParent ? (
+                    <button type="button" className="link-button mono" onClick={() => onOpenParent(b.parent_branch!)}>
+                      {b.parent_branch}
+                    </button>
+                  ) : (
+                    b.parent_branch
+                  )}
+                  {b.parent_snapshot && <span className="muted"> @ {b.parent_snapshot}</span>}
+                </dd>
+              </>
+            )}
             <dt>Runtime</dt>
             <dd className="wide">
               <span className="runtime-line">
@@ -301,7 +329,15 @@ export function BranchRow({
               </>
             )}
           </dl>
-          {manage && !failed && showCheckpoints(b, (a) => allowed(can, a)) && <CheckpointPanel branch={b} ready={ready} allow={(a) => allowed(can, a)} onChange={onChange} />}
+          {manage && !failed && showCheckpoints(b, (a) => allowed(can, a)) && (
+            <CheckpointPanel
+              branch={b}
+              ready={ready}
+              allow={(a) => allowed(can, a)}
+              onChange={onChange}
+              onFork={allowed(can, "branch.fork") ? (cp) => setForking({ checkpoint: cp }) : undefined}
+            />
+          )}
           {manage ? (
             <div className="brow-manage">
               {more.length > 0 && ready && !extendWhy && (
@@ -375,6 +411,18 @@ export function BranchRow({
             </section>
           )}
         </div>
+      )}
+      {forking && (
+        <ForkBranch
+          branch={b}
+          initialCheckpoint={forking.checkpoint}
+          prefix={ownerPrefix}
+          onClose={() => setForking(null)}
+          onForked={(made, opId) => {
+            onForked?.({ name: made, base: b.base, runtime: b.runtime, startedAt: Date.now(), state: "running" }, opId);
+            onChange();
+          }}
+        />
       )}
     </li>
   );

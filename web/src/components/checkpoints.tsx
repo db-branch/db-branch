@@ -48,6 +48,7 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
   const saveWhy = why("branch.checkpoint");
   const restoreWhy = why("branch.restore");
   const deleteWhy = why("branch.checkpoint_delete");
+  const forkWhy = !allow("branch.fork") ? noRole : b.status !== "ready" && b.status !== "paused" ? t("Available once it is ready.") : undefined;
 
   const shape = useMemo(() => JSON.stringify([graph?.lines, graph?.items.map((c) => c.name)]), [graph]);
   useEffect(() => setSelected(null), [shape]);
@@ -124,6 +125,7 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
     saveWhy,
     restoreWhy,
     deleteWhy,
+    forkWhy,
     txRestoreWhy: !allow("ext.history.write") ? noRole : !ready ? t("Available once it is ready.") : undefined,
     save,
     // saveFirst: the button of a restore confirmation, which saves a checkpoint (named as typed in the form, or by time).
@@ -159,26 +161,26 @@ export type Panel = ReturnType<typeof usePanel>;
 // one or delete it. A restore saves nothing by itself, and the panel says so before it
 // asks to confirm. allow tells which actions the signed-in person may do. The
 // graph has an Expand button that opens the whole panel in a modal.
-export function CheckpointPanel(props: { branch: Branch; ready: boolean; allow: (action: string) => boolean; onChange?: () => void }) {
+export function CheckpointPanel(props: { branch: Branch; ready: boolean; allow: (action: string) => boolean; onChange?: () => void; onFork?: (checkpoint: string) => void }) {
   const p = usePanel(props);
   const [open, setOpen] = useState(false);
   const opener = useRef<HTMLButtonElement>(null);
-  return <PanelView p={p} open={open} onOpen={() => setOpen(true)} onClose={() => setOpen(false)} expandRef={opener} />;
+  return <PanelView p={p} open={open} onOpen={() => setOpen(true)} onClose={() => setOpen(false)} expandRef={opener} onFork={props.onFork} />;
 }
 
 // PanelView draws the panel on the page and, while open, the same panel
 // enlarged in a modal. The one on the page is inert meanwhile: out of reach of
 // the keyboard and of screen readers, so there is one of each control to find.
-export function PanelView({ p, open, onOpen, onClose, expandRef }: { p: Panel; open: boolean; onOpen: () => void; onClose: () => void; expandRef?: RefObject<HTMLButtonElement | null> }) {
+export function PanelView({ p, open, onOpen, onClose, expandRef, onFork }: { p: Panel; open: boolean; onOpen: () => void; onClose: () => void; expandRef?: RefObject<HTMLButtonElement | null>; onFork?: (checkpoint: string) => void }) {
   return (
     <>
       <section className="cps" aria-label="Checkpoints" inert={open}>
-        <PanelBody p={p} onExpand={onOpen} expandRef={expandRef} />
+        <PanelBody p={p} onExpand={onOpen} expandRef={expandRef} onFork={onFork} />
       </section>
       {open && (
         <Modal title={t("Checkpoints of {name}", { name: p.branch.name })} onClose={onClose} returnFocus={expandRef}>
           <section className="cps cps-modal" aria-label="Checkpoints">
-            <PanelBody p={p} modal />
+            <PanelBody p={p} modal onFork={onFork ? (cp) => (onClose(), onFork(cp)) : undefined} />
           </section>
         </Modal>
       )}
@@ -188,7 +190,7 @@ export function PanelView({ p, open, onOpen, onClose, expandRef }: { p: Panel; o
 
 // PanelBody is the panel itself: save, the graph with the selected node and its
 // actions, and the list. modal draws it enlarged for the modal.
-export function PanelBody({ p, modal, onExpand, expandRef }: { p: Panel; modal?: boolean; onExpand?: () => void; expandRef?: RefObject<HTMLButtonElement | null> }): ReactNode {
+export function PanelBody({ p, modal, onExpand, expandRef, onFork }: { p: Panel; modal?: boolean; onExpand?: () => void; expandRef?: RefObject<HTMLButtonElement | null>; onFork?: (checkpoint: string) => void }): ReactNode {
   const { branch: b, graph, rows, selected, asking, working } = p;
   const dots = !!p.events && Object.values(p.events).some((l) => l.length > 0);
   return (
@@ -282,6 +284,8 @@ export function PanelBody({ p, modal, onExpand, expandRef }: { p: Panel; modal?:
                   why={p.restoreWhy}
                   onAsk={(on) => p.setAsking(on ? { what: "restore", name: selected.checkpoint!.name, from: "graph" } : null)}
                   onRestore={() => p.restoreCheckpoint(selected.checkpoint!.name)}
+                  onFork={onFork ? () => onFork(selected.checkpoint!.name) : undefined}
+                  forkWhy={p.forkWhy}
                   saveFirst={{ onSave: p.saveFirst, why: p.saveWhy }}
                 />
               ) : (
@@ -378,7 +382,7 @@ function Confirm({ label, text, action, danger, working, onCancel, onConfirm, sa
   );
 }
 
-function CheckpointDetail({ c, line, branch, asking, working, why, onAsk, onRestore, saveFirst }: { c: import("../api").Checkpoint; line: number; branch: string; asking: boolean; working: boolean; why?: string; onAsk: (on: boolean) => void; onRestore: () => void; saveFirst: { onSave: () => void; why?: string } }) {
+function CheckpointDetail({ c, line, branch, asking, working, why, forkWhy, onAsk, onRestore, onFork, saveFirst }: { c: import("../api").Checkpoint; line: number; branch: string; asking: boolean; working: boolean; why?: string; forkWhy?: string; onAsk: (on: boolean) => void; onRestore: () => void; onFork?: () => void; saveFirst: { onSave: () => void; why?: string } }) {
   return (
     <div className="hg-detail-body">
       <div className="cp-main">
@@ -405,9 +409,16 @@ function CheckpointDetail({ c, line, branch, asking, working, why, onAsk, onRest
           saveFirst={saveFirst}
         />
       ) : (
-        <button type="button" disabled={!!why || working} title={why ?? t("Go back to this state")} onClick={() => onAsk(true)}>
-          Restore
-        </button>
+        <span className="cp-actions">
+          <button type="button" disabled={!!why || working} title={why ?? t("Go back to this state")} onClick={() => onAsk(true)}>
+            Restore
+          </button>
+          {onFork && (
+            <button type="button" disabled={!!forkWhy || working} title={forkWhy} onClick={onFork}>
+              Fork
+            </button>
+          )}
+        </span>
       )}
     </div>
   );

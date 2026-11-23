@@ -81,20 +81,31 @@ BEGIN
 END
 $$;`
 
-// ownObjects gives OwnerRole every user object in every database of the
-// instance.
-func (p *Server) ownObjects(ctx context.Context, s domain.Server) error {
+// databases lists the connectable non-template databases of the instance.
+func (p *Server) databases(ctx context.Context, s domain.Server) ([]string, error) {
 	name, args := p.tool(s, "psql", "-h", p.sockDir(s), "-p", fmt.Sprint(s.Port), "-U", Superuser, "-d", "postgres",
 		"-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate")
 	out, err := p.Run.Run(ctx, name, args...)
 	if err != nil {
+		return nil, err
+	}
+	var dbs []string
+	for _, db := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if db = strings.TrimSpace(db); db != "" {
+			dbs = append(dbs, db)
+		}
+	}
+	return dbs, nil
+}
+
+// ownObjects gives OwnerRole every user object in every database of the
+// instance.
+func (p *Server) ownObjects(ctx context.Context, s domain.Server) error {
+	dbs, err := p.databases(ctx, s)
+	if err != nil {
 		return err
 	}
-	for _, db := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		db = strings.TrimSpace(db)
-		if db == "" {
-			continue
-		}
+	for _, db := range dbs {
 		name, args := p.tool(s, "psql", "-h", p.sockDir(s), "-p", fmt.Sprint(s.Port), "-U", Superuser, "-d", db,
 			"-X", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-")
 		if _, err := p.Run.RunInput(ctx, strings.NewReader(ownSQL), name, args...); err != nil {

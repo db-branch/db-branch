@@ -25,6 +25,9 @@ const ResetPoint = "@reset"
 const (
 	// CheckpointPrefix starts the ZFS snapshot name of every checkpoint.
 	CheckpointPrefix = "ckpt-"
+	// ForkPrefix starts the ZFS snapshot name taken on a parent branch when
+	// forking its live state.
+	ForkPrefix = "fork-"
 	// GonePrefix names a deleted checkpoint that cannot be destroyed yet
 	// because a clone depends on it; it is destroyed with its last clone.
 	GonePrefix = "gone-"
@@ -101,6 +104,15 @@ func CheckpointSnapshot(name string) string { return CheckpointPrefix + name }
 func CheckpointOf(snapshot string) (string, bool) {
 	n, ok := strings.CutPrefix(snapshot, CheckpointPrefix)
 	return n, ok && n != ""
+}
+
+// ForkSnapshotName is the ZFS snapshot name taken on a parent branch for child.
+func ForkSnapshotName(child Name) string { return ForkPrefix + child.String() }
+
+// IsForkSnapshot reports whether snapshot is a fork snapshot taken for a child branch.
+func IsForkSnapshot(snapshot string) bool {
+	n, ok := strings.CutPrefix(snapshot, ForkPrefix)
+	return ok && n != ""
 }
 
 // SnapshotInfo is a snapshot with what the checkpoint feature needs to know.

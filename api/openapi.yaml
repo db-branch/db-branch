@@ -402,7 +402,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: 'conflict: the branch is in a state that does not allow deleting (for example `provisioning`).'
+          description: 'conflict: the branch is in a state that does not allow deleting (for example `provisioning`). in_use: forked child branches still depend on this branch.'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -511,6 +511,66 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/branches/{name}/fork:
+    post:
+      tags: [branches]
+      operationId: forkBranch
+      summary: Fork a branch
+      x-dbb-action: branch.fork
+      x-dbb-token-scopes: [full, branches]
+      description: |-
+        Creates a new independent branch cloned from an existing `ready` or `paused` branch's current state, or from one of its checkpoints (or `@reset`). The parent branch is left untouched (when `clean` is true on a `ready` parent without `checkpoint`, it is briefly stopped cleanly to take the snapshot and restarted; if the clean shutdown cannot be confirmed, the asynchronous operation fails with `unclean_shutdown`). Answers `202` with an operation of kind `branch.fork`.
+
+        The request is refused with `cluster_upgrading` until every node runs the version that supports branch forking. Forking stays on the parent's node and requires local ZFS lineage (`checkpoints_unavailable` on shared or module storage).
+
+        **Action:** `branch.fork`. Allowed for `full` and `branches` tokens. Allowed for the parent branch's owner, team members sharing branches, and admins (never anonymous callers or another user's `open` branch).
+      parameters:
+        - {$ref: '#/components/parameters/BranchName'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ForkBranch'}
+      responses:
+        '202':
+          description: Accepted. Poll the operation or follow the event stream.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Operation'}
+          headers:
+            Location: {$ref: '#/components/headers/Location'}
+        '400':
+          description: 'invalid_request: malformed JSON, unknown field, invalid child name, checkpoint name, TTL, or access.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: 'not_found: parent branch or checkpoint does not exist. runtime_not_installed: required runtime is not installed on the parent node.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: 'already_exists: child name already exists. conflict: parent is not `ready`/`paused` or `node` disagrees with parent''s node. checkpoints_unavailable: storage lacks local ZFS lineage. feature_not_supported: engine does not support checkpoints.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '429':
+          description: 'quota_exceeded: owner reached the `branch.max_per_user` limit.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: 'no_capacity: parent node has no memory budget left. cluster_upgrading: not every node supports fork yet. not_initialized, no_leader, modules_pending.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '507':
+          description: 'no_space: pool free space is below the safety reserve.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
   /v1/branches/{name}/recreate:
     post:
       tags: [branches]
@@ -544,7 +604,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
-          description: 'conflict: the branch is not `lost`.'
+          description: 'conflict: the branch is not `lost`, or it is a forked branch (whose origin exists only on its parent''s node).'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -3432,6 +3492,7 @@ components:
             - branch.reset
             - branch.pause
             - branch.resume
+            - branch.fork
             - branch.recreate
             - branch.delete
             - branch.restore
@@ -3515,13 +3576,19 @@ components:
           description: '`private`: the branch has its own password; owner and admins connect. `open`: it uses the cluster''s shared password and anyone may connect and query.'
         status:
           type: string
-          enum: [provisioning, ready, resetting, restoring, upgrading, pausing, paused, resuming, deleting, failed, lost]
-          description: '`lost` means the node holding the branch is gone (see recreate). `restoring` and `upgrading` are shown while a checkpoint restore or a runtime upgrade runs. `paused` means the database server is stopped and the data kept (see pause); `pausing` and `resuming` are shown while it is stopped or started.'
+          enum: [provisioning, ready, resetting, restoring, upgrading, pausing, paused, resuming, forking, deleting, failed, lost]
+          description: '`lost` means the node holding the branch is gone (see recreate). `restoring`, `upgrading` and `forking` are shown while a checkpoint restore, runtime upgrade or clean fork runs. `paused` means the database server is stopped and the data kept (see pause); `pausing` and `resuming` are shown while it is stopped or started.'
         status_reason:
           type: [string, 'null']
           description: 'Why a branch is `failed` or `lost`. After an upgrade kept with `no_rollback` it starts with `upgrade failed: `.'
         base: {$ref: '#/components/schemas/Name'}
         snapshot: {type: string, description: The snapshot of the base the branch was cloned from.}
+        parent_branch:
+          $ref: '#/components/schemas/Name'
+          description: Present when this branch was forked from another branch.
+        parent_snapshot:
+          type: string
+          description: The snapshot on the parent branch (`fork-<name>`, `ckpt-<cp>`, or `reset`) this branch was cloned from. Present only for forked branches.
         runtime:
           $ref: '#/components/schemas/RuntimeRef'
           description: The runtime the branch runs now. It differs from `base_runtime` after an upgrade.
@@ -3659,6 +3726,47 @@ components:
         base: prod
         ttl: 72h
         init_sql: CREATE INDEX idx_orders_created ON orders (created_at);
+    ForkBranch:
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/Name'
+          description: 'New child branch name, unique across the cluster. Non-admins on a console login session receive their owner prefix automatically.'
+        checkpoint:
+          type: string
+          description: 'Parent checkpoint name (or `@reset`) to fork from. Default: take a new snapshot of the parent''s current state.'
+        clean:
+          type: boolean
+          default: false
+          description: 'When `checkpoint` is omitted and the parent is `ready`, stop the parent cleanly before taking the snapshot and restart it immediately afterwards.'
+        init_sql:
+          type: string
+          description: SQL to run once as the child branch login after cloning. A reset returns the child to its state after this ran.
+        ttl:
+          $ref: '#/components/schemas/Duration'
+          description: 'Lifetime from now. Default: the `branch.default_ttl` setting (or `branch.max_ttl` if set), or no expiry.'
+        node:
+          type: string
+          description: Optional node check; must match the parent branch's node.
+        owner:
+          type: string
+          description: 'Immutable principal ID of who manages the child branch. Default: the caller. Only an admin (or `full` token) may name someone else.'
+        owner_name:
+          type: string
+          description: Display name of the owner when an admin forks a branch for another owner.
+        access:
+          type: string
+          enum: [private, open]
+          default: private
+        record:
+          type: boolean
+          description: Record the forked branch's changes from its creation (needs the paid `history` module).
+      required: [name]
+      additionalProperties: false
+      example:
+        name: feature-x-try
+        checkpoint: before-migration
+        ttl: 24h
     ExtendBranch:
       type: object
       properties:

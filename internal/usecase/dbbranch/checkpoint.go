@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/db-branch/db-branch/internal/domain"
 )
@@ -320,8 +321,9 @@ func (s *Service) collectLogged(ctx context.Context, n domain.Name) {
 }
 
 // collect destroys the lines that hold no checkpoint any more and the
-// deleted checkpoints nothing depends on. Removing a line can free what it
-// was cloned from, so it repeats until nothing is left.
+// deleted checkpoints (and orphaned fork snapshots) nothing depends on.
+// Removing a line can free what it was cloned from, so it repeats until nothing
+// is left.
 func (s *Service) collect(ctx context.Context, n domain.Name) error {
 	for range 64 {
 		lines, err := s.family(ctx, n)
@@ -329,6 +331,7 @@ func (s *Service) collect(ctx context.Context, n domain.Name) error {
 			return err
 		}
 		g := domain.Garbage(lines)
+		g.Snapshots = append(g.Snapshots, s.orphanedForkSnapshots(ctx, lines, g.Datasets)...)
 		if len(g.Snapshots)+len(g.Datasets) == 0 {
 			return s.dropEmptyRoot(ctx, n, lines)
 		}
@@ -346,6 +349,35 @@ func (s *Service) collect(ctx context.Context, n domain.Name) error {
 	return nil
 }
 
+// orphanedForkSnapshots finds uncloned fork-<child> snapshots whose child
+// branch no longer exists in Store (for instance when the child was deleted
+// while the parent was upgrading or restoring).
+func (s *Service) orphanedForkSnapshots(ctx context.Context, lines []domain.Line, dropping []string) []domain.Snapshot {
+	dropSet := make(map[string]bool, len(dropping))
+	for _, ds := range dropping {
+		dropSet[ds] = true
+	}
+	var out []domain.Snapshot
+	for _, l := range lines {
+		if l.Pending || dropSet[l.Dataset] {
+			continue
+		}
+		for _, sn := range l.Snapshots {
+			if !domain.IsForkSnapshot(sn.Name) || len(sn.Clones) > 0 {
+				continue
+			}
+			childName, err := domain.ParseName(strings.TrimPrefix(sn.Name, domain.ForkPrefix))
+			if err != nil {
+				continue
+			}
+			if _, err := s.Store.GetBranch(ctx, childName); errors.Is(err, domain.ErrNotFound) {
+				out = append(out, domain.Snapshot{Dataset: l.Dataset, Name: sn.Name})
+			}
+		}
+	}
+	return out
+}
+
 // dropEmptyRoot removes the history container once no line is left in it.
 func (s *Service) dropEmptyRoot(ctx context.Context, n domain.Name, lines []domain.Line) error {
 	root := s.historyRoot(n)
@@ -358,8 +390,11 @@ func (s *Service) dropEmptyRoot(ctx context.Context, n domain.Name, lines []doma
 	if err != nil || !ok {
 		return err
 	}
-	if _, pending, _ := s.readIntent(ctx, n); pending {
-		return nil
+	if _, pending, err := s.readIntent(ctx, n); err != nil || pending {
+		return err
+	}
+	if _, upgrading, err := s.readUpgradeIntent(ctx, n); err != nil || upgrading {
+		return err
 	}
 	return s.Storage.Destroy(ctx, root)
 }

@@ -56,11 +56,14 @@ func (s *Service) requireInstalled(ctx context.Context, rt domain.RuntimeRef) er
 }
 
 // runtimeOf is the runtime data needs: the one a snapshot property names,
-// else the base's (the reset point, and checkpoints from before runtimes were
-// recorded, are made by it).
+// else a forked branch's fork runtime, else the base's (the reset point, and
+// checkpoints from before runtimes were recorded, are made by it).
 func (s *Service) runtimeOf(ctx context.Context, br domain.Branch, prop string) domain.RuntimeRef {
 	if rt, ok := domain.ParseRuntimeProp(prop); ok {
 		return rt
+	}
+	if br.ForkRuntime != (domain.RuntimeRef{}) {
+		return br.ForkRuntime
 	}
 	if base, err := s.Store.GetBase(ctx, br.Base); err == nil {
 		return base.Runtime
@@ -74,8 +77,8 @@ func (s *Service) switchRuntime(ctx context.Context, br *domain.Branch, in resto
 	if in.Runtime != (domain.RuntimeRef{}) && in.Runtime != br.Runtime {
 		br.Runtime, changed = in.Runtime, true
 	}
-	if in.Op == opReset && br.LegacyAuth {
-		br.LegacyAuth, changed = false, true
+	if in.Op == opReset && br.LegacyAuth != br.ForkLegacyAuth {
+		br.LegacyAuth, changed = br.ForkLegacyAuth, true
 	}
 	if !changed {
 		return nil
@@ -191,7 +194,11 @@ func (s *Service) settleUpgrade(ctx context.Context, br domain.Branch, req Upgra
 		return nil
 	}
 	br.Status, br.Error = domain.BranchReady, ""
-	return s.saveBranch(ctx, br)
+	if err := s.saveBranch(ctx, br); err != nil {
+		return err
+	}
+	s.collectIfSettled(ctx, br.Name)
+	return nil
 }
 
 const (
@@ -355,6 +362,7 @@ func (s *Service) doUpgrade(ctx context.Context, br domain.Branch, req UpgradeRe
 	untouched := func(cause error) (domain.UpgradeResult, error) {
 		res.Status, res.Error = domain.UpgradeAborted, cause.Error()
 		errs := []error{cause, s.clearUpgradeIntent(ctx, br.Name), s.ensureRunning(ctx, br), s.settleUpgrade(ctx, br, req)}
+		s.collectIfSettled(ctx, br.Name)
 		return res, errors.Join(errs...)
 	}
 	if err := s.writeUpgradeIntent(ctx, br.Name, in); err != nil {
@@ -401,6 +409,7 @@ func (s *Service) doUpgrade(ctx context.Context, br domain.Branch, req UpgradeRe
 	}
 	res.Status = domain.UpgradeUpgraded
 	s.rotateAuto(ctx, br.Name)
+	s.collectIfSettled(ctx, br.Name)
 	return res, nil
 }
 
@@ -411,7 +420,9 @@ func (s *Service) failUpgrade(ctx context.Context, br domain.Branch, req Upgrade
 	if req.NoRollback {
 		msg := fmt.Sprintf("%s%v; the branch was left as it is on %s; restore checkpoint %s to go back to %s, or delete the branch", domain.UpgradeFailedPrefix, cause, br.Runtime, res.Checkpoint, res.From)
 		res.Status = domain.UpgradeFailed
-		return res, errors.Join(errors.New(msg), s.clearUpgradeIntent(ctx, br.Name), s.markFailed(ctx, br, errors.New(msg)))
+		err := errors.Join(errors.New(msg), s.clearUpgradeIntent(ctx, br.Name), s.markFailed(ctx, br, errors.New(msg)))
+		s.collectIfSettled(ctx, br.Name)
+		return res, err
 	}
 	report.report("rolling_back")
 	back := br
@@ -481,7 +492,11 @@ func (s *Service) resumeUpgrade(ctx context.Context, br domain.Branch) error {
 		}
 	}
 	br.Status, br.Error = domain.BranchReady, ""
-	return s.saveBranch(ctx, br)
+	if err := s.saveBranch(ctx, br); err != nil {
+		return err
+	}
+	s.collectIfSettled(ctx, br.Name)
+	return nil
 }
 
 // CreateBranchUpgraded creates a branch and upgrades it right away when the

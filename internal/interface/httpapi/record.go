@@ -38,12 +38,22 @@ func (s *Server) checkRecord(ctx context.Context, svc Branches, p ext.Principal,
 	if err != nil {
 		return err
 	}
+	return s.checkRecordRuntime(ctx, p, in.Name, in.Owner, b.Runtime)
+}
+
+func (s *Server) checkRecordRuntime(ctx context.Context, p ext.Principal, name, owner string, rt domain.RuntimeRef) error {
+	if p.ID == Anonymous.ID {
+		return fmt.Errorf("%w: recording needs a login", ext.ErrForbidden)
+	}
+	if s.Ext.ServerOptioner == nil {
+		return fmt.Errorf("%w: recording needs the history module, which is not installed (db-branch module install history)", domain.ErrInvalidName)
+	}
 	// An engine that does not declare history_record cannot be recorded, whatever the module says.
-	if err := s.requireFeature(ctx, b.Runtime.Engine, "history_record"); err != nil {
+	if err := s.requireFeature(ctx, rt.Engine, "history_record"); err != nil {
 		return err
 	}
-	_, err = s.Ext.ServerOptioner.ServerOptions(ctx, ext.ServerBranch{Name: in.Name, Owner: in.Owner, Engine: string(b.Runtime.Engine),
-		Version: b.Runtime.Version, Record: true})
+	_, err := s.Ext.ServerOptioner.ServerOptions(ctx, ext.ServerBranch{Name: name, Owner: owner, Engine: string(rt.Engine),
+		Version: rt.Version, Record: true})
 	if err != nil && !errors.Is(err, ext.ErrForbidden) {
 		return fmt.Errorf("%w: %v", domain.ErrInvalidName, err)
 	}

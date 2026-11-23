@@ -55,7 +55,11 @@ type Server struct {
 	UpgradeTimeout time.Duration
 }
 
-var _ domain.DBServer = (*Server)(nil)
+var (
+	_ domain.DBServer             = (*Server)(nil)
+	_ domain.CloneHistoryResetter = (*Server)(nil)
+	_ domain.CloneUserCleaner     = (*Server)(nil)
+)
 
 func (m *Server) dir(s domain.Server) string          { return filepath.Join(m.StateRoot, s.ID) }
 func (m *Server) cnf(s domain.Server) string          { return filepath.Join(m.dir(s), "my.cnf") }
@@ -596,6 +600,32 @@ func (m *Server) tailLogN(s domain.Server, offset int64, max int) string {
 func (m *Server) UpdateStats(ctx context.Context, s domain.Server) error {
 	_, err := m.Run.Run(ctx, m.bin(s, "mysqlcheck"), "--socket="+m.socket(s), "-uroot", "--analyze", "--all-databases", "--silent")
 	return err
+}
+
+// ResetCloneHistory clears inherited binary logs and GTID history on a freshly
+// forked branch so a recorded child begins its own history cleanly.
+func (m *Server) ResetCloneHistory(ctx context.Context, s domain.Server) error {
+	if seriesAtLeast(domain.MySQLSeries(s.Runtime.Version), "8.4") {
+		return m.Exec(ctx, s, "RESET BINARY LOGS AND GTIDS")
+	}
+	return m.Exec(ctx, s, "RESET MASTER")
+}
+
+// DropUser removes an inherited branch login from a cloned server so the
+// parent's credentials cannot reach a forked child.
+func (m *Server) DropUser(ctx context.Context, s domain.Server, user string) error {
+	if err := validateLogin(user, ""); err != nil {
+		return err
+	}
+	if user == "root" {
+		return errors.New("mysql cannot drop root login")
+	}
+	u := quoteMySQL(user)
+	if !seriesAtLeast(domain.MySQLSeries(s.Runtime.Version), "5.7") {
+		return m.Exec(ctx, s, fmt.Sprintf(allowBackslashEscapes+
+			"DELETE FROM mysql.user WHERE User = %s AND Host = '%%'; FLUSH PRIVILEGES", u))
+	}
+	return m.Exec(ctx, s, fmt.Sprintf(allowBackslashEscapes+"DROP USER IF EXISTS %s@'%%'", u))
 }
 
 // logReadLimit bounds what is read of the error log: the service user can grow

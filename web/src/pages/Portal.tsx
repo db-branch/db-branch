@@ -308,6 +308,12 @@ export function Portal() {
                     sql={session && b.status === "ready" && allowed(session.can, "branch.query") ? <SqlRunner name={b.name} /> : undefined}
                     onChange={mine.reload}
                     onDismiss={job ? () => setJobs((js) => js.filter((j) => j.name !== b.name)) : undefined}
+                    prefix={session?.branch_prefix}
+                    onOpenParent={(parent) => go(pageOf(parent))}
+                    onForked={(job, opId) => {
+                      track(job, opId);
+                      go(pageOf(job.name));
+                    }}
                     extra={session && b.record && hasHistoryModule(caps) && allowed(session.can, "ext.history.read") ? <BranchHistory name={b.name} /> : undefined}
                   />
                 </ul>
