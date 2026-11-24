@@ -48,7 +48,7 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
   const why = (action: string) => (!allow(action) ? noRole : !ready ? t("Available once it is ready.") : undefined);
   const saveWhy = why("branch.checkpoint");
   const restoreWhy = why("branch.restore");
-  const deleteWhy = why("branch.checkpoint_delete");
+  const deleteWhy = !allow("branch.checkpoint.delete") && !allow("branch.checkpoint_delete") ? noRole : !ready ? t("Available once it is ready.") : undefined;
   const forkWhy = !allow("branch.fork") ? noRole : b.status !== "ready" && b.status !== "paused" ? t("Available once it is ready.") : undefined;
   const mergeWhy = !allow("branch.merge") ? noRole : b.status !== "ready" && b.status !== "paused" ? t("Available once it is ready.") : undefined;
 

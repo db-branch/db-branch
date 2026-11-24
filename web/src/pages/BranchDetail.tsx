@@ -41,7 +41,7 @@ export function BranchDetail({ name }: { name: string }) {
   }
   const ready = b.status === "ready";
   const sections: BranchSection[] = [];
-  if (ready) sections.push({ id: "connect", title: t("Connect"), body: <ConnectPanel branch={b.name} /> });
+  if (ready && can("branch.connect")) sections.push({ id: "connect", title: t("Connect"), body: <ConnectPanel branch={b.name} /> });
   if (["ready", "restoring"].includes(b.status) && showCheckpoints(b, can)) {
     sections.push({
       id: "checkpoints",
@@ -61,6 +61,7 @@ export function BranchDetail({ name }: { name: string }) {
         clustered={cluster?.mode === "cluster"}
         max={max}
         sections={sections}
+        allow={can}
         onBack={back}
         onExtend={(ttl) => run(api.extendBranch(b.name, ttl))}
         onReset={() => run(api.resetBranch(b.name))}

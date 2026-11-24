@@ -2,11 +2,12 @@
 // pick a base, get a branch and its connection, manage your own branches.
 // It works without logging in for public snapshots.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, Branch, PublicBase, Session, ssoReturn } from "../api";
+import { api, ApiError, Branch, onUnauthorized, PublicBase, Session, ssoReturn } from "../api";
 import { Login, Mark } from "../App";
 import { AccountMenu, AccountPage, LanguagePicker } from "../components/account";
 import { allowed, BranchRow, Job, SnapInfo } from "../components/branchcard";
 import { BranchHistory } from "../components/branchhistory";
+import { FirstPassword } from "../components/firstpassword";
 import { SqlRunner } from "../components/sqlrunner";
 import { engineLabel } from "../lib/format";
 import { hasHistoryModule } from "../lib/history";
@@ -15,7 +16,7 @@ import { Limits, NewBranch, NewBranchSkeleton } from "../components/newbranch";
 import { Choice } from "../lib/bases";
 import { chooseLanguage, remembered as rememberedLanguage, setLanguage, t } from "../lib/i18n";
 import { useCapabilities } from "../lib/caps";
-import { useNow } from "../lib/live";
+import { disconnect, useNow } from "../lib/live";
 import { sortBranches } from "../lib/branches";
 import { seenTour, showsTour, tourSteps } from "../lib/tour";
 import { Tour } from "../components/tour";
@@ -40,7 +41,7 @@ function remember(names: string[]) {
 
 // usePoll reloads every few seconds (events need a login; polling works for everyone).
 // `scope` names what the data belongs to (the signed-in person): when it changes the old data is dropped, never shown for the new one.
-function usePoll<T>(load: () => Promise<T>, deps: unknown[], every = 4000, scope?: unknown) {
+function usePoll<T>(load: () => Promise<T>, deps: unknown[], every = 4000, scope?: unknown, enabled = true) {
   const [data, setData] = useState<T>();
   const [seen, setSeen] = useState(scope);
   if (seen !== scope) {
@@ -51,11 +52,17 @@ function usePoll<T>(load: () => Promise<T>, deps: unknown[], every = 4000, scope
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const run = useCallback(() => load().then((d) => (setData(d), setError(null)), (e: Error) => setError(e.message)), deps);
   useEffect(() => {
+    if (!enabled) return;
     run();
     const t = setInterval(run, every);
     return () => clearInterval(t);
-  }, [run, every]);
+  }, [run, every, enabled]);
   return { data, error, reload: run };
+}
+
+export function nextPortalSessionAction(s: Session | null): "anonymous" | "first_password" | "in" {
+  if (!s) return "anonymous";
+  return s.must_change_password ? "first_password" : "in";
 }
 
 type Snaps = Record<string, Record<string, SnapInfo>>;
@@ -63,6 +70,7 @@ type Offer = { choices: Choice[]; snaps: Snaps; limits?: Limits; perBase?: Recor
 
 export function Portal() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const [mustChange, setMustChange] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
   const [ssoError, setSsoError] = useState<string | undefined>();
   const [local, setLocal] = useState<string[]>(remembered());
@@ -89,24 +97,54 @@ export function Portal() {
   const now = useNow(15000);
   const alive = useRef(true);
   useEffect(() => () => void (alive.current = false), []);
+  const enterSession = useCallback((s: Session) => {
+    setLanguage(chooseLanguage(s.language || rememberedLanguage(), navigator.language));
+    setMustChange(false);
+    setSession(s);
+  }, []);
   useEffect(() => {
-    const enter = (s: Session) => {
-      setLanguage(chooseLanguage(s.language || rememberedLanguage(), navigator.language));
-      setSession(s);
-    };
     ssoReturn().then(({ session: s, error }) => {
-      if (s) return enter(s);
+      if (s) {
+        const action = nextPortalSessionAction(s);
+        if (action === "first_password") {
+          setLanguage(chooseLanguage(s.language || rememberedLanguage(), navigator.language));
+          setMustChange(true);
+          return;
+        }
+        return enterSession(s);
+      }
       if (error) {
         setSsoError(error);
         setSigningIn(true);
       }
-      api.session().then((s) => (s.must_change_password ? setSession(null) : enter(s)), () => setSession(null));
+      api.session().then(
+        (sess) => {
+          const action = nextPortalSessionAction(sess);
+          if (action === "first_password") {
+            setLanguage(chooseLanguage(sess.language || rememberedLanguage(), navigator.language));
+            setMustChange(true);
+          } else {
+            enterSession(sess);
+          }
+        },
+        () => setSession(null),
+      );
     });
-  }, []);
+  }, [enterSession]);
+  useEffect(() => {
+    if (!session && !mustChange) return;
+    return onUnauthorized(() => {
+      disconnect();
+      setMustChange(false);
+      setSession(null);
+      setSigningIn(true);
+    });
+  }, [session, mustChange]);
   const myId = session ? session.user.id : null;
   const myName = session ? session.user.name || session.user.id : null;
 
-  const caps = useCapabilities(!!session);
+  const pollReady = session !== undefined && !mustChange;
+  const caps = useCapabilities(!!session, pollReady);
   const bases = usePoll<Offer>(
     async () => {
       if (session) {
@@ -140,6 +178,7 @@ export function Portal() {
     [session],
     15000,
     session,
+    pollReady,
   );
 
   const mine = usePoll<Branch[]>(
@@ -164,6 +203,7 @@ export function Portal() {
     [session, local.join(",")],
     jobs.some((j) => j.state === "running") ? 1500 : 4000,
     session,
+    pollReady,
   );
 
   // track follows a branch being made: it shows at once as "provisioning",
@@ -231,6 +271,15 @@ export function Portal() {
   }, [ready, userId]);
   const canTour = ready && showsTour(session) && location.pathname !== "/account";
 
+  if (mustChange)
+    return (
+      <main className="login">
+        <div className="wordmark">
+          <Mark /> db-branch
+        </div>
+        <FirstPassword onDone={enterSession} onSignOut={() => api.signOut(() => { setMustChange(false); setSession(null); })} />
+      </main>
+    );
   if (session === undefined) return null;
   if (signingIn)
     return (

@@ -31,7 +31,7 @@ export function notes(c: Checkpoint): ("current" | "auto")[] {
 // left out (not disabled) where the node's storage cannot take checkpoints,
 // and for people who may do none of the checkpoint actions.
 export function showCheckpoints(b: { checkpoints?: boolean }, allow: (action: string) => boolean): boolean {
-  return b.checkpoints === true && ["branch.checkpoint", "branch.restore", "branch.checkpoint_delete"].some(allow);
+  return b.checkpoints === true && ["branch.checkpoint", "branch.restore", "branch.checkpoint.delete", "branch.checkpoint_delete"].some(allow);
 }
 
 // spaceWarning: the warning the server attaches to a saved checkpoint when the

@@ -3,9 +3,9 @@
 // Plans, as the server reads them (keys of the earlier plans arrive as
 // the plan that replaced them).
 const plans: Record<string, [string, string]> = {
-  lite: ["Lite", "history, diff (beta)"],
-  team: ["Team", "users, roles, teams, history, diff (beta)"],
-  business: ["Business", "users, roles, teams, SSO, audit"],
+  lite: ["Lite", "history"],
+  team: ["Team", "users, roles, teams, history"],
+  business: ["Business", "users, roles, teams, SSO, audit, history"],
 };
 
 export function planLabel(plan?: string): string {

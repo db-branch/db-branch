@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { planLabel } from "./modules";
 
-describe("planLabel", () => {
-  it("names the plans and what they include", () => {
-    expect(planLabel("lite")).toBe("Lite · history, diff (beta)");
-    expect(planLabel("team")).toContain("Team");
-    expect(planLabel("team")).toContain("diff");
-    expect(planLabel("business")).toContain("SSO");
+describe("TestModules_プラン機能表記がlicense仕様と一致する", () => {
+  it("Lite/Team/Business に diff (beta) を含めず、Business に history を含む", () => {
+    expect(planLabel("lite")).toBe("Lite · history");
+    expect(planLabel("team")).toBe("Team · users, roles, teams, history");
+    expect(planLabel("business")).toBe("Business · users, roles, teams, SSO, audit, history");
+    expect(planLabel("lite")).not.toContain("diff");
+    expect(planLabel("team")).not.toContain("diff");
     expect(planLabel("business")).not.toContain("masking");
   });
   it("reads a licence without a plan as business and keeps an unknown one", () => {

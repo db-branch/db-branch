@@ -276,4 +276,6 @@ export const ja: Record<string, string> = {
   "Forget {name}?": "{name} の記録を削除しますか？",
   "Remove the cluster record of this module so it is no longer listed. You can install it again later.":
     "このモジュールのクラスタ記録を削除し、一覧に表示されないようにします。あとから入れ直すことができます。",
+  "Package repositories could not be reached; module availability could not be checked.":
+    "パッケージリポジトリに接続できなかったため、モジュールの利用可否を確認できませんでした。",
 };

@@ -17,7 +17,15 @@ export function Modules({ name, onOpen }: { name?: string; onOpen?: (name: strin
   const { data: lic, reload: reloadLicense } = useLive(api.license, ["setting", "module"]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [forgetting, setForgetting] = useState<string | null>(null);
-  const run = (p: Promise<unknown>) => p.then(() => setActionError(null), (e: Error) => setActionError(e.message));
+  const run = (p: Promise<unknown>) =>
+    p.then(
+      () => {
+        setActionError(null);
+        reloadModules();
+        reloadLicense();
+      },
+      (e: Error) => setActionError(e.message),
+    );
 
   const covered = (n: string) => !!lic?.report && (lic.report.all || lic.report.license.modules.includes(n)) && ["valid", "grace"].includes(lic.report.state);
   const available = modules?.available ?? {};
@@ -54,7 +62,14 @@ export function Modules({ name, onOpen }: { name?: string; onOpen?: (name: strin
         </>
       ) : (
         <>
-          <LicenseCard current={lic} onApplied={reloadLicense} paid={(modules?.items ?? []).filter((m) => m.requires_license).map((m) => m.name)} />
+          <LicenseCard
+            current={lic}
+            onApplied={() => {
+              reloadLicense();
+              reloadModules();
+            }}
+            paid={(modules?.items ?? []).filter((m) => m.requires_license).map((m) => m.name)}
+          />
           {names.length === 0 && <p className="muted">{t("No modules in the configured package repositories.")}</p>}
           <div className="modules">{names.map((n) => row(n, false))}</div>
         </>
@@ -296,8 +311,12 @@ function LicenseCard({ current, paid, onApplied }: { current?: { configured: boo
         <p className="ok-line">
           {result.license.customer ? t("Verified for {who} and saved.", { who: result.license.customer }) : t("Verified and saved.")}{" "}
           {result.enabled.length > 0 ? t("Enabling {list} on every node.", { list: result.enabled.join(", ") }) : result.all ? t("Enable the modules you want below.") : t("Its modules are already on.")}
-          {result.unavailable.length > 0 && ` Not in the package repositories: ${result.unavailable.join(", ")}.`}
+          {result.offline && ` ${t("Package repositories could not be reached; module availability could not be checked.")}`}
+          {!result.offline && result.unavailable.length > 0 && ` Not in the package repositories: ${result.unavailable.join(", ")}.`}
         </p>
+      )}
+      {!result && rep?.offline && (
+        <p className="muted small">{t("Package repositories could not be reached; module availability could not be checked.")}</p>
       )}
     </form>
   );

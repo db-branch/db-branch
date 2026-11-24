@@ -21,9 +21,13 @@ export function forgetCapabilities() {
 }
 
 /** useCapabilities returns the capabilities, or undefined until known (or when they cannot be had). Asks again when key changes (a login). */
-export function useCapabilities(key?: unknown): Capabilities | undefined {
+export function useCapabilities(key?: unknown, enabled = true): Capabilities | undefined {
   const [caps, setCaps] = useState<Capabilities>();
   useEffect(() => {
+    if (!enabled) {
+      setCaps(undefined);
+      return;
+    }
     let live = true;
     setCaps(undefined);
     capabilities().then(
@@ -33,6 +37,6 @@ export function useCapabilities(key?: unknown): Capabilities | undefined {
     return () => {
       live = false;
     };
-  }, [key]);
+  }, [key, enabled]);
   return caps;
 }

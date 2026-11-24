@@ -1,7 +1,23 @@
+import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Branch } from "../api";
 import { BranchView } from "./branchview";
+
+function findButton(node: ReactNode, label: string): ReactElement<{ onClick?: () => void }> | undefined {
+  if (!node || typeof node !== "object") return undefined;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const hit = findButton(item, label);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+  if (!isValidElement(node)) return undefined;
+  const props = node.props as { children?: ReactNode; onClick?: () => void };
+  if (node.type === "button" && props.children === label) return node as ReactElement<{ onClick?: () => void }>;
+  return findButton(props.children, label);
+}
 
 const branch = (extra: Partial<Branch> = {}): Branch => ({
   name: "alice-feature-x",
@@ -100,6 +116,27 @@ describe("BranchView", () => {
     expect(forked).toContain("parent-br");
     const lostFork = view(branch({ status: "lost", parent_branch: "parent-br" }));
     expect(lostFork).not.toContain("Recreate");
+  });
+});
+
+describe("TestBranchView_Extend1hが残り72hを短縮せず加算する", () => {
+  it("adds 1h, 24h, and 7d to the remaining 72h TTL instead of overwriting it", () => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.parse("2026-11-12T10:00:00Z");
+      vi.setSystemTime(now);
+      const b = branch({ expires_at: new Date(now + 72 * 3600_000).toISOString() });
+      const extended: string[] = [];
+      const tree = BranchView({ b, clustered: false, max: 2048, ...actions, onExtend: (ttl) => extended.push(ttl) });
+
+      findButton(tree, "Extend 1h")?.props.onClick?.();
+      findButton(tree, "Extend 24h")?.props.onClick?.();
+      findButton(tree, "Extend 7d")?.props.onClick?.();
+
+      expect(extended).toEqual([`${72 * 60 + 60}m`, `${72 * 60 + 24 * 60}m`, `${72 * 60 + 168 * 60}m`]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
