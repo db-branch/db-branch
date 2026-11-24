@@ -97,7 +97,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, svc Branches) {
 	ctx := r.Context()
 	st, err := s.status(ctx)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "unavailable", err.Error())
+		fail(w, err)
 		return
 	}
 	branches, err := svc.ListBranches(ctx)
@@ -188,7 +188,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, svc Branches) {
 		p.sample("dbbranch_base_replicas_missing", map[string]string{"base": b.Name.String()}, missing)
 	}
 
-	p.family("dbbranch_module_problem", "gauge", "1 when a module reports a problem on a node (e.g. its licence).")
+	p.family("dbbranch_module_problem", "gauge", "1 when a module reports a problem on a node (e.g. its license).")
 	for _, n := range st.Nodes {
 		names := make([]string, 0, len(n.ModuleProblems))
 		for m := range n.ModuleProblems {

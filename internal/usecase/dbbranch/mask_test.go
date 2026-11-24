@@ -13,14 +13,20 @@ import (
 )
 
 type fakeMasker struct {
-	j    *journal
-	jobs []domain.MaskJob
-	err  error
+	j      *journal
+	jobs   []domain.MaskJob
+	err    error
+	onMask func(domain.MaskJob) error
 }
 
 func (m *fakeMasker) Mask(_ context.Context, job domain.MaskJob) (string, error) {
 	m.j.add("mask %d -> %d", job.Source.Port, job.Target.Port)
 	m.jobs = append(m.jobs, job)
+	if m.onMask != nil {
+		if err := m.onMask(job); err != nil {
+			return "", err
+		}
+	}
 	return "masked 3 tables", m.err
 }
 
@@ -195,5 +201,39 @@ func TestMaskBase_複製できなければ複製がまだないと断る(t *test
 	}
 	if dev, _ := p.replica.store.GetBase(ctx, name("dev")); dev.Status != domain.BaseReady {
 		t.Errorf("the target was touched: %+v", dev)
+	}
+}
+
+func TestMaskBase_workServerの一時ポートが予約され並行ブランチ作成と衝突せず終了後に解放される(t *testing.T) {
+	e, m := maskEnv(t)
+	var concurrentBranch domain.Branch
+	var branchErr error
+	m.onMask = func(job domain.MaskJob) error {
+		concurrentBranch, branchErr = e.svc.CreateBranch(ctx, dbbranch.CreateBranchRequest{Name: name("b1"), Base: name("prod")}, nil)
+		return nil
+	}
+	if _, err := e.svc.MaskBase(ctx, dbbranch.MaskRequest{Target: name("dev"), Source: name("prod"), Masker: "greenmask"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if branchErr != nil {
+		t.Fatalf("concurrent CreateBranch: %v", branchErr)
+	}
+	workPort := m.jobs[0].Source.Port
+	if concurrentBranch.Port == workPort {
+		t.Fatalf("workServer port %d collided with concurrent branch port %d", workPort, concurrentBranch.Port)
+	}
+	if e.server.running["mask-dev"] {
+		t.Errorf("workServer mask-dev still running after MaskBase")
+	}
+	if err := e.svc.DeleteBranch(ctx, name("b1"), nil); err != nil {
+		t.Fatal(err)
+	}
+	// After MaskBase cleanup, the ephemeral port must be released and reusable.
+	reused, err := e.svc.CreateBranch(ctx, dbbranch.CreateBranchRequest{Name: name("b2"), Base: name("prod")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reused.Port != workPort {
+		t.Errorf("port after cleanup = %d, want released port %d", reused.Port, workPort)
 	}
 }

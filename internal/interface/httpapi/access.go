@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -110,9 +111,36 @@ func (s *Server) pending() []string {
 func (s *Server) authorizer() ext.Authorizer {
 	all := ext.AllOf{ext.AllowAuthenticated{}, token.Scoped{}, ownership{s}}
 	if s.Ext.Authorizer != nil {
-		all = append(all, s.Ext.Authorizer)
+		all = append(all, legacyActionAuthorizer{s.Ext.Authorizer})
 	}
 	return all
+}
+
+// legacyActionAliases lets an older auth module authorize requests that use
+// the 1.0 dot-separated and split action names (and lets legacy UI action checks
+// work against a newer auth module during rollout).
+var legacyActionAliases = map[string][]string{
+	"branch.pause":             {"branch.update"},
+	"branch.resume":            {"branch.update"},
+	"branch.update":            {"branch.pause", "branch.resume"},
+	"branch.checkpoint.delete": {"branch.checkpoint_delete"},
+	"branch.checkpoint_delete": {"branch.checkpoint.delete"},
+	"base.snapshot.delete":     {"base.snapshot_delete"},
+	"base.snapshot_delete":     {"base.snapshot.delete"},
+}
+
+type legacyActionAuthorizer struct{ next ext.Authorizer }
+
+func (a legacyActionAuthorizer) Authorize(ctx context.Context, p ext.Principal, action string, r ext.Resource) error {
+	err := a.next.Authorize(ctx, p, action, r)
+	if errors.Is(err, ext.ErrForbidden) {
+		for _, alias := range legacyActionAliases[action] {
+			if aerr := a.next.Authorize(ctx, p, alias, r); aerr == nil {
+				return nil
+			}
+		}
+	}
+	return err
 }
 
 // authenticator tries modules, then API tokens, then the admin password.

@@ -464,7 +464,7 @@ func (s *Server) publicBases(w http.ResponseWriter, r *http.Request, svc Branche
 			items = append(items, out)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items,
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nil,
 		"anonymous": map[string]any{"max_ttl": maxTTL.String(), "max_branches": maxCount, "branches": total, "rate_per_hour": s.anonymousRate()}})
 }
 

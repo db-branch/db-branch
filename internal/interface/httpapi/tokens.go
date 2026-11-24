@@ -114,7 +114,7 @@ func (s *Server) queryBranch(w http.ResponseWriter, r *http.Request, svc Branche
 	}
 	in.Database = strings.TrimSpace(in.Database)
 	if err := domain.ValidateDatabaseName(in.Database); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 	if s.Providers == nil {

@@ -68,7 +68,7 @@ func (a *App) baseRefreshCommand() *cobra.Command {
 		Use:   "set <base> --host H --port P --user U --databases a,b --every 24h",
 		Short: "Refresh the base from a source database every interval (password: --password-stdin or $" + SourcePasswordEnv + "; none keeps the stored one)",
 		Args:  cobra.ExactArgs(1),
-		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+		RunE: a.exactNamed(func(cmd *cobra.Command, c Client, n domain.Name) error {
 			if host == "" || port == 0 || user == "" || databases == "" || every == "" {
 				return errors.New("--host, --port, --user, --databases and --every are required")
 			}
@@ -101,7 +101,7 @@ func (a *App) baseRefreshCommand() *cobra.Command {
 
 	show := &cobra.Command{
 		Use: "show <base>", Short: "Show the base's refresh schedule and its last run", Args: cobra.ExactArgs(1),
-		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+		RunE: a.exactNamed(func(cmd *cobra.Command, c Client, n domain.Name) error {
 			var v refreshView
 			if err := c.Do(cmd.Context(), "GET", "/v1/bases/"+n.String()+"/refresh", nil, &v); err != nil {
 				return err
@@ -132,7 +132,7 @@ func (a *App) baseRefreshCommand() *cobra.Command {
 
 	run := &cobra.Command{
 		Use: "run <base>", Short: "Refresh the base now", Args: cobra.ExactArgs(1),
-		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+		RunE: a.exactNamed(func(cmd *cobra.Command, c Client, n domain.Name) error {
 			return a.start(cmd.Context(), c, "POST", "/v1/bases/"+n.String()+"/refresh/run", nil, noWait)
 		}),
 	}
@@ -140,7 +140,7 @@ func (a *App) baseRefreshCommand() *cobra.Command {
 
 	off := &cobra.Command{
 		Use: "off <base>", Short: "Stop refreshing the base on a schedule (forgets the source and its password)", Args: cobra.ExactArgs(1),
-		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+		RunE: a.exactNamed(func(cmd *cobra.Command, c Client, n domain.Name) error {
 			return c.Do(cmd.Context(), "DELETE", "/v1/bases/"+n.String()+"/refresh", nil, nil)
 		}),
 	}

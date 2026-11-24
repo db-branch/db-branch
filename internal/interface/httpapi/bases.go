@@ -165,8 +165,8 @@ func statusNodes(st ClusterStatus) []domain.Node {
 }
 
 // baseActions are the per-base actions the console decides buttons by.
-var baseActions = []string{"base.snapshot", "base.load", "base.delete", "base.describe", "base.mask", "base.publish", "base.sql",
-	"base.start", "base.stop", "base.refresh", "base.refresh.read", "base.snapshot_delete", "base.replicas"}
+var baseActions = []string{"base.snapshot", "base.load", "base.delete", "base.describe", "base.publish", "base.sql",
+	"base.start", "base.stop", "base.refresh", "base.refresh.read", "base.snapshot.delete", "base.snapshot_delete", "base.replicas"}
 
 // baseViewFor is baseView with the caller's rights on the base.
 func (s *Server) baseViewFor(r *http.Request, b domain.Base) baseJSON {
@@ -324,6 +324,9 @@ func (s *Server) snapshotBase(w http.ResponseWriter, r *http.Request, svc Branch
 // maskBase writes a masked copy of another base into this one (a masker
 // module does it) and snapshots it.
 func (s *Server) maskBase(w http.ResponseWriter, r *http.Request, svc Branches, n domain.Name) {
+	if s.forwardBase(w, r, svc, n) {
+		return
+	}
 	var in struct {
 		Source   string `json:"source"`
 		Snapshot string `json:"snapshot"`
@@ -340,9 +343,6 @@ func (s *Server) maskBase(w http.ResponseWriter, r *http.Request, svc Branches, 
 	}
 	if in.Masker == "" {
 		writeError(w, http.StatusBadRequest, "invalid_request", "masker is required (a masker module, e.g. greenmask)")
-		return
-	}
-	if s.forwardBase(w, r, svc, n) {
 		return
 	}
 	req := dbbranch.MaskRequest{Target: n, Source: source, Snapshot: in.Snapshot, Masker: in.Masker, Rules: in.Rules, By: ownerDisplayName(principalOf(r))}

@@ -773,25 +773,18 @@ func Test知らないパスやメソッドは404か405(t *testing.T) {
 	}
 }
 
-func TestBases_マスクの実行を受け付けて誰がしたかを渡す(t *testing.T) {
+func TestBases_1_0ではbase_maskを公開APIとcanに出さない(t *testing.T) {
 	f := newFixture(t)
 	_, body := f.do(t, "POST", "/v1/bases", map[string]any{"name": "dev", "runtime": "mysql@8.4.13"})
 	f.waitOp(t, body["id"].(string))
-	resp, body := f.do(t, "POST", "/v1/bases/dev/mask", map[string]any{"source": "prod", "masker": "greenmask", "rules": "x: y"})
-	if resp.StatusCode != 202 {
-		t.Fatalf("mask: %d %v", resp.StatusCode, body)
+	if resp, _ := f.do(t, "POST", "/v1/bases/dev/mask", map[string]any{"source": "prod", "masker": "greenmask"}); resp.StatusCode != 404 && resp.StatusCode != 405 {
+		t.Errorf("POST /v1/bases/dev/mask status = %d, want 404 or 405", resp.StatusCode)
 	}
-	f.waitOp(t, body["id"].(string))
-	if got := f.branches.lastMask; got.Source.String() != "prod" || got.Target.String() != "dev" || got.Masker != "greenmask" || got.Rules != "x: y" || got.By == "" {
-		t.Errorf("request %+v", got)
-	}
-	for _, bad := range []map[string]any{{"masker": "greenmask"}, {"source": "Bad", "masker": "m"}, {"source": "prod"}} {
-		if resp, _ := f.do(t, "POST", "/v1/bases/dev/mask", bad); resp.StatusCode != 400 {
-			t.Errorf("%v: %d", bad, resp.StatusCode)
+	_, got := f.do(t, "GET", "/v1/bases/dev", nil)
+	if can, ok := got["can"].(map[string]any); ok {
+		if _, has := can["base.mask"]; has {
+			t.Errorf("base.can must not expose base.mask in 1.0: %v", can)
 		}
-	}
-	if resp, _ := f.do(t, "POST", "/v1/bases/dev/mask", "nope"); resp.StatusCode != 400 {
-		t.Errorf("bad body: %d", resp.StatusCode)
 	}
 }
 

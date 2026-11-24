@@ -220,7 +220,16 @@ func (s *Server) Handler(local bool) http.Handler {
 	s.routes(mux, local)
 	var api http.Handler = mux
 	if local {
-		api = s.localPrincipal(mux)
+		api = s.localPrincipal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Cluster peers forward StartMaskOn here after refresh even though
+			// POST /v1/bases/{name}/mask is hidden from 1.0 API/CLI/local callers.
+			if target, ok := internalMaskTarget(r); ok {
+				r.SetPathValue("name", target)
+				s.guard("base.mask", s.named(s.maskBase)).ServeHTTP(w, r)
+				return
+			}
+			mux.ServeHTTP(w, r)
+		}))
 	} else {
 		api = s.requireSession(mux)
 	}
@@ -271,21 +280,26 @@ type router interface {
 // routes registers every handler under an action name: each call is
 // authorized (Authorizer) and, if it changes something, audited (AuditSink).
 func (s *Server) routes(mux router, local bool) {
-	r := func(pattern, action string, h http.HandlerFunc) { mux.HandleFunc(pattern, s.guard(action, h)) }
+	r := func(pattern, action string, h http.HandlerFunc) {
+		if rec, ok := mux.(interface{ recordAction(string, string) }); ok {
+			rec.recordAction(pattern, action)
+		}
+		mux.HandleFunc(pattern, s.guard(action, h))
+	}
 	r("GET /v1/branches", "branch.read", s.withService(s.listBranches))
 	r("POST /v1/branches", "branch.create", s.withService(s.createBranch))
 	r("GET /v1/branches/{name}", "branch.read", s.named(s.getBranch))
 	r("PATCH /v1/branches/{name}", "branch.extend", s.named(s.patchBranch))
 	r("DELETE /v1/branches/{name}", "branch.delete", s.named(s.deleteBranch))
 	r("POST /v1/branches/{name}/reset", "branch.reset", s.named(s.resetBranch))
-	r("POST /v1/branches/{name}/pause", "branch.update", s.named(s.pauseBranch))
-	r("POST /v1/branches/{name}/resume", "branch.update", s.named(s.resumeBranch))
+	r("POST /v1/branches/{name}/pause", "branch.pause", s.named(s.pauseBranch))
+	r("POST /v1/branches/{name}/resume", "branch.resume", s.named(s.resumeBranch))
 	r("POST /v1/branches/{name}/fork", "branch.fork", s.named(s.forkBranch))
 	r("POST /v1/branches/{name}/recreate", "branch.recreate", s.named(s.recreateBranch))
 	r("GET /v1/branches/{name}/checkpoints", "branch.checkpoint.read", s.named(s.listCheckpoints))
 	r("POST /v1/branches/{name}/checkpoints", "branch.checkpoint", s.named(s.createCheckpoint))
 	r("POST /v1/branches/{name}/checkpoints/{checkpoint}/restore", "branch.restore", s.named(s.restoreCheckpoint))
-	r("DELETE /v1/branches/{name}/checkpoints/{checkpoint}", "branch.checkpoint_delete", s.named(s.deleteCheckpoint))
+	r("DELETE /v1/branches/{name}/checkpoints/{checkpoint}", "branch.checkpoint.delete", s.named(s.deleteCheckpoint))
 	r("POST /v1/branches/{name}/upgrade", "branch.upgrade", s.named(s.upgradeBranch))
 	r("POST /v1/branches/{name}/merge", "branch.merge", s.named(s.mergeBranch))
 	r("GET /v1/branches/{name}/dsn", "branch.connect", s.named(s.branchDSN))
@@ -300,7 +314,8 @@ func (s *Server) routes(mux router, local bool) {
 	r("PATCH /v1/bases/{name}/anonymous", "base.publish", s.named(s.patchAnonymous))
 	r("DELETE /v1/bases/{name}", "base.delete", s.named(s.deleteBase))
 	r("POST /v1/bases/{name}/snapshots", "base.snapshot", s.named(s.snapshotBase))
-	r("POST /v1/bases/{name}/mask", "base.mask", s.named(s.maskBase))
+	// base mask is hidden from the 1.0 API surface (DECISIONS.md 8-c); maskBase
+	// stays in bases.go and is still reachable by cluster-forwarded StartMaskOn.
 	r("POST /v1/bases/{name}/start", "base.start", s.named(s.startBase))
 	r("POST /v1/bases/{name}/stop", "base.stop", s.named(s.stopBase))
 	r("POST /v1/bases/{name}/sql", "base.sql", s.named(s.baseSQL))
@@ -312,7 +327,7 @@ func (s *Server) routes(mux router, local bool) {
 	r("POST /v1/uploads", "base.upload", s.upload)
 	r("GET /v1/uploads/room", "base.upload", s.uploadRoom)
 	r("PATCH /v1/bases/{name}/snapshots/{snapshot}", "base.publish", s.named(s.patchSnapshot))
-	r("DELETE /v1/bases/{name}/snapshots/{snapshot}", "base.snapshot_delete", s.named(s.deleteSnapshot))
+	r("DELETE /v1/bases/{name}/snapshots/{snapshot}", "base.snapshot.delete", s.named(s.deleteSnapshot))
 
 	r("GET /v1/route-users", "route-user.read", s.listRouteUsers)
 	r("PUT /v1/route-users/{name}", "route-user.write", s.putRouteUser)
@@ -523,7 +538,7 @@ func fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "in_use", err.Error())
 	case errors.Is(err, domain.ErrUncleanShutdown):
 		writeError(w, http.StatusConflict, "unclean_shutdown", err.Error())
-	case errors.Is(err, domain.ErrFeatureNotSupported):
+	case errors.Is(err, domain.ErrFeatureNotSupported), errors.Is(err, domain.ErrUnsupportedEngine):
 		writeError(w, http.StatusConflict, "feature_not_supported", err.Error())
 	case errors.Is(err, dbbranch.ErrOtherNode):
 		writeError(w, http.StatusConflict, "other_node", err.Error())
@@ -631,4 +646,19 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 		out["warnings"] = s.RuntimeWarnings
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func internalMaskTarget(r *http.Request) (string, bool) {
+	if !forwardedFromNode(r) || r.Method != http.MethodPost {
+		return "", false
+	}
+	rest, ok := strings.CutPrefix(r.URL.Path, "/v1/bases/")
+	if !ok {
+		return "", false
+	}
+	target, ok := strings.CutSuffix(rest, "/mask")
+	if !ok || target == "" || strings.Contains(target, "/") {
+		return "", false
+	}
+	return target, true
 }

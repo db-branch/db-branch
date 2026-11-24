@@ -73,10 +73,22 @@ func (a *App) printJSON(v any) error {
 // named runs f with a validated name argument and a client. "owner/name",
 // as lists show branches, means name.
 func (a *App) named(f func(cmd *cobra.Command, c Client, n domain.Name) error) func(*cobra.Command, []string) error {
+	return a.parseNamed(true, f)
+}
+
+// exactNamed runs f with a validated name argument without stripping an
+// "owner/" prefix, for resources such as bases that have no owner namespace.
+func (a *App) exactNamed(f func(cmd *cobra.Command, c Client, n domain.Name) error) func(*cobra.Command, []string) error {
+	return a.parseNamed(false, f)
+}
+
+func (a *App) parseNamed(stripOwner bool, f func(cmd *cobra.Command, c Client, n domain.Name) error) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		arg := args[0]
-		if i := strings.LastIndex(arg, "/"); i >= 0 {
-			arg = arg[i+1:]
+		if stripOwner {
+			if i := strings.LastIndex(arg, "/"); i >= 0 {
+				arg = arg[i+1:]
+			}
 		}
 		n, err := domain.ParseName(arg)
 		if err != nil {
@@ -364,9 +376,12 @@ func (a *App) createUpgraded(cmd *cobra.Command, c Client, n domain.Name, body m
 	if err != nil || noWait {
 		return err
 	}
-	a.reportUpgrade(n.String(), op)
 	if op.State == "failed" {
+		a.reportUpgrade(n.String(), op)
 		return fmt.Errorf("%s failed: %s", op.Kind, op.Error)
+	}
+	if a.output != "json" {
+		a.reportUpgrade(n.String(), op)
 	}
 	return a.showBranch(cmd, c, n)
 }

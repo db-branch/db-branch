@@ -58,9 +58,13 @@ func TestMetrics_Prometheus形式でクラスタの状態を出す(t *testing.T)
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	c.err = errors.New("no leader")
-	if code, _ := scrape(t, f); code != 503 {
-		t.Errorf("cluster status failing: %d", code)
+	c.err = domain.ErrNoLeader
+	if code, out := scrape(t, f); code != 503 || !strings.Contains(out, `"no_leader"`) {
+		t.Errorf("no leader: %d %s", code, out)
+	}
+	c.err = errors.New("open /var/lib/db-branch/raft.db: permission denied")
+	if code, out := scrape(t, f); code != 500 || !strings.Contains(out, `"internal"`) || strings.Contains(out, "/var/lib/db-branch") {
+		t.Errorf("internal error: %d %s", code, out)
 	}
 }
 

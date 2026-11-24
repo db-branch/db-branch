@@ -44,7 +44,7 @@ func (a *App) baseReplicasCommand() *cobra.Command {
 		Use:   "replicas <base> all|origin|node1,node2",
 		Short: "Choose which nodes keep a copy of the base (the origin node always does)",
 		Args:  cobra.ExactArgs(2),
-		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+		RunE: a.exactNamed(func(cmd *cobra.Command, c Client, n domain.Name) error {
 			nodes, err := parseReplicas(cmd.Flags().Arg(1))
 			if err != nil {
 				return err

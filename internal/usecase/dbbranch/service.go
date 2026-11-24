@@ -301,6 +301,35 @@ func (s *Service) allocatePorts(ctx context.Context, count int) ([]int, error) {
 	return out, nil
 }
 
+// reservePorts allocates count free ports and holds them in s.reservedPorts
+// until the returned release function is called (safe to call multiple times).
+func (s *Service) reservePorts(ctx context.Context, count int) ([]int, func(), error) {
+	s.mu.Lock()
+	ports, err := s.allocatePorts(ctx, count)
+	if err == nil {
+		if s.reservedPorts == nil {
+			s.reservedPorts = map[int]bool{}
+		}
+		for _, p := range ports {
+			s.reservedPorts[p] = true
+		}
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return nil, func() {}, err
+	}
+	var once sync.Once
+	return ports, func() {
+		once.Do(func() {
+			s.mu.Lock()
+			for _, p := range ports {
+				delete(s.reservedPorts, p)
+			}
+			s.mu.Unlock()
+		})
+	}, nil
+}
+
 func (s *Service) snapshotName() string { return "s" + s.Clock().UTC().Format("20060102150405") }
 
 // DatasetProperties apply to <pool>/db-branch and are inherited by every base and branch.

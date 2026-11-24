@@ -199,3 +199,42 @@ func TestBranchCheckpoints_チェックポイントのランタイムを表示�
 		t.Errorf("table:\n%s", out)
 	}
 }
+
+func TestCLI_BranchCreateUpgraded_JSON出力が単一の有効JSONになりBaseCreateはスラッシュ入り不正名を拒否する(t *testing.T) {
+	api := newFakeAPI()
+	api.answers["POST /v1/branches"] = accepted("op_9", "branch.create")
+	api.opStates = []map[string]any{upgradeOp("succeeded", "upgraded", nil)}
+	api.answers["GET /v1/branches/x"] = map[string]any{
+		"name": "x", "status": "ready", "runtime": "mysql@8.4.13", "base_runtime": "mysql@8.0.46",
+		"connection": map[string]any{"host": "h", "port": 40001, "user": "x"},
+	}
+	code, out, errOut := runAPI(t, api, "-o", "json", "branch", "create", "x", "--base", "prod", "--runtime", "mysql@8.4.13")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("expected single valid JSON, got error %v:\n%s", err, out)
+	}
+	if got["name"] != "x" || got["runtime"] != "mysql@8.4.13" {
+		t.Errorf("unexpected JSON: %v", got)
+	}
+
+	// Base commands must reject slash-containing invalid names instead of stripping an owner prefix.
+	api2 := newFakeAPI()
+	for _, args := range [][]string{
+		{"base", "create", "bad/name", "--runtime", "mysql@8.4.13"},
+		{"base", "show", "bad/name"},
+		{"base", "delete", "bad/name"},
+		{"base", "replicas", "bad/name", "all"},
+		{"base", "refresh", "show", "bad/name"},
+		{"base", "anonymous", "bad/name"},
+	} {
+		if code, _, _ := runAPI(t, api2, args...); code == 0 {
+			t.Errorf("%v: expected non-zero exit for slash name", args)
+		}
+	}
+	if len(api2.requests) != 0 {
+		t.Errorf("slash name should be rejected client-side without API calls: %v", api2.requests)
+	}
+}

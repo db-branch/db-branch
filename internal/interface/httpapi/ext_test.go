@@ -147,6 +147,9 @@ func TestExt_公開パスはログインなしで届きリダイレクトとモ�
 	if resp.StatusCode != 200 || m["label"] != "Sign in with SSO" || m["url"] != "/v1/ext/auth/sso/start" {
 		t.Errorf("methods: %d %v", resp.StatusCode, body)
 	}
+	if v, ok := body["next_cursor"]; !ok || v != nil {
+		t.Errorf("auth/methods next_cursor = %v (present=%v), want null", v, ok)
+	}
 }
 
 // badHeaders tries to set what a module must not.

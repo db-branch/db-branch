@@ -689,6 +689,9 @@ func TestHTTPAPI_branchesスコープトークンでpublicBasesを取得でき�
 	if len(items) != 1 || items[0].(map[string]any)["name"] != "prod" {
 		t.Errorf("items = %v", items)
 	}
+	if v, ok := body["next_cursor"]; !ok || v != nil {
+		t.Errorf("public/bases next_cursor = %v (present=%v), want null", v, ok)
+	}
 }
 
 func TestOwnership_branchReadは自分とopenとSharesBranchesのブランチだけ閲覧および一覧できる(t *testing.T) {

@@ -1,8 +1,12 @@
 package httpapi
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -24,7 +28,8 @@ var httpMethods = []string{"get", "put", "post", "delete", "options", "head", "p
 
 type openAPIDoc struct {
 	Info struct {
-		Version string `yaml:"version"`
+		Version     string `yaml:"version"`
+		Description string `yaml:"description"`
 	} `yaml:"info"`
 	Tags []struct {
 		Name        string `yaml:"name"`
@@ -35,6 +40,7 @@ type openAPIDoc struct {
 			Name string `yaml:"name"`
 			In   string `yaml:"in"`
 		} `yaml:"parameters"`
+		Schemas map[string]yaml.Node `yaml:"schemas"`
 	} `yaml:"components"`
 	Paths map[string]map[string]yaml.Node `yaml:"paths"`
 }
@@ -42,7 +48,9 @@ type openAPIDoc struct {
 type openAPIOperation struct {
 	OperationID string                    `yaml:"operationId"`
 	Summary     string                    `yaml:"summary"`
+	Description string                    `yaml:"description"`
 	Tags        []string                  `yaml:"tags"`
+	Action      string                    `yaml:"x-dbb-action"`
 	Responses   map[string]map[string]any `yaml:"responses"`
 	Parameters  []map[string]any          `yaml:"parameters"`
 }
@@ -87,8 +95,13 @@ func specOperations(t *testing.T, doc openAPIDoc) map[string]openAPIOperation {
 // patterns routes registers with the mux, and the few paths answered before
 // the mux (outerPatterns). Module APIs are left out.
 func serverRoutes(t *testing.T) map[string]bool {
+	routes, _ := serverRoutesAndActions(t)
+	return routes
+}
+
+func serverRoutesAndActions(t *testing.T) (map[string]bool, map[string]string) {
 	t.Helper()
-	rec := &patternRecorder{}
+	rec := &patternRecorder{actions: map[string]string{}}
 	(&Server{}).routes(rec, false)
 	routes := map[string]bool{}
 	for _, p := range append(rec.patterns, outerPatterns...) {
@@ -104,11 +117,14 @@ func serverRoutes(t *testing.T) map[string]bool {
 		}
 		routes[method+" "+path] = true
 	}
-	return routes
+	return routes, rec.actions
 }
 
-// patternRecorder is a router that only remembers the patterns it is given.
-type patternRecorder struct{ patterns []string }
+// patternRecorder is a router that only remembers the patterns and actions it is given.
+type patternRecorder struct {
+	patterns []string
+	actions  map[string]string
+}
 
 func (r *patternRecorder) Handle(pattern string, _ http.Handler) {
 	r.patterns = append(r.patterns, pattern)
@@ -116,6 +132,10 @@ func (r *patternRecorder) Handle(pattern string, _ http.Handler) {
 
 func (r *patternRecorder) HandleFunc(pattern string, _ func(http.ResponseWriter, *http.Request)) {
 	r.patterns = append(r.patterns, pattern)
+}
+
+func (r *patternRecorder) recordAction(pattern, action string) {
+	r.actions[pattern] = action
 }
 
 func keys[V any](m map[string]V) []string {
@@ -285,4 +305,137 @@ func TestOpenAPI_版は下書きではない(t *testing.T) {
 	if doc.Info.Version == "" || strings.Contains(doc.Info.Version, "draft") {
 		t.Errorf("info.version = %q: set the release the description is for", doc.Info.Version)
 	}
+}
+
+func TestOpenAPI_全ルートとアクション名とエラーコードがサーバー実装と一致しEngineとOperationKindが拡張可能である(t *testing.T) {
+	doc, _ := readOpenAPI(t)
+	if doc.Info.Version != "1.0.0" {
+		t.Errorf("info.version = %q, want 1.0.0", doc.Info.Version)
+	}
+	raw, err := os.ReadFile(openAPIFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "db-branch group") {
+		t.Error("openapi.yaml still refers to db-branch group instead of db-branch-admin")
+	}
+	if regexp.MustCompile(`(?i)licence`).Match(raw) {
+		t.Error("openapi.yaml still contains British spelling 'licence'")
+	}
+
+	// 1. All routes' x-dbb-action must match server.go routes(...).
+	_, actions := serverRoutesAndActions(t)
+	ops := specOperations(t, doc)
+	for _, route := range keys(ops) {
+		wantAction := actions[route]
+		if ops[route].Action != wantAction {
+			t.Errorf("%s: x-dbb-action = %q, server has %q", route, ops[route].Action, wantAction)
+		}
+	}
+
+	// 2. Every writeError code in httpapi/*.go must be documented in openapi.yaml # Errors.
+	fset := token.NewFileSet()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, e.Name(), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) < 3 {
+				return true
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok || id.Name != "writeError" {
+				return true
+			}
+			lit, ok := call.Args[2].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			code, _ := strconv.Unquote(lit.Value)
+			if !strings.Contains(doc.Info.Description, "`"+code+"`") {
+				t.Errorf("%s: error code %q is not documented in openapi.yaml info.description", e.Name(), code)
+			}
+			return true
+		})
+	}
+
+	// 3. Engine, RuntimeRef, and Operation.kind must be extensible (no fixed enum).
+	var engSchema struct {
+		Type    string   `yaml:"type"`
+		Enum    []string `yaml:"enum"`
+		Pattern string   `yaml:"pattern"`
+	}
+	engNode := doc.Components.Schemas["Engine"]
+	if err := engNode.Decode(&engSchema); err != nil {
+		t.Fatal(err)
+	}
+	if len(engSchema.Enum) > 0 {
+		t.Errorf("Engine schema must not have fixed enum %v", engSchema.Enum)
+	}
+	if engSchema.Pattern == "" || !regexp.MustCompile(engSchema.Pattern).MatchString("clickhouse") {
+		t.Errorf("Engine pattern %q should accept external engines such as clickhouse", engSchema.Pattern)
+	}
+
+	var rtSchema struct {
+		Pattern string `yaml:"pattern"`
+	}
+	rtNode := doc.Components.Schemas["RuntimeRef"]
+	if err := rtNode.Decode(&rtSchema); err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(rtSchema.Pattern).MatchString("clickhouse@26.3.19.3") {
+		t.Errorf("RuntimeRef pattern %q must accept external engine runtimes", rtSchema.Pattern)
+	}
+
+	var opSchema struct {
+		Properties map[string]struct {
+			Type string   `yaml:"type"`
+			Enum []string `yaml:"enum"`
+		} `yaml:"properties"`
+	}
+	opNode := doc.Components.Schemas["Operation"]
+	if err := opNode.Decode(&opSchema); err != nil {
+		t.Fatal(err)
+	}
+	if kind := opSchema.Properties["kind"]; len(kind.Enum) > 0 {
+		t.Errorf("Operation.kind must not have fixed enum %v", kind.Enum)
+	}
+
+	// 4. All list schemas must include next_cursor.
+	for name, node := range doc.Components.Schemas {
+		if !strings.HasSuffix(name, "List") && name != "LoginMethods" {
+			continue
+		}
+		var listSchema struct {
+			Properties map[string]any `yaml:"properties"`
+			Required   []string       `yaml:"required"`
+		}
+		if err := node.Decode(&listSchema); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := listSchema.Properties["next_cursor"]; !ok || !slices.Contains(listSchema.Required, "next_cursor") {
+			t.Errorf("schema %s must include required next_cursor", name)
+		}
+	}
+
+	// 5. Auth doc accuracy: GET /v1/auth/session is session-only, POST /v1/mcp mentions fork_branch & merge_line.
+	if strings.Contains(ops["GET /v1/auth/session"].Description, "the local socket, or a `full` token") {
+		t.Error("GET /v1/auth/session description falsely says local socket or full token works")
+	}
+	mcpDesc := ops["POST /v1/mcp"].Description
+	for _, tool := range []string{"fork_branch", "merge_line"} {
+		if !strings.Contains(mcpDesc, tool) {
+			t.Errorf("POST /v1/mcp description missing tool %s", tool)
+		}
+	}
+	_ = filepath.Base
 }

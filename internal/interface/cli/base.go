@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -41,7 +40,7 @@ func (a *App) baseCommand() *cobra.Command {
 		Use:   "create <name> --runtime <engine@version> [--dump file.sql.gz]",
 		Short: "Create a base from a SQL dump and take its first snapshot",
 		Args:  cobra.ExactArgs(1),
-		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+		RunE: a.exactNamed(func(cmd *cobra.Command, c Client, n domain.Name) error {
 			body := map[string]any{"name": n.String(), "runtime": runtime, "dump": dump}
 			if node != "" {
 				body["node"] = node
@@ -65,35 +64,11 @@ func (a *App) baseCommand() *cobra.Command {
 		Use:   "snapshot <name>",
 		Short: "Stop the base server cleanly and take a new snapshot",
 		Args:  cobra.ExactArgs(1),
-		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+		RunE: a.exactNamed(func(cmd *cobra.Command, c Client, n domain.Name) error {
 			return a.start(cmd.Context(), c, "POST", "/v1/bases/"+n.String()+"/snapshots", nil, noWait)
 		}),
 	}
-	var from, fromSnap, masker, rulesFile string
-	mask := &cobra.Command{
-		Use:   "mask <target> --from <base> --masker <module> [--rules file]",
-		Short: "Write a masked copy of another base into this (empty) base with a masker module, and snapshot it",
-		Args:  cobra.ExactArgs(1),
-		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
-			if from == "" || masker == "" {
-				return fmt.Errorf("--from and --masker are required")
-			}
-			body := map[string]any{"source": from, "snapshot": fromSnap, "masker": masker}
-			if rulesFile != "" {
-				b, err := os.ReadFile(rulesFile)
-				if err != nil {
-					return err
-				}
-				body["rules"] = string(b)
-			}
-			return a.start(cmd.Context(), c, "POST", "/v1/bases/"+n.String()+"/mask", body, noWait)
-		}),
-	}
-	mask.Flags().StringVar(&from, "from", "", "base to mask (its latest snapshot unless --snapshot)")
-	mask.Flags().StringVar(&fromSnap, "snapshot", "", "snapshot of --from to mask")
-	mask.Flags().StringVar(&masker, "masker", "", "masker module, e.g. greenmask")
-	mask.Flags().StringVar(&rulesFile, "rules", "", "the masker's rules file")
-	for _, c := range []*cobra.Command{create, snapshot, mask} {
+	for _, c := range []*cobra.Command{create, snapshot} {
 		c.Flags().BoolVar(&noWait, "no-wait", false, "print the operation ID and return immediately")
 	}
 
@@ -123,7 +98,7 @@ func (a *App) baseCommand() *cobra.Command {
 	}
 	show := &cobra.Command{
 		Use: "show <name>", Short: "Show a base and its snapshots", Args: cobra.ExactArgs(1),
-		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+		RunE: a.exactNamed(func(cmd *cobra.Command, c Client, n domain.Name) error {
 			var b baseView
 			if err := c.Do(cmd.Context(), "GET", "/v1/bases/"+n.String(), nil, &b); err != nil {
 				return err
@@ -156,12 +131,13 @@ func (a *App) baseCommand() *cobra.Command {
 	simple := func(use, short, method, suffix string) *cobra.Command {
 		return &cobra.Command{
 			Use: use + " <name>", Short: short, Args: cobra.ExactArgs(1),
-			RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+			RunE: a.exactNamed(func(cmd *cobra.Command, c Client, n domain.Name) error {
 				return c.Do(cmd.Context(), method, "/v1/bases/"+n.String()+suffix, nil, nil)
 			}),
 		}
 	}
-	cmd.AddCommand(create, snapshot, mask, list, show,
+	// base mask is hidden from the 1.0 CLI surface (DECISIONS.md 8-c).
+	cmd.AddCommand(create, snapshot, list, show,
 		simple("start", "Start the base server (to load more data before the next snapshot)", "POST", "/start"),
 		simple("stop", "Stop the base server cleanly", "POST", "/stop"),
 		simple("delete", "Delete a base no branch uses", "DELETE", ""),
