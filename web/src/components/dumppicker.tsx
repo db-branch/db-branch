@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { api, uploadDump } from "../api";
 import { Field } from "./ui";
+import { LocalizedError } from "../lib/errors";
 import { bytes } from "../lib/format";
 import { t } from "../lib/i18n";
 
@@ -62,7 +63,10 @@ export function DumpPicker({ value, onChange, allowNone, node }: { value: DumpSo
           </button>
           {room && file.size > room.max && (
             <p className="reason">
-              Too large: this node accepts at most {bytes(room.max)} now ({room.reason === "pool" ? "free space in the ZFS pool" : "upload limit or free disk; see Settings"}).
+              {t("Too large: this node accepts at most {max} now ({reason}).", {
+                max: bytes(room.max),
+                reason: room.reason === "pool" ? t("free space in the ZFS pool") : t("upload limit or free disk; see Settings"),
+              })}
             </p>
           )}
           {!/\.sql(\.gz)?$/i.test(file.name) && <p className="reason">{t("Choose a .sql or .sql.gz file.")}</p>}
@@ -92,9 +96,9 @@ export function useDumpSender() {
   const send = async (v: DumpSource, node?: string): Promise<string | undefined> => {
     if (v.kind === "none") return undefined;
     if (v.kind === "path") return v.path.trim();
-    if (!v.file) throw new Error("Choose a dump file.");
+    if (!v.file) throw new LocalizedError(t("Choose a dump file."));
     const room = await api.uploadRoom(node);
-    if (v.file.size > room.max_bytes) throw new Error(`The file is ${bytes(v.file.size)}; the node accepts at most ${bytes(room.max_bytes)} now.`);
+    if (v.file.size > room.max_bytes) throw new LocalizedError(t("The file is {size}; the node accepts at most {max} now.", { size: bytes(v.file.size), max: bytes(room.max_bytes) }));
     abort.current = new AbortController();
     setProgress(0);
     try {

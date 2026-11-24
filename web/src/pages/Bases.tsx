@@ -1,7 +1,7 @@
 import { FormEvent, useContext, useState } from "react";
 import { api, Base, Branch, can, canBase } from "../api";
 import { Engine, Icon, Status } from "../components/marks";
-import { Dialog, Drawer, Empty, ErrorLine, Field, Info } from "../components/ui";
+import { Dialog, Drawer, Empty, ErrorLine, ErrorText, Field, Info } from "../components/ui";
 import { skippedReasons } from "../lib/bases";
 import { FilterBar } from "../components/filterbar";
 import { engineOf, filterBases, optionsOf } from "../lib/filter";
@@ -9,6 +9,7 @@ import { useFilter } from "../lib/usefilter";
 import { GoContext } from "../lib/gocontext";
 import { ADMIN } from "../lib/nav";
 import { relative } from "../lib/format";
+import { LocalizedError, serverError } from "../lib/errors";
 import { useLive, useNow } from "../lib/live";
 import { t } from "../lib/i18n";
 import { RefreshCard } from "./BaseRefresh";
@@ -90,7 +91,7 @@ function BaseLine({ base, branches, nodes, href, onOpen }: { base: Base; branche
           </span>
         )}
         {base.operation && <span className="badge">{base.operation.kind.replace("base.", "")}…</span>}
-        {base.status_reason && <span className="reason">{base.status_reason}</span>}
+        {base.status_reason && <span className="reason"><ErrorText error={serverError(base.status_reason)} /></span>}
         <span className="spacer" />
         <span className="muted open-hint">{t("Details ›")}</span>
       </header>
@@ -131,7 +132,7 @@ function BaseLine({ base, branches, nodes, href, onOpen }: { base: Base; branche
 function Holders({ nodes, holders, skipped = {} }: { nodes: string[]; holders: string[]; skipped?: Record<string, string> }) {
   const held = new Set(holders);
   const off = nodes.filter((n) => !held.has(n) && n in skipped);
-  const title = `On ${nodes.filter((n) => held.has(n)).join(", ")}` + off.map((n) => `\n${n}: skipped (${skipped[n]})`).join("");
+  const title = t("On {nodes}", { nodes: nodes.filter((n) => held.has(n)).join(", ") }) + off.map((n) => `\n${t("{node}: skipped ({reason})", { node: n, reason: skipped[n] })}`).join("");
   return (
     <span className="holders" title={title}>
       {nodes.map((n) => (
@@ -164,9 +165,9 @@ export function BaseBody({
   onUpdate: () => void;
   onDelete: () => void;
 }) {
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
-  const run = (p: Promise<unknown>) => p.then(() => setError(null), (e: Error) => setError(e.message));
+  const run = (p: Promise<unknown>) => p.then(() => setError(null), (e: unknown) => setError(e));
   const ready = base.status === "ready" && !base.operation;
   const clustered = nodes.length > 1;
   const count = (snap: string) => branches.filter((b) => b.snapshot === snap).length;
@@ -179,9 +180,9 @@ export function BaseBody({
           <span>{base.operation ? `${base.operation.kind.replace("base.", "")}…` : base.status}</span>
           <Engine runtime={base.runtime} />
           {clustered && <span className="mono muted">{base.node}</span>}
-          <span className="muted">created {relative(base.created_at)}</span>
+          <span className="muted">{t("created {when}", { when: relative(base.created_at) })}</span>
         </div>
-        {base.status_reason && <p className="reason">{base.status_reason}</p>}
+        {base.status_reason && <p className="reason"><ErrorText error={serverError(base.status_reason)} /></p>}
 
         <div className="detail-actions">
           {(canBase(base, "base.load") || canBase(base, "base.sql")) && (
@@ -305,14 +306,14 @@ export function BaseBody({
 function Description({ base }: { base: Base }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(base.description);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const save = async () => {
     try {
       await api.describeBase(base.name, text);
       setEditing(false);
       setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      setError(e);
     }
   };
   if (!editing) {
@@ -359,7 +360,7 @@ function CreateBase({ onClose }: { onClose: () => void }) {
   const target = node || caps?.node || "";
   // Engines installed on the node that will hold the base.
   const runtimes = cluster?.nodes.find((n) => n.name === target)?.runtimes.map((runtime) => ({ runtime })) ?? cluster?.nodes[0]?.runtimes.map((runtime) => ({ runtime }));
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const chosen = runtimes?.some((r) => r.runtime === runtime) ? runtime : (runtimes?.[0]?.runtime ?? "");
   const sender = useDumpSender();
@@ -372,7 +373,7 @@ function CreateBase({ onClose }: { onClose: () => void }) {
       await api.createBase({ name, runtime: chosen, dump: ref, node: node || undefined, description: description.trim() || undefined });
       onClose();
     } catch (err) {
-      setError((err as Error).message);
+      setError(err);
       setBusy(false);
     }
   };
@@ -426,7 +427,7 @@ export function UpdateData({ base, onClose }: { base: Base; onClose: () => void 
   const [sql, setSql] = useState("");
   const [dump, setDump] = useState<DumpSource>({ kind: "file", file: null });
   const [snapshot, setSnapshot] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const sender = useDumpSender();
 
@@ -439,18 +440,18 @@ export function UpdateData({ base, onClose }: { base: Base; onClose: () => void 
         if (snapshot) await api.snapshotBase(base.name);
       } else {
         const ref = await sender.send(dump, base.node);
-        if (!ref) throw new Error("Choose a dump file or a path.");
+        if (!ref) throw new LocalizedError(t("Choose a dump file or a path."));
         await api.loadBase(base.name, ref, snapshot);
       }
       onClose();
     } catch (err) {
-      setError((err as Error).message);
+      setError(err);
       setBusy(false);
     }
   };
   const ok = mode === "sql" ? sql.trim() !== "" : dumpProblem(dump, null) === null;
   return (
-    <Drawer title={`Update ${base.name}`} onClose={onClose}>
+    <Drawer title={t("Update {name}", { name: base.name })} onClose={onClose}>
       <form className="form" onSubmit={submit}>
         <div className="segmented" role="radiogroup" aria-label={t("How to update")}>
           <button type="button" role="radio" aria-checked={mode === "dump"} className={mode === "dump" ? "on" : ""} onClick={() => setMode("dump")}>
@@ -471,7 +472,7 @@ export function UpdateData({ base, onClose }: { base: Base; onClose: () => void 
           </Field>
         )}
         <label className="check">
-          <input type="checkbox" checked={snapshot} onChange={(e) => setSnapshot(e.target.checked)} /> Take a snapshot afterwards (new branches use it)
+          <input type="checkbox" checked={snapshot} onChange={(e) => setSnapshot(e.target.checked)} /> {t("Take a snapshot afterwards (new branches use it)")}
         </label>
         <p className="muted small">{t("Existing branches are not affected.")}</p>
         {sender.progress !== null && <Progress value={sender.progress} onCancel={sender.cancel} />}
@@ -490,22 +491,22 @@ export function UpdateData({ base, onClose }: { base: Base; onClose: () => void 
 // snapshot. A base with branches cannot be deleted.
 export function DeleteBase({ base, branches, onClose, onDeleted }: { base: Base; branches: number; onClose: () => void; onDeleted: () => void }) {
   const [typed, setTyped] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const del = () => {
     setBusy(true);
-    api.deleteBase(base.name).then(onDeleted, (e: Error) => {
-      setError(e.message);
+    api.deleteBase(base.name).then(onDeleted, (e: unknown) => {
+      setError(e);
       setBusy(false);
     });
   };
   return (
-    <Dialog title={`Delete base ${base.name}?`} onClose={onClose}>
+    <Dialog title={t("Delete base {name}?", { name: base.name })} onClose={onClose}>
       {branches > 0 ? (
-        <p className="muted">{branches} branch(es) still use this base. Delete them first.</p>
+        <p className="muted">{t("{count} branch(es) still use this base. Delete them first.", { count: branches })}</p>
       ) : (
         <>
-          <p>Are you sure? The base server, its data and all {base.snapshots.length} snapshot(s) are deleted on every node. This cannot be undone.</p>
+          <p>{t("Are you sure? The base server, its data and all {count} snapshot(s) are deleted on every node. This cannot be undone.", { count: base.snapshots.length })}</p>
           <Field label={t("Type the base name to confirm")}>
             <input className="mono" value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus placeholder={base.name} />
           </Field>

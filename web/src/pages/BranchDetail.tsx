@@ -25,11 +25,11 @@ export function BranchDetail({ name }: { name: string }) {
   const { data: cluster } = useLive(api.cluster, ["node"]);
   const [deleting, setDeleting] = useState(false);
   const [forking, setForking] = useState<{ checkpoint?: string } | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<unknown>(null);
   const caps = useCapabilities();
   useNow();
   const back = () => go(`${ADMIN}/branches`);
-  const run = (p: Promise<unknown>) => p.then(() => setActionError(null), (e: Error) => setActionError(e.message));
+  const run = (p: Promise<unknown>) => p.then(() => setActionError(null), (e: unknown) => setActionError(e));
   const b = branches?.find((x) => x.name === name);
   if (!branches) return <section className="page"><ErrorLine error={error} /></section>;
   if (!b) {

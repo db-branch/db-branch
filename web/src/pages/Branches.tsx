@@ -1,7 +1,8 @@
 import { FormEvent, useContext, useState } from "react";
 import { api, Base, Branch, can, isAdmin, ownerLabel } from "../api";
 import { Icon, Status } from "../components/marks";
-import { Dialog, Drawer, Empty, ErrorLine, Field } from "../components/ui";
+import { Dialog, Drawer, Empty, ErrorLine, ErrorText, Field } from "../components/ui";
+import { serverError } from "../lib/errors";
 import { relative } from "../lib/format";
 import { useLive, useNow } from "../lib/live";
 import { t } from "../lib/i18n";
@@ -79,7 +80,7 @@ export function Branches() {
                       </span>
                     )}
                     <RecordingBadge record={b.record} />
-                    {b.status_reason && <span className="reason">{b.status_reason}</span>}
+                    {b.status_reason && <span className="reason"><ErrorText error={serverError(b.status_reason)} /></span>}
                   </td>
                   <td>
                     <span className="mono muted" title={`snapshot ${b.snapshot}`}>
@@ -130,7 +131,7 @@ function CreateBranch({ bases, onClose }: { bases: Base[]; onClose: () => void }
   const [showSql, setShowSql] = useState(false);
   const [owner, setOwner] = useState("");
   const [access, setAccess] = useState<"private" | "open">("private");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const snap = bases.find((b) => b.name === base)?.latest_snapshot;
   const admin = isAdmin();
@@ -142,7 +143,7 @@ function CreateBranch({ bases, onClose }: { bases: Base[]; onClose: () => void }
       await api.createBranch({ name, base, ttl: (custom !== null ? customTTL : ttl) || undefined, init_sql: sql || undefined, owner: owner.trim() || undefined, access });
       onClose();
     } catch (err) {
-      setError((err as Error).message);
+      setError(err);
       setBusy(false);
     }
   };
@@ -227,10 +228,10 @@ function CreateBranch({ bases, onClose }: { bases: Base[]; onClose: () => void }
 
 export function DeleteBranch({ branch, onClose, onDeleted }: { branch: Branch; onClose: () => void; onDeleted?: () => void }) {
   const [typed, setTyped] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   return (
-    <Dialog title={`Delete ${branch.name}`} onClose={onClose}>
-      <p className="muted">Data in this branch is lost. Created {relative(branch.created_at)}.</p>
+    <Dialog title={t("Delete {name}?", { name: branch.name })} onClose={onClose}>
+      <p className="muted">{t("Data in this branch is lost. Created {when}.", { when: relative(branch.created_at) })}</p>
       <Field label={t("Type the branch name")}>
         <input className="mono" value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus />
       </Field>
@@ -240,7 +241,7 @@ export function DeleteBranch({ branch, onClose, onDeleted }: { branch: Branch; o
         <button
           className="danger-button"
           disabled={typed !== branch.name}
-          onClick={() => api.deleteBranch(branch.name).then(() => (onDeleted ? onDeleted() : onClose()), (e: Error) => setError(e.message))}
+          onClick={() => api.deleteBranch(branch.name).then(() => (onDeleted ? onDeleted() : onClose()), (e: unknown) => setError(e))}
         >
           {t("Delete")}
         </button>

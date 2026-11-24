@@ -1,7 +1,8 @@
 import { FormEvent, useState } from "react";
 import { api, can, isAdmin, LicenseReport, ModuleState, SettingScope } from "../api";
 import { ScopeForm } from "../components/scopeform";
-import { Dialog, ErrorLine } from "../components/ui";
+import { Dialog, ErrorLine, ErrorText } from "../components/ui";
+import { serverError } from "../lib/errors";
 import { relative } from "../lib/format";
 import { billingLabel, Renewal, renewalInfo, resultLabel } from "../lib/license";
 import { useLive } from "../lib/live";
@@ -15,7 +16,7 @@ export function Modules({ name, onOpen }: { name?: string; onOpen?: (name: strin
   const { data: scopes, error } = useLive(api.settings, ["setting", "module"]);
   const { data: modules, error: modError, reload: reloadModules } = useLive(api.modules, ["module", "node"]);
   const { data: lic, reload: reloadLicense } = useLive(api.license, ["setting", "module"]);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<unknown>(null);
   const [forgetting, setForgetting] = useState<string | null>(null);
   const run = (p: Promise<unknown>) =>
     p.then(
@@ -24,7 +25,7 @@ export function Modules({ name, onOpen }: { name?: string; onOpen?: (name: strin
         reloadModules();
         reloadLicense();
       },
-      (e: Error) => setActionError(e.message),
+      (e: unknown) => setActionError(e),
     );
 
   const covered = (n: string) => !!lic?.report && (lic.report.all || lic.report.license.modules.includes(n)) && ["valid", "grace"].includes(lic.report.state);
@@ -85,9 +86,9 @@ export function Modules({ name, onOpen }: { name?: string; onOpen?: (name: strin
                 setActionError(null);
                 reloadModules();
               },
-              (e: Error) => {
+              (e: unknown) => {
                 setForgetting(null);
-                setActionError(e.message);
+                setActionError(e);
               },
             )
           }
@@ -176,7 +177,7 @@ export function ModuleRow({
         )}
         {on && nodes.some((n) => n.problem) && (
           <span className="warn" title={nodes.filter((n) => n.problem).map((n) => `${n.node}: ${n.problem}`).join("\n")}>
-            {nodes.find((n) => n.problem)!.problem}
+            <ErrorText error={serverError(nodes.find((n) => n.problem)!.problem!)} />
           </span>
         )}
         <span className="spacer" />
@@ -203,17 +204,17 @@ export function ModuleRow({
 function LicenseCard({ current, paid, onApplied }: { current?: { configured: boolean; report?: LicenseReport; error?: string; renewal?: Renewal }; paid: string[]; onApplied: () => void }) {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [result, setResult] = useState<LicenseReport | null>(null);
   const [checking, setChecking] = useState(false);
-  const [checkError, setCheckError] = useState<string | null>(null);
+  const [checkError, setCheckError] = useState<unknown>(null);
   const checkNow = async () => {
     setChecking(true);
     setCheckError(null);
     try {
       await api.checkLicenseNow();
     } catch (err) {
-      setCheckError((err as Error).message);
+      setCheckError(err);
     } finally {
       setChecking(false);
       onApplied();
@@ -229,7 +230,7 @@ function LicenseCard({ current, paid, onApplied }: { current?: { configured: boo
       setKey("");
       onApplied();
     } catch (err) {
-      setError((err as Error).message + " The key was not saved.");
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -257,7 +258,11 @@ function LicenseCard({ current, paid, onApplied }: { current?: { configured: boo
           </>
         )}
         {trial && trial.state !== "valid" && <span className="warn">{t("The 30-day trial ended on {date}: paid modules are inactive until a licence key is saved.", { date: trialEnd!.toLocaleDateString() })}</span>}
-        {current?.configured && current.error && <span className="warn">The saved key cannot be verified: {current.error}</span>}
+        {current?.configured && current.error && (
+          <span className="warn">
+            {t("The saved key cannot be verified:")} <ErrorText error={serverError(current.error)} />
+          </span>
+        )}
         {rep && (
           <>
             <span className={`state-badge ${usable ? "ok" : "bad"}`}>{rep.state.replace("_", " ")}</span>
@@ -282,7 +287,11 @@ function LicenseCard({ current, paid, onApplied }: { current?: { configured: boo
                   {renewal.last && renewal.result !== "unknown" ? ` (${relative(renewal.last)})` : ""}
                 </span>
               )}
-              {renewal.warn && renewal.message && <span className="warn">{renewal.message}</span>}
+              {renewal.warn && renewal.message && (
+                <span className="warn">
+                  <ErrorText error={serverError(renewal.message)} />
+                </span>
+              )}
               {renewal.canCheck && (
                 <button type="button" disabled={checking} onClick={checkNow}>
                   {checking ? t("Checking…") : t("Check now")}
@@ -306,13 +315,13 @@ function LicenseCard({ current, paid, onApplied }: { current?: { configured: boo
           {busy ? t("Verifying…") : t("Verify")}
         </button>
       </div>
-      <ErrorLine error={error} />
+      <ErrorLine error={error} note={error ? t("The key was not saved.") : undefined} />
       {result && (
         <p className="ok-line">
           {result.license.customer ? t("Verified for {who} and saved.", { who: result.license.customer }) : t("Verified and saved.")}{" "}
           {result.enabled.length > 0 ? t("Enabling {list} on every node.", { list: result.enabled.join(", ") }) : result.all ? t("Enable the modules you want below.") : t("Its modules are already on.")}
           {result.offline && ` ${t("Package repositories could not be reached; module availability could not be checked.")}`}
-          {!result.offline && result.unavailable.length > 0 && ` Not in the package repositories: ${result.unavailable.join(", ")}.`}
+          {!result.offline && result.unavailable.length > 0 && ` ${t("Not in the package repositories: {list}.", { list: result.unavailable.join(", ") })}`}
         </p>
       )}
       {!result && rep?.offline && (

@@ -15,6 +15,7 @@ import { Empty, ErrorLine } from "../components/ui";
 import { Limits, NewBranch, NewBranchSkeleton } from "../components/newbranch";
 import { Choice } from "../lib/bases";
 import { chooseLanguage, remembered as rememberedLanguage, setLanguage, t } from "../lib/i18n";
+import { errorText, LocalizedError, serverError } from "../lib/errors";
 import { useCapabilities } from "../lib/caps";
 import { disconnect, useNow } from "../lib/live";
 import { sortBranches } from "../lib/branches";
@@ -48,9 +49,9 @@ function usePoll<T>(load: () => Promise<T>, deps: unknown[], every = 4000, scope
     setSeen(scope);
     setData(undefined);
   }
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const run = useCallback(() => load().then((d) => (setData(d), setError(null)), (e: Error) => setError(e.message)), deps);
+  const run = useCallback(() => load().then((d) => (setData(d), setError(null)), (e: unknown) => setError(e)), deps);
   useEffect(() => {
     if (!enabled) return;
     run();
@@ -72,7 +73,7 @@ export function Portal() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [mustChange, setMustChange] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
-  const [ssoError, setSsoError] = useState<string | undefined>();
+  const [ssoError, setSsoError] = useState<unknown>();
   const [local, setLocal] = useState<string[]>(remembered());
   const [fresh, setFresh] = useState<string | null>(null);
   const [touring, setTouring] = useState(false);
@@ -221,7 +222,7 @@ export function Portal() {
     try {
       for (;;) {
         const o = await api.operation(operation);
-        if (o.state === "failed") throw new Error(o.error ?? "creation failed");
+        if (o.state === "failed") throw o.error ? serverError(o.error) : new LocalizedError(t("Branch creation failed."));
         if (o.state === "succeeded") break;
         await new Promise((r) => setTimeout(r, 1000));
         if (!alive.current) return;
@@ -234,9 +235,8 @@ export function Portal() {
       setAnnounce(t("{name} is ready. Its connection is open.", { name: job.name }));
     } catch (err) {
       if (!alive.current) return;
-      const error = (err as Error).message;
-      setJobs((js) => js.map((j) => (j.name === job.name ? { ...j, state: "failed", error } : j)));
-      setAnnounce(t("Could not create {name}: {error}", { name: job.name, error }));
+      setJobs((js) => js.map((j) => (j.name === job.name ? { ...j, state: "failed", error: err } : j)));
+      setAnnounce(t("Could not create {name}: {error}", { name: job.name, error: errorText(err) }));
     }
   };
   const newBranchButton = (

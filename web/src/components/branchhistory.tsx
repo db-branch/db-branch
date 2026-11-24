@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, HistoryTx } from "../api";
+import { errorText } from "../lib/errors";
 import { TxFilter } from "../lib/history";
 import { TxTableView } from "./txtable";
 
@@ -33,7 +34,7 @@ export function BranchHistory({ name }: { name: string }) {
         // Keep the cursor of what was read further back; the first page's own cursor only before any.
         setCursor((c) => (c === null || c === undefined ? r.next_before : c));
       } catch (e) {
-        if (live) setError((e as Error).message);
+        if (live) setError(errorText(e));
       }
     };
     void load();
@@ -52,7 +53,7 @@ export function BranchHistory({ name }: { name: string }) {
       setOlder((o) => [...o, ...r.items]);
       setCursor(r.next_before);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errorText(e));
     } finally {
       setLoading(false);
     }

@@ -12,12 +12,13 @@ import { isUpgraded } from "../lib/upgrade";
 import { ConnectPanel } from "./connect";
 import { CopyButton, Engine, Status, StorageBar, TtlBar } from "./marks";
 import { RecordingBadge, RecordingValue } from "./recording";
-import { ErrorLine } from "./ui";
+import { ErrorLine, ErrorText } from "./ui";
+import { serverError } from "../lib/errors";
 
 export type SnapInfo = { created_at: string; masked: boolean };
 
 // Job: a branch this page is making right now (or failed to make).
-export type Job = { name: string; base: string; runtime: string; startedAt: number; state: "running" | "failed"; error?: string };
+export type Job = { name: string; base: string; runtime: string; startedAt: number; state: "running" | "failed"; error?: unknown };
 
 // allowed: the session lists the actions it knows; one it does not list is
 // left to the server, which decides for the branch's owner.
@@ -84,7 +85,7 @@ export function BranchRow({
 }) {
   const [confirm, ask] = useReducer(confirmReducer, null);
   const [forking, setForking] = useState<{ checkpoint?: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [note, setNote] = useState("");
   const [working, setWorking] = useState(false);
   const detailsId = useId();
@@ -110,7 +111,7 @@ export function BranchRow({
     return p
       .then(
         () => (setError(null), done && setNote(done), onChange()),
-        (e: Error) => setError(e.message),
+        (e: unknown) => setError(e),
       )
       .finally(() => setWorking(false));
   };
@@ -248,7 +249,7 @@ export function BranchRow({
       </div>
       {(b.status_reason || failedJob) && (
         <p className="brow-reason" role={failedJob ? "alert" : undefined}>
-          {failedJob ? job?.error : `${b.status}: ${b.status_reason}`}
+          {failedJob ? (job?.error ? <ErrorText error={job.error} /> : null) : b.status_reason ? <>{b.status}: <ErrorText error={serverError(b.status_reason)} /></> : null}
           {failedJob && onDismiss && (
             <>
               {" "}

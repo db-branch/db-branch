@@ -1,4 +1,5 @@
 // Display helpers. Kept pure so they can be tested without a browser.
+import { t } from "./i18n";
 
 export function bytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -22,8 +23,9 @@ function span(ms: number): string {
 
 export function relative(iso: string, now = Date.now()): string {
   const diff = Date.parse(iso) - now;
-  if (Math.abs(diff) < 60000) return "now";
-  return diff < 0 ? `${span(-diff)} ago` : `in ${span(diff)}`;
+  if (Math.abs(diff) < 60000) return t("now");
+  const s = span(Math.abs(diff));
+  return diff < 0 ? t("{span} ago", { span: s }) : t("in {span}", { span: s });
 }
 
 export type TTL = { kind: "none" } | { kind: "expired" } | { kind: "active"; fraction: number; left: string; warn: boolean };

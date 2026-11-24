@@ -3,7 +3,8 @@ import { api, BackupFile, can, isAdmin, UpdateView } from "../api";
 import { bytes } from "../lib/format";
 import { ScopeForm } from "../components/scopeform";
 import { TokenManager } from "../components/tokens";
-import { ErrorLine } from "../components/ui";
+import { ErrorLine, ErrorText } from "../components/ui";
+import { serverError } from "../lib/errors";
 import { useLive } from "../lib/live";
 import { t } from "../lib/i18n";
 
@@ -76,12 +77,12 @@ function Updates() {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<unknown>(null);
   const act = (p: Promise<unknown>, done?: () => void) => {
     setBusy(true);
     p.then(
       () => (setActionError(null), setBusy(false), done?.(), reload()),
-      (e: Error) => (setActionError(e.message), setBusy(false)),
+      (e: unknown) => (setActionError(e), setBusy(false)),
     );
   };
   const v: UpdateView | undefined = data;
@@ -115,7 +116,7 @@ function Updates() {
                   ) : (
                     <span className="muted">{t("up")}</span>
                   )}
-                  {n.update?.error && <span className="field-hint">{n.update.error}</span>}
+                  {n.update?.error && <span className="field-hint"><ErrorText error={serverError(n.update.error)} /></span>}
                 </td>
               </tr>
             ))}
@@ -183,7 +184,11 @@ function Updates() {
             {r.status === "running" && t("In progress.")}
             {r.status === "done" && t("Finished.")}
             {r.status === "canceled" && t("Canceled.")}
-            {r.status === "failed" && `${t("Stopped.")} ${r.error ?? ""}`}
+            {r.status === "failed" && (
+              <>
+                {t("Stopped.")} {r.error && <ErrorText error={serverError(r.error)} />}
+              </>
+            )}
           </p>
           <ol className="rollout-steps">
             {r.order.map((n) => (
@@ -246,12 +251,12 @@ function Backups() {
   useEffect(() => reload(), [target, reload]);
   const listed = data?.node ?? target;
   const [busy, setBusy] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<unknown>(null);
   const now = () => {
     setBusy(true);
     api.takeBackup(target || undefined).then(
       () => (setActionError(null), setBusy(false), reload()),
-      (e: Error) => (setActionError(e.message), setBusy(false)),
+      (e: unknown) => (setActionError(e), setBusy(false)),
     );
   };
   const list: BackupFile[] = data?.items ?? [];

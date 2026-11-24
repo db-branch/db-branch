@@ -35,7 +35,7 @@ export function ForkBranch({
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>(initialList ?? []);
   const [ttl, setTtl] = useState("24h");
   const [access, setAccess] = useState<"private" | "open">("private");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -82,7 +82,7 @@ export function ForkBranch({
       onForked?.(branchName, op.id);
       onClose();
     } catch (err) {
-      setError(err instanceof ApiError && err.code === "already_exists" ? t("A branch named {name} already exists. Pick another name, or delete that branch first.", { name: branchName }) : (err as Error).message);
+      setError(err instanceof ApiError && err.code === "already_exists" ? t("A branch named {name} already exists. Pick another name, or delete that branch first.", { name: branchName }) : err);
       setBusy(false);
     }
   };
@@ -90,7 +90,7 @@ export function ForkBranch({
   const extraInitialCheckpoint = initialCheckpoint && initialCheckpoint !== "@reset" && !checkpoints.some((c) => c.name === initialCheckpoint);
 
   return (
-    <Dialog title={`Fork ${branch.name}`} onClose={onClose}>
+    <Dialog title={t("Fork {name}", { name: branch.name })} onClose={onClose}>
       <form className="form" onSubmit={submit}>
         <Field label={t("Name")} hint={hint}>
           <div className="name-input">

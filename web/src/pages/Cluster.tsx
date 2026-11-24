@@ -27,7 +27,7 @@ export function Cluster() {
           <span className="muted mono">
             {cluster.mode === "single" ? "single node" : `${cluster.nodes.filter((n) => !n.down).length}/${cluster.nodes.length} up`}
             {cluster.nodes.some((n) => n.protocol > cluster.protocol) && (
-              <span className="warn" title={`Newer features wait until every node is upgraded (cluster protocol ${cluster.protocol})`}>
+              <span className="warn" title={t("Newer features wait until every node is upgraded (cluster protocol {protocol})", { protocol: cluster.protocol })}>
                 {" "}· upgrading
               </span>
             )}
@@ -60,7 +60,7 @@ function NodeColumn({ node, branches }: { node: ClusterNode; branches: { name: s
   return (
     <article className={`node ${node.down ? "node-down" : ""}`}>
       <header className="node-head">
-        <Status status={node.down ? "lost" : "ready"} reason={node.down && node.last_seen ? `last seen ${relative(node.last_seen)}` : null} />
+        <Status status={node.down ? "lost" : "ready"} reason={node.down && node.last_seen ? t("last seen {when}", { when: relative(node.last_seen) }) : null} />
         <span className="mono strong">{node.name}</span>
         {node.leader && (
           <span className="leader" title={t("Leader")}>
@@ -78,7 +78,7 @@ function NodeColumn({ node, branches }: { node: ClusterNode; branches: { name: s
       </header>
       <div className="node-section">
         <h3>{t("Pool")}</h3>
-        <span className={`pool ${fill > 0.9 ? "pool-bad" : fill > 0.8 ? "pool-warn" : ""}`} title={`${bytes(used)} used of ${bytes(node.pool_size)}`}>
+        <span className={`pool ${fill > 0.9 ? "pool-bad" : fill > 0.8 ? "pool-warn" : ""}`} title={t("{used} used of {total}", { used: bytes(used), total: bytes(node.pool_size) })}>
           <span className="bar">
             <span className="bar-own" style={{ width: `${Math.max(1, fill * 100)}%` }} />
           </span>
@@ -189,13 +189,13 @@ function Engines({ nodes, installing }: { nodes: ClusterNode[]; installing: Oper
   const { data: branches } = useLive(api.branches, ["branch"]);
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const pending = (rt: string, node: string) => installing.some((o) => o.target.name === rt && (o.node ?? node) === node);
   const installed = [...new Set(nodes.flatMap((n) => n.runtimes))];
   const busy = [...new Set(installing.map((o) => o.target.name))].filter((r) => !installed.includes(r));
   const rows = [...installed, ...busy].sort();
   const uses = (rt: string) => (bases ?? []).filter((b) => b.runtime === rt).length + (branches ?? []).filter((b) => b.runtime === rt).length;
-  const install = (rt: string) => api.installRuntime(rt).then(() => setError(null), (e: Error) => setError(e.message));
+  const install = (rt: string) => api.installRuntime(rt).then(() => setError(null), (e: unknown) => setError(e));
   const addable = (available ?? []).filter((r) => !nodes.every((n) => n.runtimes.includes(r.runtime)));
 
   return (
@@ -204,8 +204,7 @@ function Engines({ nodes, installing }: { nodes: ClusterNode[]; installing: Oper
         <h2>
           Engines{" "}
           <Info label={t("About engines")}>
-            An engine version (e.g. MySQL 8.4) must be installed before bases can use it. Installing puts it on every node, so branches can start anywhere.
-            An engine in use by a base or branch cannot be removed.
+            {t("An engine version (e.g. MySQL 8.4) must be installed before bases can use it. Installing puts it on every node, so branches can start anywhere. An engine in use by a base or branch cannot be removed.")}
           </Info>
         </h2>
         {can("runtime.install") && (
@@ -280,7 +279,7 @@ function Engines({ nodes, installing }: { nodes: ClusterNode[]; installing: Oper
       )}
       {adding && <AddEngine available={addable} onClose={() => setAdding(false)} onInstall={(rt) => install(rt).then(() => setAdding(false))} />}
       {removing && (
-        <Dialog title={`Remove ${removing}?`} onClose={() => setRemoving(null)}>
+        <Dialog title={t("Remove {name}?", { name: removing })} onClose={() => setRemoving(null)}>
           <p>{t("It is uninstalled from every node. Nothing uses it now; you can install it again later.")}</p>
           <div className="form-actions">
             <button onClick={() => setRemoving(null)}>{t("Cancel")}</button>
@@ -289,7 +288,7 @@ function Engines({ nodes, installing }: { nodes: ClusterNode[]; installing: Oper
               onClick={() =>
                 api.removeRuntime(removing).then(
                   () => (setRemoving(null), setError(null)),
-                  (e: Error) => (setRemoving(null), setError(e.message)),
+                  (e: unknown) => (setRemoving(null), setError(e)),
                 )
               }
             >

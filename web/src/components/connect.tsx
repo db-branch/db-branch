@@ -21,13 +21,13 @@ const proxyTab: [Tab, string] = ["proxy", "ProxySQL"];
 // always carry the real one.
 export function ConnectPanel({ branch, proxy }: { branch: string; proxy?: Proxy | null }) {
   const [conn, setConn] = useState<Connection | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [tab, setTab] = useState<Tab>("url");
   const [reveal, setReveal] = useState(false);
   useEffect(() => {
     api.dsn(branch).then(
       (d) => setConn(connectionFrom(d)),
-      (e: Error) => setError(e.message),
+      (e: unknown) => setError(e),
     );
   }, [branch]);
   if (error) return <ErrorLine error={error} />;

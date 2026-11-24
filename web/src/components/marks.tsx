@@ -51,7 +51,7 @@ export function StorageBar({ storage, max }: { storage: { used: number; referenc
   const s = storageShare(storage, max);
   if (!storage) return <span className="muted">—</span>;
   return (
-    <span className="storage" title={`${bytes(storage.used)} own · ${bytes(storage.referenced)} total (shared with base)`}>
+    <span className="storage" title={t("{own} own · {total} total (shared with base)", { own: bytes(storage.used), total: bytes(storage.referenced) })}>
       <span className="bar">
         <span className="bar-shared" style={{ width: `${s.total * 100}%` }} />
         <span className="bar-own" style={{ width: `${Math.max(1, s.own * 100)}%` }} />

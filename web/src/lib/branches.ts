@@ -1,6 +1,7 @@
 // The user page's view of branches: when they expire, what order they come
 // in, how far one click extends them, and the two-step confirmation of
 // destructive actions. Pure, so it can be tested without a browser.
+import { t } from "./i18n";
 
 export const ttlChoices: [string, string][] = [
   ["1h", "1 hour"],
@@ -27,16 +28,16 @@ export const EXTEND_STEP_MIN = 240;
 
 // countdown: "in 3h 12m", "in 2d", "expired" or "no expiry".
 export function countdown(expires: string | null, now: number): string {
-  if (!expires) return "no expiry";
+  if (!expires) return t("no expiry");
   const left = Date.parse(expires) - now;
-  if (left <= 0) return "expired";
-  if (left < MIN) return "in <1m";
+  if (left <= 0) return t("expired");
+  if (left < MIN) return t("in <1m");
   const unit = (big: number, bigName: string, small: number, smallName: string) => {
     const b = Math.floor(left / big);
     const s = Math.floor((left % big) / small);
-    return `in ${b}${bigName}${s ? ` ${s}${smallName}` : ""}`;
+    return t("in {span}", { span: `${b}${bigName}${s ? ` ${s}${smallName}` : ""}` });
   };
-  if (left < HOUR) return `in ${Math.floor(left / MIN)}m`;
+  if (left < HOUR) return t("in {span}", { span: `${Math.floor(left / MIN)}m` });
   if (left < DAY) return unit(HOUR, "h", MIN, "m");
   return unit(DAY, "d", HOUR, "h");
 }

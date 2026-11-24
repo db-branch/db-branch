@@ -1,7 +1,7 @@
 import { FormEvent, ReactNode, RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { api, Branch, HistoryTx } from "../api";
 import { useCapabilities } from "../lib/caps";
-import { checkpointNameProblem, MAX_CHECKPOINT_NAME, newestFirst, notes, savedLabel, spaceWarning } from "../lib/checkpoints";
+import { checkpointNameProblem, MAX_CHECKPOINT_NAME, newestFirst, notes, spaceWarning } from "../lib/checkpoints";
 import { bytes, relative } from "../lib/format";
 import { hasHistoryModule, rowsLabel, txNumber } from "../lib/history";
 import { GNode, mergeLines } from "../lib/historygraph";
@@ -39,7 +39,7 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
   const [askingTx, setAskingTx] = useState(false);
   const [name, setName] = useState("");
   const [asking, setAsking] = useState<Asking>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [note, setNote] = useState("");
   const [warning, setWarning] = useState("");
   const [working, setWorking] = useState(false);
@@ -88,7 +88,7 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
     return p
       .then(
         () => (setError(null), setNote(done), reload(), onChange?.()),
-        (e: Error) => setError(e.message),
+        (e: unknown) => setError(e),
       )
       .finally(() => setWorking(false));
   };
@@ -99,7 +99,7 @@ function usePanel({ branch: b, ready, allow, onChange }: { branch: Branch; ready
     setWarning("");
     run(
       api.createCheckpoint(b.name, label || undefined).then((cp) => setWarning(spaceWarning(cp))),
-      label ? t(savedLabel(label)) : t("Saved checkpoint"),
+      label ? t("Saved checkpoint {name}", { name: label }) : t("Saved checkpoint"),
     ).then(() => setName(""));
   };
   const save = (e: FormEvent) => {
@@ -342,7 +342,7 @@ export function PanelBody({ p, modal, onExpand, expandRef, onFork, onMerge }: { 
                 {p.showLines && <span className="muted small">line {p.shown(c.line)}</span>}
               </div>
               {asking?.name === c.name && asking.from === "list" ? (
-                <div className="confirm" role="group" aria-label={asking.what === "restore" ? `Restore ${c.name}` : `Delete ${c.name}`} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), p.setAsking(null))}>
+                <div className="confirm" role="group" aria-label={asking.what === "restore" ? t("Restore {name}", { name: c.name }) : t("Delete {name}", { name: c.name })} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), p.setAsking(null))}>
                   <span role="alert">
                     {asking.what === "restore"
                       ? t("Restore {name} to {checkpoint}? The current state of {name} is replaced and is not saved; changes after the last checkpoint are lost. Save a checkpoint first if you want to keep them. Every checkpoint you already have stays.", { name: b.name, checkpoint: c.name })
@@ -354,7 +354,7 @@ export function PanelBody({ p, modal, onExpand, expandRef, onFork, onMerge }: { 
                     </button>
                     {asking.what === "restore" && (
                       <button type="button" disabled={p.working || !!p.saveWhy} title={p.saveWhy} onClick={p.saveFirst}>
-                        Save a checkpoint first
+                        {t("Save a checkpoint first")}
                       </button>
                     )}
                     <button
@@ -363,7 +363,7 @@ export function PanelBody({ p, modal, onExpand, expandRef, onFork, onMerge }: { 
                       disabled={working}
                       onClick={() => (asking.what === "restore" ? p.restoreCheckpoint(c.name) : p.deleteCheckpoint(c.name))}
                     >
-                      {asking.what === "restore" ? "Confirm restore" : "Confirm delete"}
+                      {asking.what === "restore" ? t("Confirm restore") : t("Confirm delete")}
                     </button>
                   </span>
                 </div>
@@ -396,7 +396,7 @@ function Confirm({ label, text, action, danger, working, onCancel, onConfirm, sa
         </button>
         {saveFirst && (
           <button type="button" disabled={working || !!saveFirst.why} title={saveFirst.why} onClick={saveFirst.onSave}>
-            Save a checkpoint first
+            {t("Save a checkpoint first")}
           </button>
         )}
         <button type="button" className={danger ? "danger-button" : "primary"} disabled={working} onClick={onConfirm}>
@@ -425,9 +425,9 @@ function CheckpointDetail({ c, line, liveLine, branch, asking, working, why, for
       </div>
       {asking ? (
         <Confirm
-          label={`Restore ${c.name}`}
+          label={t("Restore {name}", { name: c.name })}
           text={t("Restore {name} to {checkpoint}? The current state of {name} is replaced and is not saved; changes after the last checkpoint are lost. Save a checkpoint first if you want to keep them. Every checkpoint you already have stays.", { name: branch, checkpoint: c.name })}
-          action="Confirm restore"
+          action={t("Confirm restore")}
           working={working}
           onCancel={() => onAsk(false)}
           onConfirm={onRestore}
@@ -462,7 +462,7 @@ function GroupDetail({ group, line, branch, asking, working, why, onAsk, onResto
   return (
     <div className="hg-detail-body">
       <div className="cp-main">
-        <span className="strong">{group.length} transactions</span>
+        <span className="strong">{t("{count} transactions", { count: group.length })}</span>
         <span className="muted small">line {line}</span>
         <span className="muted small" title={new Date(group[0].time).toLocaleString()}>
           {relative(group[group.length - 1].time)}
@@ -536,9 +536,9 @@ function TxDetail({ tx, line, branch, asking, working, why, onAsk, onRestore, sa
       )}
       {asking ? (
         <Confirm
-          label="Restore to here"
+          label={t("Restore to here")}
           text={t("Restore {name} to just after this transaction? The branch continues on a new line. The current state of {name} is replaced and is not saved: save a checkpoint first if you may need it. Every checkpoint you already have stays.", { name: branch })}
-          action="Confirm restore"
+          action={t("Confirm restore")}
           working={working}
           onCancel={() => onAsk(false)}
           onConfirm={onRestore}
@@ -546,7 +546,7 @@ function TxDetail({ tx, line, branch, asking, working, why, onAsk, onRestore, sa
         />
       ) : (
         <button type="button" disabled={!!why || working} title={why ?? t("Go back to just after this transaction")} onClick={() => onAsk(true)}>
-          {brief ? `Restore to #${txNumber(tx.gtid)}` : "Restore to here"}
+          {brief ? t("Restore to #{tx}", { tx: txNumber(tx.gtid) }) : t("Restore to here")}
         </button>
       )}
     </div>

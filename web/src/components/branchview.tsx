@@ -2,10 +2,12 @@ import type { ReactNode } from "react";
 import { api, Branch, ownerLabel } from "../api";
 import { extendTtl } from "../lib/branches";
 import { relative } from "../lib/format";
+import { serverError } from "../lib/errors";
 import { t } from "../lib/i18n";
 import { BranchName } from "./branchname";
 import { CopyButton, Engine, Status, StorageBar, TtlBar } from "./marks";
 import { RecordingBadge } from "./recording";
+import { ErrorText } from "./ui";
 
 export type BranchSection = { id: string; title: string; body: ReactNode };
 
@@ -64,7 +66,7 @@ export function BranchView({
         )}
         <RecordingBadge record={b.record} />
       </header>
-      {b.status_reason && <p className="reason">{b.status_reason}</p>}
+      {b.status_reason && <p className="reason"><ErrorText error={serverError(b.status_reason)} /></p>}
       <dl className="branch-facts">
         <dt>{t("Base")}</dt>
         <dd className="mono" title={`snapshot ${b.snapshot}`}>

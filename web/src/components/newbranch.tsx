@@ -57,7 +57,7 @@ export function NewBranch({
   const [ttl, setTtl] = useState("4h");
   const [access, setAccess] = useState<"private" | "open">("private");
   const [record, setRecord] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [starting, setStarting] = useState(false);
   const ids = { name: useId(), hint: useId(), ttl: useId(), access: useId(), record: useId() };
   const limits = perBase?.[base] ?? clusterLimits;
@@ -108,7 +108,7 @@ export function NewBranch({
       onStarted({ name: made, base: chosen.name, runtime: chosen.runtime, startedAt: Date.now(), state: "running" }, op.id);
     } catch (err) {
       // The server's text is English and names the rule; say it in the page's language.
-      setError(err instanceof ApiError && err.code === "already_exists" ? t("A branch named {name} already exists. Pick another name, or delete that branch first.", { name: made }) : (err as Error).message);
+      setError(err instanceof ApiError && err.code === "already_exists" ? t("A branch named {name} already exists. Pick another name, or delete that branch first.", { name: made }) : err);
     } finally {
       setStarting(false);
     }

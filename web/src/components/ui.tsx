@@ -1,5 +1,6 @@
 import { ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Icon } from "./marks";
+import { formatError } from "../lib/errors";
 import { t } from "../lib/i18n";
 
 export function Drawer({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
@@ -105,10 +106,26 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
   );
 }
 
-export function ErrorLine({ error }: { error: string | null }) {
-  return error ? (
+function renderError(f: NonNullable<ReturnType<typeof formatError>>, note?: string) {
+  return (
+    <>
+      {f.text}
+      {note ? ` ${note}` : ""}
+      {f.detail && <small className="error-detail">{f.detail}</small>}
+    </>
+  );
+}
+
+export function ErrorText({ error, note }: { error: unknown; note?: string }) {
+  const f = formatError(error);
+  return f ? renderError(f, note) : null;
+}
+
+export function ErrorLine({ error, note }: { error: unknown; note?: string }) {
+  const f = formatError(error);
+  return f ? (
     <p className="error-line" role="alert">
-      {error}
+      {renderError(f, note)}
     </p>
   ) : null;
 }

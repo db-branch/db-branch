@@ -12,7 +12,7 @@ export function ReplicasCard({ base }: { base: Base }) {
   const current = base.replica_nodes ?? null;
   const [all, setAll] = useState(current === null);
   const [chosen, setChosen] = useState<string[]>(current ?? []);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const key = JSON.stringify(current);
   useEffect(() => {
@@ -33,7 +33,7 @@ export function ReplicasCard({ base }: { base: Base }) {
       await api.setBaseReplicas(base.name, all ? null : chosen);
       setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      setError(e);
     } finally {
       setBusy(false);
     }

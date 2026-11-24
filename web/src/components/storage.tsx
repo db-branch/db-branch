@@ -1,5 +1,6 @@
 import { ReactNode, useState } from "react";
 import { bytes } from "../lib/format";
+import { t } from "../lib/i18n";
 import { Analysis, TreeNode } from "../lib/storage";
 
 // share is a width in percent, at least a sliver while there is something.
@@ -111,7 +112,7 @@ function TreeRow({ node: n, level, max, onOpen }: { node: TreeNode; level: numbe
         <span className="tree-bar bar">
           <span className="bar-own" style={{ width: `${share(n.total, max)}%` }} />
         </span>
-        <span className="mono tree-size" title={has ? `${bytes(n.used)} its own` : undefined}>
+        <span className="mono tree-size" title={has ? t("{size} its own", { size: bytes(n.used) }) : undefined}>
           {bytes(n.total)}
         </span>
         <span className="muted small tree-pct">{percent(n.share)}</span>

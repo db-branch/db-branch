@@ -42,7 +42,7 @@ export function App() {
     setSession(s);
     setState("in");
   };
-  const [ssoError, setSsoError] = useState<string | undefined>();
+  const [ssoError, setSsoError] = useState<unknown>();
   useEffect(() => {
     ssoReturn().then(({ session: s, error }) => {
       if (s) {
@@ -130,11 +130,11 @@ export function Login({
   defaultUser?: string;
   hint?: string;
   onCancel?: () => void;
-  initialError?: string;
+  initialError?: unknown;
 }) {
   const [username, setUsername] = useState(defaultUser);
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(initialError ?? null);
+  const [error, setError] = useState<unknown>(initialError ?? null);
   const [methods, setMethods] = useState<LoginMethod[]>([]);
   const [first, setFirst] = useState(false); // signed in with an initial password
   useEffect(() => {
@@ -147,7 +147,7 @@ export function Login({
       if (s.must_change_password) return setFirst(true);
       onDone(s);
     } catch (err) {
-      setError(err instanceof ApiError && err.code === "invalid_credentials" ? t("Wrong password.") : (err as Error).message);
+      setError(err instanceof ApiError && err.code === "invalid_credentials" ? t("Wrong password.") : err);
     }
   };
   if (first)
