@@ -1,9 +1,31 @@
 #!/bin/sh
 set -e
 
-if [ -d /run/systemd/system ]; then
-	systemctl stop db-branch.service || true
-	if [ "$1" = "remove" ]; then
-		systemctl disable db-branch.service >/dev/null || true
+policy_allows() {
+	if [ -x "${DB_BRANCH_PKG_ROOT:-}/usr/sbin/policy-rc.d" ]; then
+		rc=0
+		"${DB_BRANCH_PKG_ROOT:-}/usr/sbin/policy-rc.d" "$1" "$2" || rc=$?
+		[ "$rc" -eq 101 ] && return 1
 	fi
-fi
+	return 0
+}
+
+case "$1" in
+remove)
+	# Stop only the agent; running database units (db-branch-mysqld@*,
+	# db-branch-postgres@*, db-branch-rt@*) stay up so branch data and
+	# active connections are preserved across package removal.
+	if [ -z "${DPKG_ROOT:-}" ] && [ -d "${DB_BRANCH_PKG_ROOT:-}/run/systemd/system" ]; then
+		if policy_allows db-branch.service stop; then
+			systemctl stop db-branch.service || true
+		fi
+	fi
+	;;
+upgrade|deconfigure|failed-upgrade)
+	# Keep db-branch.service running across unpack; postinst restarts it.
+	;;
+*)
+	echo "prerm called with unknown argument '$1'" >&2
+	exit 1
+	;;
+esac

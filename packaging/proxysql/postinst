@@ -1,9 +1,37 @@
 #!/bin/sh
 # The upstream proxysql package enables its service but does not start it,
-# so routing would stay down until the next reboot. Start it, then restart
-# the agent, which loads modules when it starts.
+# so routing would stay down until the next reboot. Start it on initial
+# install, then restart the agent so it loads (or reloads) the module.
 set -e
-if [ -d /run/systemd/system ]; then
-	systemctl enable --now proxysql.service || true
-	systemctl try-restart db-branch.service || true
-fi
+
+policy_allows() {
+	if [ -x "${DB_BRANCH_PKG_ROOT:-}/usr/sbin/policy-rc.d" ]; then
+		rc=0
+		"${DB_BRANCH_PKG_ROOT:-}/usr/sbin/policy-rc.d" "$1" "$2" || rc=$?
+		[ "$rc" -eq 101 ] && return 1
+	fi
+	return 0
+}
+
+case "$1" in
+configure)
+	if [ -z "${DPKG_ROOT:-}" ] && [ -d "${DB_BRANCH_PKG_ROOT:-}/run/systemd/system" ]; then
+		if [ -z "$2" ]; then
+			if policy_allows proxysql.service start; then
+				systemctl enable --now proxysql.service || true
+			else
+				systemctl enable proxysql.service >/dev/null 2>&1 || true
+			fi
+		fi
+		if policy_allows db-branch.service try-restart; then
+			systemctl try-restart db-branch.service || true
+		fi
+	fi
+	;;
+abort-upgrade|abort-remove|abort-deconfigure)
+	;;
+*)
+	echo "postinst called with unknown argument '$1'" >&2
+	exit 1
+	;;
+esac
