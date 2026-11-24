@@ -15,6 +15,7 @@ import (
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/apt"
 	"github.com/db-branch/db-branch/internal/infrastructure/backupdir"
+	"github.com/db-branch/db-branch/internal/infrastructure/clusterpki"
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/infrastructure/execx"
 	"github.com/db-branch/db-branch/internal/infrastructure/licenseclient"
@@ -90,7 +91,17 @@ func coreSettings(cfg config.Config) []ext.Setting {
 			Help: "The leader asks the package repository once a day for newer db-branch versions. Off: the repository is contacted only when an admin clicks Check for updates."},
 		{Key: "base.prune_snapshots", Label: "Prune old snapshots", Type: "bool", Default: "true",
 			Help: "Delete a base's older snapshots once a newer one exists and no branch uses them."},
+		{Key: "cluster.join_token_ttl", Label: "Join token TTL", Type: "duration", Default: clusterpki.DefaultJoinTokenTTL.String(),
+			Help: "How long a single-use cluster join token stays valid before expiring, e.g. 24h."},
 	}
+}
+
+func positiveDuration(v string) error {
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return fmt.Errorf("must be a positive duration such as 24h")
+	}
+	return nil
 }
 
 // wireModulesAndSettings sets up cluster-wide modules and settings and keeps
@@ -112,6 +123,7 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 			"backup.dir":             backupdir.ValidatePath,
 			"notify.slack_url":       checkNotifyURL,
 			"notify.webhook_url":     checkNotifyURL,
+			"cluster.join_token_ttl": positiveDuration,
 		}}
 	if st, ok := svc.Store.(domain.SettingsStore); ok {
 		set.Store = st
@@ -221,6 +233,9 @@ func wireModulesAndSettings(ctx context.Context, cfg config.Config, svc *dbbranc
 			}
 			if mb, err := strconv.ParseInt(v["upload.max_mb"], 10, 64); err == nil && mb > 0 {
 				uploadMaxBytes.Store(mb << 20)
+			}
+			if d, err := time.ParseDuration(v["cluster.join_token_ttl"]); err == nil && d > 0 {
+				clusterJoinTokenTTL.Store(int64(d))
 			}
 			arc.sync(v["zfs.arc_max"], log)
 		}

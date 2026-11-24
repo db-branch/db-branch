@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -141,6 +142,43 @@ func (a *App) clusterCommand() *cobra.Command {
 	for _, c := range []*cobra.Command{remove, leave} {
 		c.Flags().BoolVar(&force, "force", false, "forget the records of the bases, copies and branches the node still holds")
 	}
+	var tokenTTL string
+	tokenCmd := &cobra.Command{
+		Use:   "token",
+		Short: "Issue a single-use join token (replaces the previous one)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var reqBody any
+			if tokenTTL != "" {
+				d, err := time.ParseDuration(tokenTTL)
+				if err != nil || d <= 0 {
+					return fmt.Errorf("invalid --ttl %q: use a positive duration such as 24h", tokenTTL)
+				}
+				reqBody = map[string]string{"ttl": tokenTTL}
+			}
+			c, err := a.client()
+			if err != nil {
+				return err
+			}
+			var out struct {
+				Token     string  `json:"token"`
+				ExpiresAt *string `json:"expires_at,omitempty"`
+			}
+			if err := c.Do(cmd.Context(), "POST", "/v1/cluster/token", reqBody, &out); err != nil {
+				return err
+			}
+			if a.output == "json" {
+				return a.printJSON(out)
+			}
+			expNote := ""
+			if out.ExpiresAt != nil && *out.ExpiresAt != "" {
+				expNote = fmt.Sprintf(" (single-use, expires %s)", *out.ExpiresAt)
+			}
+			fmt.Fprintf(a.Stdout, "%s\n\nOn the new node%s: sudo db-branch cluster join <this-node>:7070 --token %s\n", out.Token, expNote, out.Token)
+			return nil
+		},
+	}
+	tokenCmd.Flags().StringVar(&tokenTTL, "ttl", "", "how long the join token stays valid (default from cluster.join_token_ttl, 24h)")
 	cmd.AddCommand(
 		alignIDs,
 		remove,
@@ -158,25 +196,7 @@ func (a *App) clusterCommand() *cobra.Command {
 			}),
 		},
 		join,
-		&cobra.Command{
-			Use:   "token",
-			Short: "Issue a join token (replaces the previous one)",
-			Args:  cobra.NoArgs,
-			RunE: func(cmd *cobra.Command, _ []string) error {
-				c, err := a.client()
-				if err != nil {
-					return err
-				}
-				var out struct {
-					Token string `json:"token"`
-				}
-				if err := c.Do(cmd.Context(), "POST", "/v1/cluster/token", nil, &out); err != nil {
-					return err
-				}
-				fmt.Fprintf(a.Stdout, "%s\n\nOn the new node: sudo db-branch cluster join <this-node>:7070 --token %s\n", out.Token, out.Token)
-				return nil
-			},
-		},
+		tokenCmd,
 		&cobra.Command{
 			Use:   "status",
 			Short: "Show members and the leader",

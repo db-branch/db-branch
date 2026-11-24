@@ -9,6 +9,7 @@ import (
 
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/backupdir"
+	"github.com/db-branch/db-branch/internal/infrastructure/clusterpki"
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/infrastructure/notifier"
 	"github.com/db-branch/db-branch/internal/infrastructure/uploads"
@@ -27,6 +28,9 @@ var (
 	backupKeep  = newInt64(14)
 	backupPath  atomic.Value
 )
+
+// clusterJoinTokenTTL backs the cluster.join_token_ttl setting.
+var clusterJoinTokenTTL = newInt64(int64(clusterpki.DefaultJoinTokenTTL))
 
 // backupDir resolves the backup directory from the setting at each use.
 type backupDir struct{ cfg config.Config }

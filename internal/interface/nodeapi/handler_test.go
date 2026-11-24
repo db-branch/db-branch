@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/clusterpki"
@@ -19,13 +20,15 @@ import (
 )
 
 type fakeStore struct {
-	servers  []membership.Server
-	leader   bool
-	leaderID string
-	state    raftstore.State
-	applyErr error
-	voterErr error
-	joinHash string
+	servers    []membership.Server
+	leader     bool
+	leaderID   string
+	state      raftstore.State
+	applyErr   error
+	voterErr   error
+	joinHash   string
+	consumeErr error
+	setHashErr error
 }
 
 func (f *fakeStore) ApplyAt(context.Context, raftstore.Command) (uint64, error) {
@@ -38,6 +41,23 @@ func (f *fakeStore) Servers(context.Context) ([]membership.Server, error) {
 	return f.servers, nil
 }
 func (f *fakeStore) JoinSecretHash() string { return f.joinHash }
+func (f *fakeStore) SetJoinSecretHash(_ context.Context, hash string) error {
+	if f.setHashErr != nil {
+		return f.setHashErr
+	}
+	f.joinHash = hash
+	return nil
+}
+func (f *fakeStore) ConsumeJoinSecret(_ context.Context, hash string, _ time.Time) error {
+	if f.consumeErr != nil {
+		return f.consumeErr
+	}
+	if f.joinHash == "" || f.joinHash != hash {
+		return raftstore.ErrInvalidJoinSecret
+	}
+	f.joinHash = ""
+	return nil
+}
 func (f *fakeStore) State() raftstore.State { return f.state }
 
 func asMember(r *http.Request) *http.Request {
@@ -69,6 +89,35 @@ func Testハンドラーは入力の誤りと内部エラーを区別して返�
 	if code := call(t, s, "/internal/v1/join", `{"secret":"x"}`, false); code != http.StatusForbidden {
 		t.Errorf("join without a configured secret: %d", code)
 	}
+	st.joinHash = clusterpki.HashSecret("x")
+	st.state.JoinSecretExpiresAt = time.Now().Add(-time.Second).Unix()
+	if code := call(t, s, "/internal/v1/join", `{"secret":"x"}`, false); code != http.StatusForbidden {
+		t.Errorf("expired join: %d", code)
+	}
+	st.state.JoinSecretExpiresAt = 0
+	st.consumeErr = raftstore.ErrExpiredJoinSecret
+	if code := call(t, s, "/internal/v1/join", `{"secret":"x"}`, false); code != http.StatusForbidden {
+		t.Errorf("consume ErrExpiredJoinSecret: %d", code)
+	}
+	st.consumeErr = nodeapi.ErrRejected
+	if code := call(t, s, "/internal/v1/join", `{"secret":"x"}`, false); code != http.StatusForbidden {
+		t.Errorf("consume ErrRejected: %d", code)
+	}
+	st.applyErr = raftstore.ErrInvalidJoinSecret
+	if code := call(t, s, "/internal/v1/apply", `{"op":"consume_join_secret"}`, true); code != http.StatusForbidden {
+		t.Errorf("apply ErrInvalidJoinSecret: %d", code)
+	}
+	st.applyErr = nil
+	st.consumeErr = domain.ErrNoLeader
+	if code := call(t, s, "/internal/v1/join", `{"secret":"x"}`, false); code != http.StatusServiceUnavailable {
+		t.Errorf("consume ErrNoLeader: %d", code)
+	}
+	st.consumeErr = domain.ErrClusterUpgrading
+	st.setHashErr = errors.New("raft down")
+	if code := call(t, s, "/internal/v1/join", `{"secret":"x"}`, false); code != http.StatusInternalServerError {
+		t.Errorf("fallback SetJoinSecretHash failure: %d", code)
+	}
+	st.consumeErr, st.setHashErr, st.joinHash = nil, nil, ""
 	st.applyErr = errors.New("disk full")
 	if code := call(t, s, "/internal/v1/apply", `{"op":"put_node"}`, true); code != http.StatusInternalServerError {
 		t.Errorf("apply failure: %d", code)
@@ -139,7 +188,6 @@ func Test参加の応答にクラスタのユーザーidを載せる(t *testing.
 	ca, _ := clusterpki.InitCA(t.TempDir())
 	secret := "s3cret"
 	st := &fakeStore{leader: true}
-	st.joinHash = clusterpki.HashSecret(secret)
 	for _, tc := range []struct {
 		name string
 		ids  func() domain.ServiceIDs
@@ -149,6 +197,7 @@ func Test参加の応答にクラスタのユーザーidを載せる(t *testing.
 		{"not recorded", func() domain.ServiceIDs { return domain.ServiceIDs{} }, domain.ServiceIDs{}},
 		{"no source", nil, domain.ServiceIDs{}},
 	} {
+		st.joinHash = clusterpki.HashSecret(secret)
 		s := &nodeapi.Server{Store: st, CA: ca, ServiceIDs: tc.ids}
 		r := httptest.NewRequest("POST", "/internal/v1/join", strings.NewReader(`{"secret":"`+secret+`"}`))
 		w := httptest.NewRecorder()

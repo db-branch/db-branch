@@ -3,6 +3,7 @@ package raftstore_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -641,7 +642,7 @@ func TestProtocol_未使用の版を予約せず新機能は現行より大き�
 		t.Fatal("fsm.go reserves protocol numbers; new features take the next number above Protocol instead")
 	}
 	// Every protocol a domain constant names is one this binary speaks.
-	for _, p := range []int{domain.ProtocolBranchRuntime, domain.ProtocolBranchPause, domain.ProtocolRuntimeModules, domain.ProtocolModuleForget, domain.ProtocolBranchOwnerID, domain.ProtocolSessionRevocation, domain.ProtocolBranchFork} {
+	for _, p := range []int{domain.ProtocolBranchRuntime, domain.ProtocolBranchPause, domain.ProtocolRuntimeModules, domain.ProtocolModuleForget, domain.ProtocolBranchOwnerID, domain.ProtocolSessionRevocation, domain.ProtocolBranchFork, domain.ProtocolBranchMerge, domain.ProtocolJoinToken} {
 		if p > raftstore.Protocol {
 			t.Fatalf("protocol %d is above Protocol %d", p, raftstore.Protocol)
 		}
@@ -732,8 +733,8 @@ func TestFSM_フォークしたブランチの項目がスナップショット�
 }
 
 func TestFSM_マージ中のブランチはプロトコル26を要求しスナップショットでも維持される(t *testing.T) {
-	if raftstore.Protocol != domain.ProtocolBranchMerge {
-		t.Fatalf("raftstore.Protocol = %d, want %d", raftstore.Protocol, domain.ProtocolBranchMerge)
+	if raftstore.Protocol < domain.ProtocolBranchMerge {
+		t.Fatalf("raftstore.Protocol = %d, below %d", raftstore.Protocol, domain.ProtocolBranchMerge)
 	}
 	br := domain.Branch{Name: name("feature-x"), Base: name("prod"), Status: domain.BranchMerging}
 	if got := raftstore.PutBranch(br).Needs(); got != domain.ProtocolBranchMerge {
@@ -746,5 +747,79 @@ func TestFSM_マージ中のブランチはプロトコル26を要求しスナ�
 	apply(t, f, raftstore.PutBranch(br))
 	if f.State().Branches["feature-x"].Status != domain.BranchMerging {
 		t.Fatalf("status = %s, want %s", f.State().Branches["feature-x"].Status, domain.BranchMerging)
+	}
+}
+
+func TestFSM_Joinトークンの期限と1回限り消費がプロトコル27で動きスナップショットに残る(t *testing.T) {
+	if domain.ProtocolJoinToken != 27 {
+		t.Fatalf("ProtocolJoinToken = %d, want 27", domain.ProtocolJoinToken)
+	}
+	if got := raftstore.SetJoinToken("h1", time.Unix(2000, 0)).Needs(); got != domain.ProtocolJoinToken {
+		t.Fatalf("SetJoinToken.Needs() = %d, want %d", got, domain.ProtocolJoinToken)
+	}
+	if got := raftstore.ConsumeJoinSecret("h1", time.Unix(1000, 0)).Needs(); got != domain.ProtocolJoinToken {
+		t.Fatalf("ConsumeJoinSecret.Needs() = %d, want %d", got, domain.ProtocolJoinToken)
+	}
+
+	f := raftstore.NewFSM()
+	apply(t, f, raftstore.SetJoinToken("hash-1", time.Unix(2000, 0)))
+	if st := f.State(); st.JoinSecretHash != "hash-1" || st.JoinSecretExpiresAt != 2000 {
+		t.Fatalf("state after SetJoinToken = (%q, %d)", st.JoinSecretHash, st.JoinSecretExpiresAt)
+	}
+
+	// Snapshot preserves JoinSecretExpiresAt.
+	snap, err := f.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := snap.Persist(&sink{Buffer: &buf}); err != nil {
+		t.Fatal(err)
+	}
+	snap.Release()
+	g := raftstore.NewFSM()
+	if err := g.Restore(io.NopCloser(&buf)); err != nil {
+		t.Fatal(err)
+	}
+	if st := g.State(); st.JoinSecretHash != "hash-1" || st.JoinSecretExpiresAt != 2000 {
+		t.Fatalf("restored = (%q, %d)", st.JoinSecretHash, st.JoinSecretExpiresAt)
+	}
+
+	// Wrong secret fails and leaves the valid token intact.
+	if err, _ := g.Apply(&raft.Log{Data: mustEncode(raftstore.ConsumeJoinSecret("wrong", time.Unix(1000, 0)))}).(error); !errors.Is(err, raftstore.ErrInvalidJoinSecret) {
+		t.Fatalf("wrong secret = %v, want ErrInvalidJoinSecret", err)
+	}
+	// Valid secret succeeds once and clears the state.
+	apply(t, g, raftstore.ConsumeJoinSecret("hash-1", time.Unix(1000, 0)))
+	if st := g.State(); st.JoinSecretHash != "" || st.JoinSecretExpiresAt != 0 {
+		t.Fatalf("state after consume = (%q, %d)", st.JoinSecretHash, st.JoinSecretExpiresAt)
+	}
+	// Reusing the consumed secret fails.
+	if err, _ := g.Apply(&raft.Log{Data: mustEncode(raftstore.ConsumeJoinSecret("hash-1", time.Unix(1000, 0)))}).(error); !errors.Is(err, raftstore.ErrInvalidJoinSecret) {
+		t.Fatalf("reuse = %v, want ErrInvalidJoinSecret", err)
+	}
+
+	// Expired token is rejected and cleared.
+	apply(t, f, raftstore.SetJoinToken("hash-exp", time.Unix(2000, 0)))
+	if err, _ := f.Apply(&raft.Log{Data: mustEncode(raftstore.ConsumeJoinSecret("hash-exp", time.Unix(2000, 0)))}).(error); !errors.Is(err, raftstore.ErrExpiredJoinSecret) {
+		t.Fatalf("expired = %v, want ErrExpiredJoinSecret", err)
+	}
+	if st := f.State(); st.JoinSecretHash != "" || st.JoinSecretExpiresAt != 0 {
+		t.Fatalf("expired token not cleared: (%q, %d)", st.JoinSecretHash, st.JoinSecretExpiresAt)
+	}
+
+	// Legacy set_join_secret clears expiry and can be consumed once after upgrade.
+	apply(t, f, raftstore.SetJoinToken("hash-2", time.Unix(2000, 0)))
+	apply(t, f, raftstore.SetJoinSecret("legacy-hash"))
+	if st := f.State(); st.JoinSecretHash != "legacy-hash" || st.JoinSecretExpiresAt != 0 {
+		t.Fatalf("after legacy set_join_secret = (%q, %d)", st.JoinSecretHash, st.JoinSecretExpiresAt)
+	}
+	apply(t, f, raftstore.ConsumeJoinSecret("legacy-hash", time.Unix(9999, 0)))
+
+	// Incomplete commands fail cleanly.
+	for _, raw := range []string{`{"op":"set_join_token","name":"h"}`, `{"op":"set_join_token","expires":10}`, `{"op":"consume_join_secret","name":"h"}`, `{"op":"consume_join_secret","at":10}`} {
+		if _, ok := f.Apply(&raft.Log{Data: []byte(raw)}).(error); !ok {
+			t.Errorf("%s: want error", raw)
+		}
 	}
 }

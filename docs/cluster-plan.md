@@ -13,10 +13,10 @@ design.md §6・§8・§9 を実装する手順。各ステップで .deb を作
 ## C1. 状態の複製とメンバー管理
 
 - `hashicorp/raft` + `raft-boltdb` を agent に組み込む。リーダーは自動選出
-- FSM の状態: ベース、ブランチ、ノード、参加トークンのハッシュ
+- FSM の状態: ベース、ブランチ、ノード、参加トークンのハッシュ・有効期限
 - `domain.Store` の Raft 実装。読み取りは手元の状態、書き込みはリーダーで Apply（フォロワーはノード間 API でリーダーへ転送）
 - `db-branch cluster init`: クラスタ CA を作り、1 台構成で bootstrap。単一ノードの state.json があれば取り込む
-- `db-branch cluster token`: 参加トークン（CA 証明書の SHA-256 + 秘密値）を発行
+- `db-branch cluster token [--ttl <duration>]`: 1 回限り・有効期限付き（既定は設定 `cluster.join_token_ttl` の `24h`）の参加トークン（CA 証明書の SHA-256 + 秘密値）を発行。`POST /internal/v1/join` で CA を渡した時点で Raft ログ（`consume_join_secret`、Protocol 27）上で即座に消費され、期限切れや 2 回目以降の参加は `403` で拒否される。ローリング更新中の混在クラスタ（Protocol 27 未満）では旧来の `set_join_secret`（Protocol 1）にフォールバックし、参加時の消費も旧コマンドで消去することで参加が止まらない
 - `db-branch cluster join <addr> --token T`: CA をトークンのハッシュで検証してから参加。リーダーが非投票者として追加し、下の「投票者の上限と自動入れ替え」に従って昇格する（リーダーが古い版なら従来どおり投票者として追加される）
 - `db-branch cluster remove <node> [--force]`: 故障した（または退役する）ノードをクラスタから外す。Raft の構成とノード一覧から消す。API は `DELETE /v1/cluster/nodes/{name}`。リーダーが行い、フォロワーに届いた要求はリーダーへ転送される
   - 投票者を外した結果、残る投票者の健全な数が過半数に満たなくなる削除は `409 conflict` で拒否する（先に別のノードを昇格させるか、故障を直す）。リーダー自身は外せない（別のノードから実行する）
@@ -44,7 +44,7 @@ design.md §6・§8・§9 を実装する手順。各ステップで .deb を作
 - 配置は API を受けたノードが決める（`domain.Placement`）。候補はベースのスナップショットを持つノード（C3 まではベースのノードだけ）のうち、稼働中でメモリ予算（物理メモリの 3/4 を `buffer pool + 256MB` で割った数）に余裕があるもの。ブランチ数が少ないノードを優先し、同数なら名前順
   - 当初はリーダーが決める案だったが、名前の予約を Raft の条件付き挿入（`insert_branch` / `insert_base`、重複は `ErrAlreadyExists`）にしたので、どのノードが決めても衝突しない。偏りが出ても次の配置で均される
 - ポートはノードごとに割り当てる（同じポート番号が別ノードにあってよい）
-- 担当ノードが別なら、API を受けたノードがノード間 API の `/internal/v1/api/` へ要求をそのまま中継する（mTLS。セッション Cookie は渡さない。`X-Db-Branch-Forwarded` で二重転送を防ぐ）。ベースの操作（スナップショット・起動・停止・削除）も同じ
+- 担当ノードが別なら、API を受けたノードがノード間 API の `/internal/v1/api/` へ要求をそのまま中継する（mTLS。セッション Cookie は渡さない。`X-Db-Branch-Forwarded` で二重転送を防ぐ）。ただしソケット限定の操作（`POST /v1/auth/reset`、`POST /v1/backups/restore`、`POST /v1/cluster/token`）は `/internal/v1/api/` 経由でも `403 socket_only` で拒否する。ベースの操作（スナップショット・起動・停止・削除）も同じ
 - usecase 側でも担当外の操作は `ErrOtherNode` で断る。期限切れの削除と再起動後の復旧は自分の担当分だけ
 - オペレーションを Raft に記録し、どのノードからでも見える。変更通知（SSE）は各ノードが Raft の適用結果から流す。agent の再起動時に自分が実行中だった操作は失敗扱いにする。終わった操作は新しい 200 件だけ残す
 - フォロワーへの書き込みは、自分の FSM に反映されるまで待ってから返す（書いた直後の読み取りで見える）。中継した側も、転送先で始まった操作が自分に届くまで待って 202 を返す

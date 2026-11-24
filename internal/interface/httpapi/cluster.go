@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -69,8 +70,9 @@ type ClusterStatus struct {
 // Cluster is present when the node runs in cluster mode.
 type Cluster interface {
 	Status(ctx context.Context) (ClusterStatus, error)
-	// NewToken issues a join token (and invalidates the previous one).
-	NewToken(ctx context.Context) (string, error)
+	// NewToken issues a join token (and invalidates the previous one). A zero
+	// ttl uses the cluster's configured default.
+	NewToken(ctx context.Context, ttl time.Duration) (string, time.Time, error)
 	// Forward returns a handler that runs /v1 requests on node.
 	Forward(node string) (http.Handler, error)
 	// NodeHost is how clients reach node's database servers ("" if unknown).
@@ -255,20 +257,39 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) clusterToken(local bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !local {
-			writeError(w, http.StatusForbidden, "socket_only", "run `db-branch cluster token` on a node")
+		if !allowSocketOnly(w, r, local, "run `db-branch cluster token` on a node") {
 			return
 		}
 		if s.Cluster == nil {
 			writeError(w, http.StatusConflict, "not_clustered", "run `db-branch cluster init` first")
 			return
 		}
-		tok, err := s.Cluster.NewToken(r.Context())
+		var in struct {
+			TTL string `json:"ttl"`
+		}
+		if r.Body != nil {
+			dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+				writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body: "+err.Error())
+				return
+			}
+		}
+		ttl, err := parseTTL(in.TTL)
 		if err != nil {
 			fail(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+		tok, exp, err := s.Cluster.NewToken(r.Context(), ttl)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		out := map[string]any{"token": tok}
+		if !exp.IsZero() {
+			out["expires_at"] = ts(exp)
+		}
+		writeJSON(w, http.StatusOK, out)
 	}
 }
 

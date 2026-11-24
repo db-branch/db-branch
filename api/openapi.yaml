@@ -2089,17 +2089,31 @@ paths:
       x-dbb-action: cluster.token
       x-dbb-token-scopes: [full]
       description: |-
-        Creates a token for joining a node to the cluster (a new one invalidates the previous). Works only over a node's local socket (`db-branch cluster token`); over HTTPS it answers `403 socket_only`. Joining itself is done by the CLI against the nodes' internal API and is not part of this API.
+        Creates a single-use token for joining a node to the cluster (a new one invalidates the previous). The token expires after `ttl` (default from the `cluster.join_token_ttl` setting, `24h`) and cannot be reused after a node fetches the cluster CA with it. Works only over a node's local socket (`db-branch cluster token`); over HTTPS or node-to-node forwarding it answers `403 socket_only`. Joining itself is done by the CLI against the nodes' internal API and is not part of this API.
 
         **Action:** `cluster.token`. Needs a console session of an admin, the local socket, or a `full` token.
       security:
         - localSocket: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                ttl: {type: string, description: Go duration until the token expires (for example `24h`). Omit for `cluster.join_token_ttl`.}
       responses:
         '200':
           description: The token.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ClusterToken'}
+        '400':
+          description: 'invalid_request: malformed JSON or invalid ttl.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403':
           description: socket_only (or forbidden).
@@ -4681,9 +4695,10 @@ components:
     ClusterToken:
       type: object
       properties:
-        token: {type: string, description: Join token. A new one invalidates the previous.}
+        token: {type: string, description: Single-use join token. A new one invalidates the previous.}
+        expires_at: {type: string, format: date-time, description: UTC expiry time (omitted only during mixed-version rolling upgrades).}
       required: [token]
-      example: {token: <join token>}
+      example: {token: <join token>, expires_at: '2026-11-25T12:00:00Z'}
     ClusterNodeRemoval:
       type: object
       properties:
