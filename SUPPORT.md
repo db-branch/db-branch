@@ -1,6 +1,6 @@
 # Support
 
-db-branch is a Beta project maintained by one person. **No support is promised**: Issues are read when possible, with no response times.
+db-branch is an independent open-source project maintained by one person. **No support is promised**: Issues are read when possible, with no response times.
 
 Where to look first:
 

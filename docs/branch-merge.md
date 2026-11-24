@@ -56,7 +56,7 @@
 `live` ライン（番号 $L$）と `source_line`（番号 $S$）の履歴木を `PropParent` / `PropFrom` に沿ってルート方向へ辿り、以下のルールで共通祖先スナップショット $A$ を決定する。
 
 1. $L$ が $S$ から分岐した子孫（例: $L=1$ が $S=0$ の `ckpt-c1` から `restore` で分岐）の場合: 共通祖先 $A$ は分岐点の `ckpt-c1`（または `reset`）。
-   - **削除済みチェックポイント（`gone-*`）への追従**: ユーザーが `ckpt-c1` を削除した場合でも、クローンが存在する間は ZFS 上に `gone-<ts>` として残っている（[checkpoints.md §6](checkpoints.md#L78)）。`PropFrom` で名前が見つからない場合は、`promoteOwn`（[restore.go](../internal/usecase/dbbranch/restore.go#L603-L615)）による親子逆転後でも特定できるよう、`family` 全体の `SnapshotInfo.Clones` の逆引きと `PropLine`（元のチェックポイントが属していたライン番号）を用いて該当する `gone-*` スナップショットを探索する。
+   - **削除済みチェックポイント（`gone-*`）への追従**: ユーザーが `ckpt-c1` を削除した場合でも、クローンが存在する間は ZFS 上に `gone-<ts>` として残っている（[checkpoints.md §6](checkpoints.md#L78)）。`PropFrom` で名前が見つからない場合は、`promoteOwn`（[restore.go](../internal/usecase/dbbranch/restore.go#L591-L608)）による親子逆転後でも特定できるよう、`family` 全体の `SnapshotInfo.Clones` の逆引きと `PropLine`（元のチェックポイントが属していたライン番号）を用いて該当する `gone-*` スナップショットを探索する。
 2. 共通の親ライン $P$ から $S$ と $L$ の両方が分岐した兄弟・従兄弟ライン（例: $S=1$ が `line 0` の `ckpt-c1` から、$L=2$ が `line 0` の `ckpt-c2` から分岐）の場合:
    - `ckpt-c1` と `ckpt-c2` のどちらが先かを ZFS の `createtxg`（トランザクショングループ番号。`CreatedAt` は 1 秒解像度のため、`SnapshotInfo` に `CreateTXG uint64` を追加して比較）で判定し、**古い方のスナップショット**を共通祖先 $A$ とする。
 3. **共通祖先を特定できない場合（`no_common_ancestor`）**:

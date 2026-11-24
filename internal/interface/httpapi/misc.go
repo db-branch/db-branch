@@ -418,7 +418,7 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 
 // resetPassword sets a new random admin password (for the whole cluster in
 // cluster mode) and ends every session. Socket only: whoever can reach the
-// socket is root or in the db-branch group on a node.
+// socket is root or in the db-branch-admin group on a node.
 func (s *Server) resetPassword(local bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !allowSocketOnly(w, r, local, "run `db-branch admin reset-password` on a node") {

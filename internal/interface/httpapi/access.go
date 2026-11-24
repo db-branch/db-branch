@@ -75,7 +75,7 @@ func delHeadersFold(h http.Header, names ...string) {
 }
 
 // LocalPrincipal acts for whoever can reach the agent's socket (root or the
-// db-branch group on the node).
+// db-branch-admin group on the node).
 var LocalPrincipal = ext.Principal{ID: "local", Name: "local", Roles: []string{"admin"}}
 
 func (s *Server) localPrincipal(next http.Handler) http.Handler {

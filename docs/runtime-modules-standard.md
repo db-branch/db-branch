@@ -3,14 +3,17 @@
 MySQL / PostgreSQL に続く新しいデータベースエンジン（ClickHouse 等）を、コアを変更せずに独立したモジュール（サードパーティ製を含む）として配布・実行できるようにするための標準契約、依存機能の標準化、配布・信頼モデル、および移行計画を定義する。
 
 > [!NOTE]
-> **main v0.2.7 での再照合（2026-11-19）**
-> `v0.2.6` / `v0.2.7` で導入されたセキュリティ強化（管理ソケット・設定の `db-branch-admin` グループ分離、`InaccessiblePaths`、DB ログインの非スーパーユーザー化、`init_sql` の `ExecAs` 実行）および `docs/security-review.md`（SEC-22）の指摘を踏まえ、現行コードベースと再照合した。主な変更点は以下の通り。
+> **1.0 (GA) 時点の実装状況と位置づけ（2026-11-24）**
+> 本仕様書の Phase 1〜4（`RuntimeRegistry`・`RuntimeProvider`・`pkg/ext/proto/runtime/v1` gRPC 契約・Ed25519 署名検証・`db-branch-rt@.service`・`db-branch-conformance`・`module install github.com/...`・外部ランタイムでの `upgrade` / `source_dump`）は `main` に実装済みです（Raft `ProtocolRuntimeModules = 21`）。1.0 では **Experimental（単一ノード限定、クラスタ構成時は警告・制限）** として提供し、Web コンソール側の Capability 駆動 UI の全面統合は GA 後としています。
+>
+> **v0.2.7 時点の再照合（2026-11-19）**
+> `v0.2.6` / `v0.2.7` で導入されたセキュリティ強化（管理ソケット・設定の `db-branch-admin` グループ分離、`InaccessiblePaths`、DB ログインの非スーパーユーザー化、`init_sql` の `ExecAs` 実行）および内部セキュリティレビュー（SEC-22）の指摘を踏まえ、現行コードベースと再照合した。主な変更点は以下の通り。
 >
 > | 項目 | 変更前 | 変更後（v0.2.7 照合後） | 理由 |
 > |---|---|---|---|
 > | **systemd パス隔離と権限分離の前提** | `db-branch` ユーザーと `root` の分離のみを前提とし、`db-branch-rt@.service` に `InaccessiblePaths` 未指定 | `db-branch-rt@.service` にも `InaccessiblePaths=/run/db-branch /etc/db-branch` を必須化。`db-branch-admin` 分離後も既存 DB の `DataDir`・ソケットは `db-branch` 所有のため、`db-branch-rt-<engine>` 分離結論は維持 | `v0.2.7` で `agent_http.go` / `postinst` / `db-branch-mysqld@.service` / `db-branch-postgres@.service` に導入された多層防御と整合させるため |
 > | **`RuntimeProvider` の `ExecAs` と非特権 `CreateUser`** | `CreateUser` と `Query` のみで、`init_sql` の実行権限やログイン権限上限が未規定 | `RuntimeProvider` に `ExecAs` を追加し、`CreateUser` に非スーパーユーザー・OS ファイル/プログラム実行不可（および起動・復旧・復元時の再適用）を契約化 | `v0.2.7` で `DBServer.ExecAs` と非スーパーユーザー `CreateUser`（`mysql` `clientPrivileges`+`partial_revokes`, `postgres` `NOSUPERUSER`+`OwnerRole`）が導入されたため |
-> | **`LaunchPlan` / `Catalog()` の境界防御** | `override.conf` 書き出し時のサニタイズや `Catalog()` URL 検証が未規定 | `LaunchPlan` → `override.conf` の改行・ディレクティブインジェクション拒否、`Catalog()` URL の SSRF 検証、同一エンジン内影響範囲の明記を追加 | `docs/security-review.md`（SEC-22）の指摘を設計契約として取り込むため |
+> | **`LaunchPlan` / `Catalog()` の境界防御** | `override.conf` 書き出し時のサニタイズや `Catalog()` URL 検証が未規定 | `LaunchPlan` → `override.conf` の改行・ディレクティブインジェクション拒否、`Catalog()` URL の SSRF 検証、同一エンジン内影響範囲の明記を追加 | 内部セキュリティレビュー（SEC-22）の指摘を設計契約として取り込むため |
 
 ---
 

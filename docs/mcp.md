@@ -29,9 +29,9 @@
 |---|---|
 | `list_bases` | ベースとスナップショット |
 | `list_branches` | ブランチの一覧 |
-| `create_branch` | ベースからブランチを作り（完了まで待つ）、接続先（dsn）を返す。`ttl`・`init_sql` を指定できる |
-| `get_branch` | ブランチと接続先 |
-| `query` | ブランチで SQL を 1 文実行。行（文字列）か影響行数を返す。最大 1000 行、30 秒 |
+| `create_branch` | ベースからブランチを作り（完了まで待つ）、接続先（dsn）を返す。`ttl`・`init_sql`・`snapshot`・`access`・`record`・`runtime` を指定できる |
+| `get_branch` | ブランチと接続先（引数 `branch`、旧 `name` も互換受理） |
+| `query` | ブランチで SQL を 1 文実行（`database` で接続先 DB 指定可）。行（文字列）か影響行数を返す。最大 1000 行、30 秒 |
 | `create_checkpoint` | 稼働中のブランチの今の状態をチェックポイントとして保存する（一瞬。`name` は省略可）。危ない作業の前に取る |
 | `list_checkpoints` | ブランチのチェックポイント（時刻・容量・`current`・`auto`） |
 | `restore_checkpoint` | チェックポイントの状態に戻す（完了まで待つ）。今の状態は置き換わり、最後のチェックポイントより後の変更は復元で失われる（残したい場合は先に `create_checkpoint` を呼ぶ）。取ってあるチェックポイントはすべて残る |
@@ -39,9 +39,9 @@
 | `merge_line` | 同一ブランチ内で `restore_checkpoint` により分岐した履歴ライン（`source_line` または `checkpoint`）の変更を現在のライブラインへ 3-way マージする（`dry_run: true` で事前検証可、コンフリクト時はライブを変更せず失敗）。[branch-merge.md](branch-merge.md) |
 | `check_upgrade` | ブランチを新しいバージョンのランタイムに上げると何に当たるかを調べる（何も変えない）。指摘は `error` `warning` `info` |
 | `upgrade_branch` | そのブランチだけを新しいバージョンに上げる（完了まで待つ）。先に Checkpoint を取り、失敗したら自動で戻る。結果に事前確認の指摘とサーバーログの警告が付く。`create_branch` の `runtime` で、作ってすぐ上げることもできる。[upgrade.md](upgrade.md) |
-| `reset_branch` | 作成直後（init SQL の後）に戻す。チェックポイントは残る |
-| `extend_branch` | 期限を延ばす |
-| `delete_branch` | 削除する |
+| `reset_branch` | 作成直後（init SQL の後）に戻す（引数 `branch`、旧 `name` も互換受理）。チェックポイントは残る |
+| `extend_branch` | 期限を延ばす（引数 `branch` と `ttl`、旧 `name` も互換受理） |
+| `delete_branch` | 削除する（引数 `branch`、旧 `name` も互換受理） |
 
 ## つなぎ方（Claude Code）
 
