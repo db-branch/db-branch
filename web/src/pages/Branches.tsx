@@ -49,7 +49,16 @@ export function Branches() {
         />
       )}
       {branches && branches.length > 0 && <FilterBar values={filter} onChange={setFilter} facets={facets} shown={shown.length} total={all.length} />}
-      {branches && branches.length > 0 && shown.length === 0 && <p className="muted">{t("No match")}</p>}
+      {branches && branches.length > 0 && shown.length === 0 && (
+        <Empty
+          line={t("No matching branches.")}
+          action={
+            <button type="button" onClick={() => setFilter({ q: "", status: "", engine: "", base: "", owner: "" })}>
+              {t("Clear filters")}
+            </button>
+          }
+        />
+      )}
       {branches && shown.length > 0 && (
         <div className="table-wrap">
           <table className="rows">
@@ -233,7 +242,7 @@ export function DeleteBranch({ branch, onClose, onDeleted }: { branch: Branch; o
     <Dialog title={t("Delete {name}?", { name: branch.name })} onClose={onClose}>
       <p className="muted">{t("Data in this branch is lost. Created {when}.", { when: relative(branch.created_at) })}</p>
       <Field label={t("Type the branch name")}>
-        <input className="mono" value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus />
+        <input className="mono" value={typed} placeholder={branch.name} onChange={(e) => setTyped(e.target.value)} autoFocus />
       </Field>
       <ErrorLine error={error} />
       <div className="form-actions">

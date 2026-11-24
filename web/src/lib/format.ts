@@ -1,5 +1,55 @@
 // Display helpers. Kept pure so they can be tested without a browser.
-import { t } from "./i18n";
+import { language, t } from "./i18n";
+
+function localeTag(): string | undefined {
+  return language() === "ja" ? "ja-JP" : undefined;
+}
+
+function parseDate(iso: string): Date | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+export function formatDate(iso: string): string {
+  const d = parseDate(iso);
+  if (!d) return iso || "—";
+  if (language() === "ja") {
+    return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+  }
+  return d.toLocaleDateString();
+}
+
+export function formatDateTime(iso: string): string {
+  const d = parseDate(iso);
+  if (!d) return iso || "—";
+  if (language() === "ja") {
+    return new Intl.DateTimeFormat("ja-JP", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(d);
+  }
+  return d.toLocaleString(localeTag());
+}
+
+export function formatTime(iso: string): string {
+  const d = parseDate(iso);
+  if (!d) return iso || "—";
+  if (language() === "ja") {
+    return new Intl.DateTimeFormat("ja-JP", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(d);
+  }
+  return d.toLocaleTimeString(localeTag());
+}
 
 export function bytes(n: number): string {
   if (n < 1024) return `${n} B`;

@@ -108,6 +108,8 @@ describe("seed", () => {
     expect(dsn).toMatch(/^postgres:\/\/[^:]+:demo@demo\.invalid:\d+\/\w+$/);
     expect(get<{ dsn: string }>("/v1/branches/report-fix/dsn").dsn).toMatch(/^mysql:\/\/[^:]+:demo@demo\.invalid:\d+\/\w+$/);
     expect(get<{ dsn: string }>("/v1/branches/report-fix/dsn?via=proxy").dsn).toMatch(/^mysql:\/\/report-fix:demo@demo\.invalid:6033\//);
+    expect(get<{ items: { name: string; runtime: string; proxy: unknown }[] }>("/v1/branches").items.find((b) => b.runtime.startsWith("postgres"))?.proxy).toBeNull();
+    expect(get<{ anonymous: { rate_per_hour?: number } }>("/v1/public/bases").anonymous.rate_per_hour).toBeGreaterThan(0);
   });
 });
 
@@ -211,7 +213,7 @@ describe("anonymous visitors", () => {
     const p = get("/v1/public/bases");
     expect(p.items.map((x: any) => x.name)).toEqual(["storefront"]);
     expect(p.items[0].snapshots).toHaveLength(1);
-    expect(p.anonymous).toEqual({ max_ttl: "4h0m0s", max_branches: 2 });
+    expect(p.anonymous).toEqual({ max_ttl: "4h0m0s", max_branches: 2, rate_per_hour: 5 });
   });
   it("may branch from a public snapshot for at most four hours, two at a time", () => {
     expect(call("POST", "/v1/branches", { name: "anon-a", base: "storefront", ttl: "4h" })).toMatchObject({ status: 202 });

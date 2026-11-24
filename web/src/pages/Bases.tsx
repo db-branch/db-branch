@@ -1,5 +1,6 @@
 import { FormEvent, useContext, useState } from "react";
-import { api, Base, Branch, can, canBase } from "../api";
+import { api, Base, Branch, can, canBase, ownerLabel } from "../api";
+import { BranchName } from "../components/branchname";
 import { Engine, Icon, Status } from "../components/marks";
 import { Dialog, Drawer, Empty, ErrorLine, ErrorText, Field, Info } from "../components/ui";
 import { skippedReasons } from "../lib/bases";
@@ -8,7 +9,7 @@ import { engineOf, filterBases, optionsOf } from "../lib/filter";
 import { useFilter } from "../lib/usefilter";
 import { GoContext } from "../lib/gocontext";
 import { ADMIN } from "../lib/nav";
-import { relative } from "../lib/format";
+import { formatDateTime, relative } from "../lib/format";
 import { LocalizedError, serverError } from "../lib/errors";
 import { useLive, useNow } from "../lib/live";
 import { t } from "../lib/i18n";
@@ -49,7 +50,16 @@ export function Bases() {
       <ErrorLine error={error} />
       {bases && bases.length === 0 && <Empty line={t("No bases.")} action={can("base.create") ? <button onClick={() => setCreating(true)}>{t("Create a base")}</button> : undefined} />}
       {all.length > 0 && <FilterBar values={filter} onChange={setFilter} facets={facets} shown={shown.length} total={all.length} />}
-      {all.length > 0 && shown.length === 0 && <p className="muted">{t("No match")}</p>}
+      {all.length > 0 && shown.length === 0 && (
+        <Empty
+          line={t("No matching bases.")}
+          action={
+            <button type="button" onClick={() => setFilter({ q: "", status: "", engine: "", node: "" })}>
+              {t("Clear filters")}
+            </button>
+          }
+        />
+      )}
       <div className="bases">
         {shown.map((b) => (
           <BaseLine key={b.name} base={b} branches={usedBy(b.name)} nodes={nodes} href={`${ADMIN}/bases/${encodeURIComponent(b.name)}`} onOpen={() => go(`${ADMIN}/bases/${encodeURIComponent(b.name)}`)} />
@@ -165,6 +175,7 @@ export function BaseBody({
   onUpdate: () => void;
   onDelete: () => void;
 }) {
+  const go = useContext(GoContext);
   const [error, setError] = useState<unknown>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const run = (p: Promise<unknown>) => p.then(() => setError(null), (e: unknown) => setError(e));
@@ -213,71 +224,73 @@ export function BaseBody({
         <h3>
           Snapshots <span className="muted">{base.snapshots.length}</span>
         </h3>
-        <table className="rows compact">
-          <thead>
-            <tr>
-              <th>{t("Name")}</th>
-              <th>{t("Taken")}</th>
-              <th>{t("Branches")}</th>
-              <th>
-                <span className="th-info">
-                  Access <Info label={t("What public means")}>{publicHelp()}</Info>
-                </span>
-              </th>
-              {clustered && <th>{t("Nodes")}</th>}
-              <th aria-label={t("Actions")} />
-            </tr>
-          </thead>
-          <tbody>
-            {[...base.snapshots].reverse().map((s) => {
-              const latest = s.name === base.latest_snapshot;
-              const used = count(s.name);
-              return (
-                <tr key={s.name}>
-                  <td>
-                    <span className="mono">{s.name}</span>
-                    {latest && <span className="badge">latest</span>}
-                  </td>
-                  <td className="muted" title={new Date(s.created_at).toLocaleString()}>
-                    {relative(s.created_at)}
-                  </td>
-                  <td className="mono">{used}</td>
-                  <td>
-                    <div className="segmented small" role="radiogroup" aria-label={`Access to ${s.name}`} aria-disabled={!canBase(base, "base.publish")}>
-                      <button type="button" role="radio" aria-checked={!s.public} className={!s.public ? "on" : ""} disabled={!canBase(base, "base.publish")} onClick={() => s.public && run(api.setSnapshotPublic(base.name, s.name, false))}>
-                        {t("Private")}
-                      </button>
-                      <button type="button" role="radio" aria-checked={s.public} className={s.public ? "on" : ""} disabled={!canBase(base, "base.publish")} onClick={() => !s.public && run(api.setSnapshotPublic(base.name, s.name, true))}>
-                        {t("Public")}
-                      </button>
-                    </div>
-                  </td>
-                  {clustered && (
+        <div className="table-wrap">
+          <table className="rows compact">
+            <thead>
+              <tr>
+                <th>{t("Name")}</th>
+                <th>{t("Taken")}</th>
+                <th>{t("Branches")}</th>
+                <th>
+                  <span className="th-info">
+                    Access <Info label={t("What public means")}>{publicHelp()}</Info>
+                  </span>
+                </th>
+                {clustered && <th>{t("Nodes")}</th>}
+                <th aria-label={t("Actions")} />
+              </tr>
+            </thead>
+            <tbody>
+              {[...base.snapshots].reverse().map((s) => {
+                const latest = s.name === base.latest_snapshot;
+                const used = count(s.name);
+                return (
+                  <tr key={s.name}>
                     <td>
-                      <Holders nodes={nodes} holders={[base.node, ...(base.replicas[s.name] ?? [])]} skipped={skippedReasons(base.holders)} />
+                      <span className="mono">{s.name}</span>
+                      {latest && <span className="badge">latest</span>}
                     </td>
-                  )}
-                  <td className="col-actions">
-                    {latest || used > 0 ? (
-                      <span className="muted small" title={latest ? t("The latest snapshot is kept") : t("Branches use it")}>
-                        {latest ? "kept" : "in use"}
-                      </span>
-                    ) : !(canBase(base, "base.snapshot.delete") || canBase(base, "base.snapshot_delete")) ? null : (
-                      <button
-                        type="button"
-                        className="text-button danger"
-                        onClick={() => (confirming === s.name ? (setConfirming(null), run(api.deleteSnapshot(base.name, s.name))) : setConfirming(s.name))}
-                        onBlur={() => setConfirming(null)}
-                      >
-                        {confirming === s.name ? t("Really delete?") : t("Delete")}
-                      </button>
+                    <td className="muted" title={formatDateTime(s.created_at)}>
+                      {relative(s.created_at)}
+                    </td>
+                    <td className="mono">{used}</td>
+                    <td>
+                      <div className="segmented small" role="radiogroup" aria-label={`Access to ${s.name}`} aria-disabled={!canBase(base, "base.publish")}>
+                        <button type="button" role="radio" aria-checked={!s.public} className={!s.public ? "on" : ""} disabled={!canBase(base, "base.publish")} onClick={() => s.public && run(api.setSnapshotPublic(base.name, s.name, false))}>
+                          {t("Private")}
+                        </button>
+                        <button type="button" role="radio" aria-checked={s.public} className={s.public ? "on" : ""} disabled={!canBase(base, "base.publish")} onClick={() => !s.public && run(api.setSnapshotPublic(base.name, s.name, true))}>
+                          {t("Public")}
+                        </button>
+                      </div>
+                    </td>
+                    {clustered && (
+                      <td>
+                        <Holders nodes={nodes} holders={[base.node, ...(base.replicas[s.name] ?? [])]} skipped={skippedReasons(base.holders)} />
+                      </td>
                     )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                    <td className="col-actions">
+                      {latest || used > 0 ? (
+                        <span className="muted small" title={latest ? t("The latest snapshot is kept") : t("Branches use it")}>
+                          {latest ? "kept" : "in use"}
+                        </span>
+                      ) : !(canBase(base, "base.snapshot.delete") || canBase(base, "base.snapshot_delete")) ? null : (
+                        <button
+                          type="button"
+                          className="text-button danger"
+                          onClick={() => (confirming === s.name ? (setConfirming(null), run(api.deleteSnapshot(base.name, s.name))) : setConfirming(s.name))}
+                          onBlur={() => setConfirming(null)}
+                        >
+                          {confirming === s.name ? t("Really delete?") : t("Delete")}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
         <p className="muted small">{t("Older snapshots no branch uses are deleted automatically once a newer one exists (Settings → Prune old snapshots).")}</p>
 
         <AnonymousCard base={base} branches={branches} />
@@ -292,7 +305,17 @@ export function BaseBody({
             {branches.map((b) => (
               <li key={b.name}>
                 <Status status={b.status} />
-                <span className="mono">{b.id || b.name}</span>
+                <a
+                  className="branch-link"
+                  href={`${ADMIN}/branches/${encodeURIComponent(b.name)}`}
+                  onClick={(e) => {
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                    e.preventDefault();
+                    go(`${ADMIN}/branches/${encodeURIComponent(b.name)}`);
+                  }}
+                >
+                  <BranchName name={b.name} owner={ownerLabel(b)} />
+                </a>
                 <span className="muted mono">@{b.snapshot}</span>
               </li>
             ))}

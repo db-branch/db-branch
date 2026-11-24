@@ -66,6 +66,12 @@ describe("ModuleRow の Paid バッジ", () => {
     expect(render(mod({ wanted: true, requires_license: true }), { licensed: true, trial: true, licenseAll: true })).toContain("Paid · trial");
     expect(render(mod({ wanted: true, requires_license: false }), { licensed: true, trial: true, licenseAll: true })).not.toContain("paid-badge");
   });
+
+  it("renders American spelling license (not licence) in user-facing labels", () => {
+    const h = renderToStaticMarkup(<ModuleRow name="audit" description="Audit" state={mod({ wanted: true, requires_license: true })} licensed={false} trial={false} onEnable={noop} onDisable={noop} />);
+    expect(h).toContain("license");
+    expect(h.toLowerCase()).not.toContain("licence");
+  });
 });
 
 describe("ForgetModuleDialog", () => {

@@ -8,7 +8,7 @@ import { hooks, moduleFrame } from "./lib/hooks";
 import { chooseLanguage, language, remembered, setLanguage, t } from "./lib/i18n";
 import { GoContext } from "./lib/gocontext";
 import { disconnect, useLive } from "./lib/live";
-import { activeId, ADMIN, ancestorsOf, buildNav, expandFor, legacyRedirect, loadOpen, resolveRoute, saveOpen } from "./lib/nav";
+import { activeId, ADMIN, ancestorsOf, buildNav, expandFor, legacyRedirect, loadOpen, reconcileOpen, resolveRoute, saveOpen } from "./lib/nav";
 import { Bases } from "./pages/Bases";
 import { BaseDetailPage } from "./pages/BaseDetailPage";
 import { BranchDetail } from "./pages/BranchDetail";
@@ -225,8 +225,9 @@ function Shell({ session, onLogout }: { session: Session; onLogout: () => void }
   // Navigating (or going back) opens the groups that hold the page.
   const trail = ancestorsOf(route).join(" ");
   useEffect(() => {
+    const mobile = typeof window !== "undefined" && Boolean(window.matchMedia?.("(max-width: 760px)").matches);
     setOpen((o) => {
-      const next = expandFor(o, trail ? trail.split(" ") : []);
+      const next = reconcileOpen(o, trail ? trail.split(" ") : [], mobile);
       if (next !== o) saveOpen(next);
       return next;
     });

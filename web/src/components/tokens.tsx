@@ -1,6 +1,7 @@
 import { apiHost } from "../lib/host";
 import { FormEvent, useState } from "react";
 import { APIToken } from "../api";
+import { formatDate } from "../lib/format";
 import { t } from "../lib/i18n";
 import { useLive } from "../lib/live";
 import { CopyButton } from "./marks";
@@ -40,20 +41,22 @@ export function TokenManager({ title, hint, list, create, revoke, withScope, pla
       <h2 className="section-title">{title}</h2>
       <p className="field-hint">{hint}</p>
       {tokens && tokens.length === 0 && <p className="muted small">{t("None yet.")}</p>}
-      <table className="rows tokens">
-        <tbody>
-          {(tokens ?? []).map((tok) => (
-            <tr key={tok.id}>
-              <td className="mono strong">{tok.name}</td>
-              {withScope && <td className="mono muted">{tok.scope}</td>}
-              <td className="muted">{tok.expires_at ? t("until {date}", { date: new Date(tok.expires_at).toLocaleDateString() }) : t("no expiry")}</td>
-              <td className="col-actions">
-                <button onClick={() => run(revoke(tok.id))}>{t("Revoke")}</button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="table-wrap">
+        <table className="rows tokens">
+          <tbody>
+            {(tokens ?? []).map((tok) => (
+              <tr key={tok.id}>
+                <td className="mono strong">{tok.name}</td>
+                {withScope && <td className="mono muted">{tok.scope}</td>}
+                <td className="muted">{tok.expires_at ? t("until {date}", { date: formatDate(tok.expires_at) }) : t("no expiry")}</td>
+                <td className="col-actions">
+                  <button onClick={() => run(revoke(tok.id))}>{t("Revoke")}</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <form className="token-form" onSubmit={submit}>
         <input className="mono" value={name} onChange={(e) => setName(e.target.value)} placeholder={placeholder} required maxLength={64} />
         {withScope && (

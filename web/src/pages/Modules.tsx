@@ -3,7 +3,7 @@ import { api, can, isAdmin, LicenseReport, ModuleState, SettingScope } from "../
 import { ScopeForm } from "../components/scopeform";
 import { Dialog, ErrorLine, ErrorText } from "../components/ui";
 import { serverError } from "../lib/errors";
-import { relative } from "../lib/format";
+import { formatDate, relative } from "../lib/format";
 import { billingLabel, Renewal, renewalInfo, resultLabel } from "../lib/license";
 import { useLive } from "../lib/live";
 import { t } from "../lib/i18n";
@@ -150,9 +150,9 @@ export function ModuleRow({
           <a
             href="/admin/modules#license"
             className={`paid-badge ${licensed ? "ok" : "need"}`}
-            title={licensed ? (trial ? t("Works without a key during the trial") : t("Your licence covers this module")) : t("This module works only with a licence key that covers it")}
+            title={licensed ? (trial ? t("Works without a key during the trial") : t("Your license covers this module")) : t("This module works only with a license key that covers it")}
           >
-            {licensed ? (trial ? t("Paid · trial") : t("Paid · licensed")) : t("Paid · needs licence")}
+            {licensed ? (trial ? t("Paid · trial") : t("Paid · licensed")) : t("Paid · needs license")}
           </a>
         )}
         {on && <span className="mono muted">{state!.version}</span>}
@@ -246,18 +246,18 @@ function LicenseCard({ current, paid, onApplied }: { current?: { configured: boo
       <div className="license-head">
         <h3>{t("License")}</h3>
         <span className="muted small">
-          {t("Paid modules{list} work for 30 days without a key, then only with a licence key that covers them. Free modules need none.", { list: paid.length > 0 ? ` (${paid.join(", ")})` : "" })}
+          {t("Paid modules{list} work for 30 days without a key, then only with a license key that covers them. Free modules need none.", { list: paid.length > 0 ? ` (${paid.join(", ")})` : "" })}
         </span>
       </div>
       <div className="license-status">
-        {!current?.configured && !trial && <span className="muted">{t("No licence key. The 30-day trial begins when the first paid module is enabled.")}</span>}
+        {!current?.configured && !trial && <span className="muted">{t("No license key. The 30-day trial begins when the first paid module is enabled.")}</span>}
         {trial && trial.state === "valid" && (
           <>
             <span className="state-badge ok">{t("trial")}</span>
-            <span>{t("Every paid module works without a key until {date} ({n} days left).", { date: trialEnd!.toLocaleDateString(), n: trialDays })}</span>
+            <span>{t("Every paid module works without a key until {date} ({n} days left).", { date: formatDate(trial.license.expires), n: trialDays })}</span>
           </>
         )}
-        {trial && trial.state !== "valid" && <span className="warn">{t("The 30-day trial ended on {date}: paid modules are inactive until a licence key is saved.", { date: trialEnd!.toLocaleDateString() })}</span>}
+        {trial && trial.state !== "valid" && <span className="warn">{t("The 30-day trial ended on {date}: paid modules are inactive until a license key is saved.", { date: formatDate(trial.license.expires) })}</span>}
         {current?.configured && current.error && (
           <span className="warn">
             {t("The saved key cannot be verified:")} <ErrorText error={serverError(current.error)} />
@@ -269,7 +269,7 @@ function LicenseCard({ current, paid, onApplied }: { current?: { configured: boo
             <span>{rep.license.customer || rep.license.id}</span>
             <span className="plan-badge">{planLabel(rep.license.plan)}</span>
             {billingLabel(rep.license.billing) && <span className="plan-badge">{billingLabel(rep.license.billing)}</span>}
-            <span className="muted">{t("until {date}", { date: new Date(rep.license.expires).toLocaleDateString() })}</span>
+            <span className="muted">{t("until {date}", { date: formatDate(rep.license.expires) })}</span>
             {rep.license.max_nodes > 0 && <span className="muted">{t("up to {n} nodes", { n: rep.license.max_nodes })}</span>}
             <span className="muted">{t("covers {what}", { what: rep.all ? t("every module") : rep.license.modules.join(", ") })}</span>
           </>
@@ -299,7 +299,7 @@ function LicenseCard({ current, paid, onApplied }: { current?: { configured: boo
               )}
             </>
           ) : (
-            <span className="warn">{t("Automatic renewal is off. Paste the new key before {date}.", { date: new Date(rep!.license.expires).toLocaleDateString() })}</span>
+            <span className="warn">{t("Automatic renewal is off. Paste the new key before {date}.", { date: formatDate(rep!.license.expires) })}</span>
           )}
           <a className="link-action" href="/admin/settings">
             {t("Auto-renew setting")}
@@ -309,7 +309,7 @@ function LicenseCard({ current, paid, onApplied }: { current?: { configured: boo
       <ErrorLine error={checkError} />
       <div className="license-input">
         <span className="secret">
-          <input className="mono" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={current?.configured ? t("Paste a new key to replace it") : t("Paste the licence key (dbbl1.…)")} autoComplete="off" spellCheck={false} />
+          <input className="mono" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={current?.configured ? t("Paste a new key to replace it") : t("Paste the license key (dbbl1.…)")} autoComplete="off" spellCheck={false} />
         </span>
         <button className="primary" disabled={busy || !key.trim()}>
           {busy ? t("Verifying…") : t("Verify")}

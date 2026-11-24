@@ -1,7 +1,7 @@
 import { ReactNode, useEffect, useId, useReducer, useRef, useState } from "react";
 import { api, Branch, ownerLabel } from "../api";
 import { confirmReducer, countdown, elapsed, expiryState, extendTtl, isBusy, longerChoices, ttlChoices } from "../lib/branches";
-import { bytes, relative } from "../lib/format";
+import { bytes, formatDateTime, relative } from "../lib/format";
 import { t } from "../lib/i18n";
 import { splitOwned } from "../lib/branchname";
 import { showCheckpoints } from "../lib/checkpoints";
@@ -272,7 +272,7 @@ export function BranchRow({
           {ready && connectAllowed ? <ConnectPanel branch={b.name} proxy={b.proxy} /> : connectAllowed ? <p className="muted small">{failed || paused ? "" : t("Connection details appear once it is ready.")}</p> : null}
           <dl className="facts two">
             <dt>Snapshot</dt>
-            <dd>
+            <dd className="wide">
               <span className="mono">{b.snapshot}</span>
               {snapshot && <span className="muted"> · {relative(snapshot.created_at)}</span>}
               {snapshot?.masked && <span className="badge on">masked</span>}
@@ -280,7 +280,7 @@ export function BranchRow({
             {b.parent_branch && (
               <>
                 <dt>Forked from</dt>
-                <dd className="mono">
+                <dd className="mono wide">
                   {onOpenParent ? (
                     <button type="button" className="link-button mono" onClick={() => onOpenParent(b.parent_branch!)}>
                       {b.parent_branch}
@@ -310,12 +310,12 @@ export function BranchRow({
             <dt>Owner</dt>
             <dd title={b.owner ?? undefined}>{ownerLabel(b) ?? <span className="muted">—</span>}</dd>
             <dt>Created</dt>
-            <dd title={new Date(b.created_at).toLocaleString()}>{relative(b.created_at)}</dd>
+            <dd title={formatDateTime(b.created_at)}>{relative(b.created_at)}</dd>
             <dt>Expires</dt>
             <dd className="wide">
               <span className="ttl-line">
                 <TtlBar created={b.created_at} expires={b.expires_at} />
-                {b.expires_at && <span className="muted small">{new Date(b.expires_at).toLocaleString()}</span>}
+                {b.expires_at && <span className="muted small">{formatDateTime(b.expires_at)}</span>}
               </span>
             </dd>
             <dt>Storage</dt>
@@ -332,7 +332,7 @@ export function BranchRow({
             {b.reset_at && (
               <>
                 <dt>Reset</dt>
-                <dd className="wide" title={new Date(b.reset_at).toLocaleString()}>
+                <dd className="wide" title={formatDateTime(b.reset_at)}>
                   {relative(b.reset_at)}
                 </dd>
               </>

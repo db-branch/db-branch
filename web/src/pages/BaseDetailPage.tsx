@@ -49,9 +49,11 @@ export function BaseDetailPage({ name }: { name: string }) {
         ← {t("Back to Bases")}
       </a>
       <header className="page-head">
-        <h1 className="mono">{base.name}</h1>
-        <Status status={base.status} reason={base.status_reason} />
-        <Engine runtime={base.runtime} />
+        <span className="page-head-main">
+          <h1 className="mono">{base.name}</h1>
+          <Status status={base.status} reason={base.status_reason} />
+          <Engine runtime={base.runtime} />
+        </span>
       </header>
       <ErrorLine error={error} />
       <BaseBody base={base} branches={used} nodes={nodes} onUpdate={() => setUpdating(true)} onDelete={() => setDeleting(true)} />

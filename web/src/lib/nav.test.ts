@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeId, buildNav, ancestorsOf, expandFor, legacyRedirect, loadOpen, resolveRoute, saveOpen, NAV_KEY } from "./nav";
+import { activeId, buildNav, ancestorsOf, expandFor, legacyRedirect, loadOpen, reconcileOpen, resolveRoute, saveOpen, NAV_KEY } from "./nav";
 
 const pages = [
   { module: "auth", path: "/users", title: "Users" },
@@ -107,6 +107,15 @@ describe("開閉の記憶", () => {
     expect(expandFor({ "mod:audit": true, modules: false }, ["modules", "mod:auth"])).toEqual({ "mod:audit": true, modules: true, "mod:auth": true });
     const same = { modules: true };
     expect(expandFor(same, ["modules"])).toBe(same);
+  });
+  it("reconcileOpen collapses open modules on mobile non-module routes and returns changed object so callers persist it", () => {
+    const open = { modules: true, "mod:auth": true };
+    const collapsed = reconcileOpen(open, [], true);
+    expect(collapsed).toEqual({ modules: false, "mod:auth": true });
+    expect(collapsed).not.toBe(open);
+    expect(reconcileOpen(open, [], false)).toBe(open);
+    expect(reconcileOpen(open, ["modules"], true)).toBe(open);
+    expect(reconcileOpen({ modules: false }, ["modules", "mod:auth"], true)).toEqual({ modules: true, "mod:auth": true });
   });
 });
 

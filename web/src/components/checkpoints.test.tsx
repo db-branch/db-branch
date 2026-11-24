@@ -50,7 +50,7 @@ function panel(over: Partial<Panel> = {}): Panel {
     ...over,
   };
 }
-const body = (p: Panel, modal = false) => renderToStaticMarkup(<PanelBody p={p} modal={modal} onExpand={noop} />);
+const body = (p: Panel, modal = false, hideTitle = false) => renderToStaticMarkup(<PanelBody p={p} modal={modal} hideTitle={hideTitle} onExpand={noop} />);
 const selectedNode = (id: string) => layoutGraph({ lines, checkpoints: items, head: "d1" }).nodes.find((n) => n.id === id)!;
 
 describe("PanelBody inline", () => {
@@ -58,6 +58,7 @@ describe("PanelBody inline", () => {
     const h = body(panel());
     expect(h).toMatch(/<button[^>]*aria-haspopup="dialog"[^>]*>.*Expand<\/button>/);
     expect(h).toContain("<h3");
+    expect(body(panel(), false, true)).not.toContain("<h3");
     expect(h).toContain("hg");
   });
   it("hides the button when there is nothing to enlarge", () => {

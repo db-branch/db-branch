@@ -14,7 +14,7 @@ function PoolBar({ pool }: { pool: Analysis["pool"] }) {
     ["Free", pool.free, "seg-free"],
   ];
   return (
-    <div className="pool">
+    <div className="storage-pool">
       <div className="pool-head">
         <span className="mono strong">{pool.name}</span>
         <span className="muted mono">{bytes(pool.size)}</span>

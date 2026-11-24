@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, BackupFile, can, isAdmin, UpdateView } from "../api";
-import { bytes } from "../lib/format";
+import { bytes, formatDateTime } from "../lib/format";
 import { ScopeForm } from "../components/scopeform";
 import { TokenManager } from "../components/tokens";
 import { ErrorLine, ErrorText } from "../components/ui";
@@ -128,7 +128,7 @@ function Updates() {
           {busy && !confirming ? t("Checking…") : t("Check for updates")}
         </button>
         <span className="muted small">
-          {v?.checked_at && !v.checked_at.startsWith("0001") ? t("Checked {when} by {node}", { when: new Date(v.checked_at).toLocaleString(), node: v.checked_by }) : t("Not checked yet. Checking contacts the package repository.")}
+          {v?.checked_at && !v.checked_at.startsWith("0001") ? t("Checked {when} by {node}", { when: formatDateTime(v.checked_at), node: v.checked_by }) : t("Not checked yet. Checking contacts the package repository.")}
         </span>
       </div>
       {v && v.packages.some((p) => p.available.length > 0) && (
@@ -265,7 +265,8 @@ function Backups() {
       <h2 className="section-title">{t("Backups")}</h2>
       <p className="field-hint">
         {t("Every node saves the cluster state (settings, users, tokens, module data) at the interval above. The files hold secrets: keep downloads safe.")}{" "}
-        {t("Restore on a node with")} <span className="mono">db-branch backup restore &lt;file&gt;</span>. {t("Base data is not included yet.")}
+        {t("Restore on a node:")} <code className="mono">db-branch backup restore &lt;file&gt;</code>{" "}
+        {t("Base data is not included yet.")}
       </p>
       <div className="backup-bar">
         {nodes.length > 1 && (
@@ -282,22 +283,24 @@ function Backups() {
       <ErrorLine error={error ?? actionError} />
       {list.length === 0 && !error && <p className="muted small">{t("No backups on this node yet.")}</p>}
       {list.length > 0 && (
-        <table className="rows compact">
-          <tbody>
-            {list.map((f) => (
-              <tr key={f.name}>
-                <td className="mono">{f.name}</td>
-                <td className="muted">{bytes(f.size)}</td>
-                <td className="muted">{new Date(f.taken_at).toLocaleString()}</td>
-                <td className="col-actions">
-                  <a href={`/v1/backups/${encodeURIComponent(f.name)}${listed ? `?node=${encodeURIComponent(listed)}` : ""}`} download className="link-action">
-                    {t("Download")}
-                  </a>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="table-wrap">
+          <table className="rows compact">
+            <tbody>
+              {list.map((f) => (
+                <tr key={f.name}>
+                  <td className="mono">{f.name}</td>
+                  <td className="muted">{bytes(f.size)}</td>
+                  <td className="muted">{formatDateTime(f.taken_at)}</td>
+                  <td className="col-actions">
+                    <a href={`/v1/backups/${encodeURIComponent(f.name)}${listed ? `?node=${encodeURIComponent(listed)}` : ""}`} download className="link-action">
+                      {t("Download")}
+                    </a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );
