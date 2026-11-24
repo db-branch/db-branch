@@ -1,27 +1,62 @@
 #!/bin/sh
 set -e
 
-if ! getent group db-branch >/dev/null; then
-	addgroup --system db-branch
-fi
-if ! getent passwd db-branch >/dev/null; then
-	adduser --system --ingroup db-branch --home /var/lib/db-branch --no-create-home \
-		--shell /usr/sbin/nologin --gecos "db-branch" db-branch
-fi
-# The agent's socket and its configuration belong to db-branch-admin, not to the
-# group the database servers run in. People who could use db-branch through that
-# group keep doing so.
-if ! getent group db-branch-admin >/dev/null; then
-	addgroup --system db-branch-admin
-	for m in $(getent group db-branch | cut -d: -f4 | tr ',' ' '); do
-		[ "$m" = db-branch ] && continue
-		adduser "$m" db-branch-admin >/dev/null 2>&1 || true
-	done
-fi
-chgrp db-branch-admin /etc/db-branch/config.toml
+policy_allows() {
+	if [ -x "${DB_BRANCH_PKG_ROOT:-}/usr/sbin/policy-rc.d" ]; then
+		rc=0
+		"${DB_BRANCH_PKG_ROOT:-}/usr/sbin/policy-rc.d" "$1" "$2" || rc=$?
+		[ "$rc" -eq 101 ] && return 1
+	fi
+	return 0
+}
 
-if [ -d /run/systemd/system ]; then
-	systemctl daemon-reload
-	systemctl enable db-branch.service >/dev/null
-	systemctl restart db-branch.service
-fi
+case "$1" in
+configure)
+	if [ -z "${DPKG_ROOT:-}" ]; then
+		if ! getent group db-branch >/dev/null; then
+			addgroup --system db-branch
+		fi
+		if ! getent passwd db-branch >/dev/null; then
+			adduser --system --ingroup db-branch --home /var/lib/db-branch --no-create-home \
+				--shell /usr/sbin/nologin --gecos "db-branch" db-branch
+		fi
+		# The agent's socket and its configuration belong to db-branch-admin, not to the
+		# group the database servers run in. People who could use db-branch through that
+		# group keep doing so.
+		if ! getent group db-branch-admin >/dev/null; then
+			addgroup --system db-branch-admin
+			for m in $(getent group db-branch | cut -d: -f4 | tr ',' ' '); do
+				[ "$m" = db-branch ] && continue
+				adduser "$m" db-branch-admin >/dev/null 2>&1 || true
+			done
+		fi
+		if [ -f "${DB_BRANCH_PKG_ROOT:-}/etc/db-branch/config.toml" ]; then
+			chgrp db-branch-admin "${DB_BRANCH_PKG_ROOT:-}/etc/db-branch/config.toml"
+		fi
+	fi
+
+	if [ -z "${DPKG_ROOT:-}" ] && [ -d "${DB_BRANCH_PKG_ROOT:-}/run/systemd/system" ]; then
+		systemctl daemon-reload
+		if [ -z "$2" ]; then
+			systemctl enable db-branch.service >/dev/null
+			if policy_allows db-branch.service restart; then
+				systemctl restart db-branch.service
+			fi
+		elif systemctl is-enabled --quiet db-branch.service 2>/dev/null; then
+			if policy_allows db-branch.service restart; then
+				systemctl restart db-branch.service
+			fi
+		else
+			if policy_allows db-branch.service try-restart; then
+				systemctl try-restart db-branch.service
+			fi
+		fi
+	fi
+	;;
+abort-upgrade|abort-remove|abort-deconfigure)
+	;;
+*)
+	echo "postinst called with unknown argument '$1'" >&2
+	exit 1
+	;;
+esac

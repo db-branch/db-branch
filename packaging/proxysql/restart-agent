@@ -1,6 +1,28 @@
 #!/bin/sh
 # The agent loads modules when it starts.
 set -e
-if [ -d /run/systemd/system ]; then
-	systemctl try-restart db-branch.service || true
-fi
+
+policy_allows() {
+	if [ -x "${DB_BRANCH_PKG_ROOT:-}/usr/sbin/policy-rc.d" ]; then
+		rc=0
+		"${DB_BRANCH_PKG_ROOT:-}/usr/sbin/policy-rc.d" "$1" "$2" || rc=$?
+		[ "$rc" -eq 101 ] && return 1
+	fi
+	return 0
+}
+
+case "$1" in
+remove|purge)
+	if [ -z "${DPKG_ROOT:-}" ] && [ -d "${DB_BRANCH_PKG_ROOT:-}/run/systemd/system" ]; then
+		if policy_allows db-branch.service try-restart; then
+			systemctl try-restart db-branch.service || true
+		fi
+	fi
+	;;
+upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+	;;
+*)
+	echo "postrm called with unknown argument '$1'" >&2
+	exit 1
+	;;
+esac

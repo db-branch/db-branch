@@ -347,8 +347,12 @@ HTTP ヘッダー（例: `X-DB-Branch`）をミドルウェアで読み、この
 - Ubuntu 24.04 / 26.04 と Debian 13 では libaio が `libaio.so.1t64` という名前になっているため、MySQL のランタイムを展開するときに、ランタイム内の `lib/private/` に `libaio.so.1` へのリンクを作る（システムには手を加えない）
 - データ: `/var/lib/db-branch`、ログ: journald、専用システムユーザー `db-branch`
 - インストールだけでディスクに触れず、何もダウンロードしない。ZFS プールの設定は `db-branch init` で明示的に行う
-- `apt remove` ではデータを残し、`apt purge` で設定を削除する
-- 対象: Ubuntu 24.04 LTS / 26.04 LTS（Debian 12+ は MySQL のみ）、amd64 / arm64。ICU と libxml2 はリリースごとにパッケージ名が違う（24.04: `libicu74` / `libxml2`、26.04: `libicu78` / `libxml2-16`）ので、依存は代替（`libicu74 | libicu76 | libicu78`、`libxml2 | libxml2-16`）で書き、同じ .deb を両方に入れられるようにする
+- ライフサイクル（`apt install` / `upgrade` / `remove` / `purge`）:
+  - **初回導入（`install`）**: `db-branch` ユーザー／グループおよび `db-branch-admin` グループを作成し、`/etc/db-branch/config.toml` のグループ所有者を `db-branch-admin` にして `db-branch.service` を有効化・起動する。`db-branch-proxysql` は初回導入時に `proxysql.service` を有効化・起動し、`db-branch.service` を `try-restart` する
+  - **更新（`upgrade`）**: `prerm` では `db-branch.service` を止めず、`postinst` で再起動する（`db-branch.service` が有効化済みなら `restart` し、事前に `systemctl disable` / `mask` で無効化されていた場合は再有効化せず稼働中のみ `try-restart` する。`/etc/db-branch/config.toml` が削除されていても失敗しない）。稼働中の DB インスタンス（`db-branch-mysqld@*`・`db-branch-postgres@*`・`db-branch-rt@*`）は止めない。`db-branch-proxysql` の更新時は `proxysql.service` を再有効化せず、`db-branch.service` のみ `try-restart` する
+  - **削除（`remove`）**: `db-branch.service` のみを停止し、稼働中のデータベースインスタンス（`db-branch-mysqld@*`・`db-branch-postgres@*`・`db-branch-rt@*`）、`/var/lib/db-branch`、ZFS データセット、および設定（`/etc/db-branch`）を残す
+  - **完全削除（`purge`）**: 設定ファイルとパッケージが生成した設定状態（`/etc/db-branch` 配下および `/etc/modprobe.d/db-branch-zfs.conf`）を削除する。`/var/lib/db-branch`、ZFS データセット、および稼働中 DB のデータは削除しない
+- 対象: Ubuntu 24.04 LTS / 26.04 LTS、amd64 / arm64。ICU と libxml2 はリリースごとにパッケージ名が違う（24.04: `libicu74` / `libxml2`、26.04: `libicu78` / `libxml2-16`）ので、依存は代替（`libicu74 | libicu76 | libicu78`、`libxml2 | libxml2-16`）で書き、同じ .deb を両方に入れられるようにする
 - 配布: 自前の APT リポジトリ → PPA → Debian 公式の順に進める
 - ProxySQL を同梱する際は、ライセンス文・対応するソースの入手先・変更点を `db-branch-proxysql` に含める
 - db-branch 本体: Apache-2.0

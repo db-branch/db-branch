@@ -19,7 +19,14 @@ sudo apt update
 sudo apt upgrade                    # db-branch と導入済みの db-branch-* モジュールが一緒に上がる
 ```
 
+更新中（`prerm upgrade`）は `db-branch.service` を止めず、`postinst` で再起動します（有効化済みなら `restart`、事前に `systemctl disable` / `mask` で無効化している場合は再有効化せず稼働中のみ `try-restart` し、`/etc/db-branch/config.toml` がなくても失敗しません）。稼働中のデータベースインスタンス（`db-branch-mysqld@*`・`db-branch-postgres@*`・`db-branch-rt@*`）は停止しません。`db-branch-proxysql` の更新時は `db-branch.service` のみ `try-restart` します。
+
 モジュールも一緒に上がった場合は、全ノードを更新したあとに `db-branch module install <モジュール名>`（または `--version <新しい版>`。最新候補と一致していれば省略可。例: `db-branch module install proxysql`）でクラスタの記録を最新の版へ揃える（[modules.md](modules.md)）。エージェントは記録より新しいモジュールを勝手にダウングレードしない。
+
+### 削除・完全削除（`apt remove` / `apt purge`）
+
+- **`sudo apt remove db-branch`**: エージェント（`db-branch.service`）のみを停止します。データ保護のため、稼働中のデータベースインスタンス（`db-branch-mysqld@*`・`db-branch-postgres@*`・`db-branch-rt@*`）、`/var/lib/db-branch`、ZFS データセット、および設定（`/etc/db-branch`）は残ります。
+- **`sudo apt purge db-branch`**: 設定ファイルとパッケージ由来の設定状態（`/etc/db-branch` 配下および `/etc/modprobe.d/db-branch-zfs.conf`）を削除します。`/var/lib/db-branch`、ZFS データセット、および稼働中 DB のデータは削除しません。
 
 ## リポジトリの中身
 
