@@ -1,0 +1,10 @@
+name = "db-branch-authz"
+version = "0.1.0"
+defaultTargets = ["DbBranchAuthz", "export-matrix"]
+
+[[lean_lib]]
+name = "DbBranchAuthz"
+
+[[lean_exe]]
+name = "export-matrix"
+root = "Main"
