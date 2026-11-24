@@ -978,3 +978,37 @@ func TestJoinToken_プロトコル27で期限つき1回限り消費が動き混�
 		t.Fatalf("second ConsumeJoinSecret: %v, want ErrInvalidJoinSecret", err)
 	}
 }
+
+func TestPersonalTokenRoles_プロトコル28未満の混在クラスタではErrClusterUpgrading(t *testing.T) {
+	if raftstore.Protocol < domain.ProtocolPersonalTokenRoles {
+		t.Fatalf("Protocol = %d, below domain.ProtocolPersonalTokenRoles (%d)", raftstore.Protocol, domain.ProtocolPersonalTokenRoles)
+	}
+	cl := newCluster(t, 1)
+	l := cl.leader(t)
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: domain.ProtocolPersonalTokenRoles - 1})
+
+	// Service tokens (no OwnerRoles) still work during rolling upgrade.
+	if err := l.PutToken(ctx, domain.APIToken{ID: "svc1", Name: "ci", Scope: domain.ScopeBranches}); err != nil {
+		t.Fatalf("service token while upgrading: %v", err)
+	}
+	// Personal tokens carrying OwnerRoles require Protocol 28 so old nodes cannot drop roles.
+	tok := domain.APIToken{ID: "per1", Name: "mcp", Scope: domain.ScopeBranches, Owner: "sso:alice", OwnerRoles: []string{"viewer"}}
+	if err := l.PutToken(ctx, tok); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("personal token with OwnerRoles while upgrading: %v, want ErrClusterUpgrading", err)
+	}
+
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: domain.ProtocolPersonalTokenRoles})
+	if err := l.PutToken(ctx, tok); err != nil {
+		t.Fatalf("personal token after upgrade to 28: %v", err)
+	}
+	list, _ := l.ListTokens(ctx)
+	var found domain.APIToken
+	for _, x := range list {
+		if x.ID == "per1" {
+			found = x
+		}
+	}
+	if len(found.OwnerRoles) != 1 || found.OwnerRoles[0] != "viewer" {
+		t.Fatalf("stored OwnerRoles = %v, want [viewer]", found.OwnerRoles)
+	}
+}

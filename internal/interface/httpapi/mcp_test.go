@@ -44,6 +44,7 @@ func (f *fakeTokens) ListOwned(ctx context.Context, _ string) ([]domain.APIToken
 	return f.ListService(ctx)
 }
 func (f *fakeTokens) RevokeOwned(ctx context.Context, _, id string) error { return f.Revoke(ctx, id) }
+func (f *fakeTokens) RevokeByOwner(context.Context, string) error         { return f.err }
 func (f *fakeTokens) ListService(context.Context) ([]domain.APIToken, error) {
 	return []domain.APIToken{{ID: "x", Name: "dev", Scope: "branches", Hash: "secret-hash", CreatedAt: t0}}, f.err
 }

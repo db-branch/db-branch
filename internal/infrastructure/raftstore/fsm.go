@@ -171,7 +171,12 @@ type BranchOwner struct {
 // and consume_join_secret validates and clears the secret atomically in the
 // log. Older nodes do not know those commands, so they wait for protocol 27
 // everywhere (domain.ProtocolJoinToken).
-const Protocol = 27
+//
+// 28: personal token owner roles: put_token carries APIToken.OwnerRoles when a
+// personal token holds non-admin roles of its owner. Older nodes drop that
+// field, so personal tokens with OwnerRoles wait for protocol 28 everywhere
+// (domain.ProtocolPersonalTokenRoles).
+const Protocol = 28
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a
@@ -217,6 +222,9 @@ func (c Command) Needs() int {
 		if c.Branch.ParentBranch != (domain.Name{}) || c.Branch.Status == domain.BranchForking {
 			return domain.ProtocolBranchFork
 		}
+	}
+	if c.Op == "put_token" && c.Token != nil && len(c.Token.OwnerRoles) > 0 {
+		return domain.ProtocolPersonalTokenRoles
 	}
 	return opProtocol[c.Op]
 }
@@ -516,7 +524,9 @@ func (f *FSM) apply(c Command) error {
 		if s.Tokens == nil {
 			s.Tokens = map[string]domain.APIToken{}
 		}
-		s.Tokens[c.Token.ID] = *c.Token
+		tok := *c.Token
+		tok.OwnerRoles = append([]string(nil), tok.OwnerRoles...)
+		s.Tokens[tok.ID] = tok
 	case "delete_token":
 		delete(s.Tokens, c.Name)
 	case "put_module_data":
@@ -735,6 +745,7 @@ func (f *FSM) State() State {
 		if out.Tokens == nil {
 			out.Tokens = map[string]domain.APIToken{}
 		}
+		v.OwnerRoles = append([]string(nil), v.OwnerRoles...)
 		out.Tokens[k] = v
 	}
 	for m, v := range f.state.ModuleData {

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/infrastructure/filestore"
 	"github.com/db-branch/db-branch/internal/interface/httpapi"
@@ -18,6 +19,8 @@ import (
 	"github.com/db-branch/db-branch/internal/usecase/module"
 	"github.com/db-branch/db-branch/internal/usecase/operation"
 	"github.com/db-branch/db-branch/internal/usecase/settings"
+	"github.com/db-branch/db-branch/internal/usecase/token"
+	"github.com/db-branch/db-branch/pkg/ext"
 )
 
 func TestWireModulesAndSettings_backupDirの危険なパスを拒否する(t *testing.T) {
@@ -456,5 +459,73 @@ func TestModuleKicks_moduleUpdatedイベントだけで起動する(t *testing.T
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("module.updated did not trigger kick")
+	}
+}
+
+func TestModuleStore_authモジュールがuser削除時に個人トークンを失効させる(t *testing.T) {
+	ctx := context.Background()
+	st := &filestore.Store{Path: filepath.Join(t.TempDir(), "state.json")}
+	toks := &token.Service{Store: st, Clock: time.Now}
+	alice := ext.Principal{ID: "user:alice@example.com", Name: "alice@example.com"}
+	bob := ext.Principal{ID: "user:bob@example.com", Name: "bob@example.com"}
+	if _, _, err := toks.CreatePersonal(ctx, alice, "mcp", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := toks.CreatePersonal(ctx, bob, "mcp", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := toks.Create(ctx, "ci", domain.ScopeBranches, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	authStore := moduleStoreFor("auth", st, toks, discardLog())
+	auditStore := moduleStoreFor("audit", st, toks, discardLog())
+	_ = authStore.Put(ctx, "user/alice@example.com", []byte("{}"))
+	_ = authStore.Put(ctx, "team/devs", []byte("{}"))
+	_ = auditStore.Put(ctx, "user/bob@example.com", []byte("{}"))
+
+	// Deleting from audit or deleting a non-user key in auth leaves tokens untouched.
+	if err := auditStore.Delete(ctx, "user/bob@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := authStore.Delete(ctx, "team/devs"); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := toks.List(ctx); len(list) != 3 {
+		t.Fatalf("unexpected revoke: %+v", list)
+	}
+
+	// Deleting user/alice@example.com from auth revokes only Alice's personal tokens.
+	if err := authStore.Delete(ctx, "user/alice@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	aliceToks, _ := toks.ListOwned(ctx, alice.ID)
+	bobToks, _ := toks.ListOwned(ctx, bob.ID)
+	svcToks, _ := toks.ListService(ctx)
+	if len(aliceToks) != 0 || len(bobToks) != 1 || len(svcToks) != 1 {
+		t.Errorf("after auth user delete: alice=%d bob=%d svc=%d", len(aliceToks), len(bobToks), len(svcToks))
+	}
+}
+
+func TestSweepExpiredTokens_クラスタではリーダーだけがGCを実行する(t *testing.T) {
+	ctx := context.Background()
+	st := &filestore.Store{Path: filepath.Join(t.TempDir(), "state.json")}
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	toks := &token.Service{Store: st, Clock: func() time.Time { return now }}
+	if _, _, err := toks.Create(ctx, "short", domain.ScopeBranches, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Hour)
+
+	// Follower does not sweep.
+	sweepExpiredTokens(ctx, toks, func() bool { return false }, discardLog())
+	if list, _ := toks.List(ctx); len(list) != 1 {
+		t.Fatalf("follower swept tokens: %+v", list)
+	}
+
+	// Leader sweeps expired tokens.
+	sweepExpiredTokens(ctx, toks, func() bool { return true }, discardLog())
+	if list, _ := toks.List(ctx); len(list) != 0 {
+		t.Fatalf("leader did not sweep tokens: %+v", list)
 	}
 }

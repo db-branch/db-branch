@@ -30,7 +30,7 @@ info:
 
     Tokens start with `dbb_`, are shown once when created, and only their hash is stored. A service token is made by an admin (`POST /v1/tokens`) and acts as itself; a personal token is made by any signed-in person (`POST /v1/account/tokens`) and acts as that person. A token cannot create another. An invalid, expired or revoked token gets `401 unauthenticated`. The CSRF check does not apply to bearer tokens.
 
-    **Token scopes.** A `branches` token (the default) may create, use and delete branches and read most other resources; it cannot change bases, runtimes, settings or tokens, and it cannot read settings, tokens, route users, backups or a base's refresh source, because those can hold secrets. A `full` token may do everything an admin can. Each operation lists the scopes that may call it in `x-dbb-token-scopes`.
+    **Token scopes.** A `branches` token (the default) is governed by an explicit allowlist: it may create, use, checkpoint, fork, merge, upgrade and delete branches, list/get bases (`base.read`, `base.public`), runtimes (`runtime.read`), operations (`operation.read`), events (`event.read`), capabilities (`capability.read`), Prometheus metrics (`metrics.read`), own preferences/tokens (`account.preference.read`, `account.token.read`) and use MCP (`mcp.use`). It cannot change bases, runtimes, settings or tokens, and cannot read settings, tokens, route users, backups, base refresh sources, cluster topology, modules, licenses, updates or extension module APIs (`/v1/ext/<module>/...`). A `full` token may do everything an admin can. Each operation lists the scopes that may call it in `x-dbb-token-scopes`.
 
     **Actions and roles.** Which calls are allowed is decided per request by an action name such as `branch.create` or `base.delete`, given for every operation in `x-dbb-action`. The built-in login is a single admin who may do everything. People other than admins (signed in through a paid module) may read all branches but change, connect to and query only their own, except `open` branches, which anyone may connect to and query; the module's roles decide the rest. The local socket and `full` tokens count as admin.
 
@@ -1946,11 +1946,11 @@ paths:
       operationId: getCluster
       summary: Get the cluster
       x-dbb-action: cluster.read
-      x-dbb-token-scopes: [full, branches]
+      x-dbb-token-scopes: [full]
       description: |-
         Returns the cluster as this node sees it: nodes with their state, pool, installed runtimes, modules, latest metrics sample, system (OS, kernel, ZFS) and service ids. A single node reports mode `single`.
 
-        **Action:** `cluster.read`. Allowed for `full` and `branches` tokens.
+        **Action:** `cluster.read`. Needs a console session, the local socket, or a `full` token.
       responses:
         '200':
           description: The cluster.
@@ -1966,11 +1966,11 @@ paths:
       operationId: getNodeMetrics
       summary: Get a node's recent metrics
       x-dbb-action: cluster.read
-      x-dbb-token-scopes: [full, branches]
+      x-dbb-token-scopes: [full]
       description: |-
         Returns the node's recent performance samples (CPU, load, memory, network, ZFS cache), oldest first. Each node keeps its own; the request is forwarded to it.
 
-        **Action:** `cluster.read`. Allowed for `full` and `branches` tokens.
+        **Action:** `cluster.read`. Needs a console session, the local socket, or a `full` token.
       parameters:
         - name: name
           in: path
@@ -2000,11 +2000,11 @@ paths:
       operationId: getNodeStorage
       summary: Get what a node's storage holds
       x-dbb-action: cluster.read
-      x-dbb-token-scopes: [full, branches]
+      x-dbb-token-scopes: [full]
       description: |-
         Returns the node's ZFS pool (size and free space) and every dataset and snapshot under db-branch's root with its space use, as a flat list, so a client can see which bases, snapshots and branches use the space and what destroying one would free. Each node keeps its own; the request is forwarded to it.
 
-        **Action:** `cluster.read`. Allowed for `full` and `branches` tokens.
+        **Action:** `cluster.read`. Needs a console session, the local socket, or a `full` token.
       parameters:
         - name: name
           in: path
@@ -2785,11 +2785,11 @@ paths:
       operationId: listModules
       summary: List modules
       x-dbb-action: module.read
-      x-dbb-token-scopes: [full, branches]
+      x-dbb-token-scopes: [full]
       description: |-
         Lists the modules the cluster wants, how far each node has come, and what the package repositories offer. A node whose module reports a problem has a `problem` string.
 
-        **Action:** `module.read`. Allowed for `full` and `branches` tokens.
+        **Action:** `module.read`. Needs a console session, the local socket, or a `full` token.
       responses:
         '200':
           description: The modules.
@@ -2918,11 +2918,11 @@ paths:
       operationId: getLicense
       summary: Get the license state
       x-dbb-action: license.read
-      x-dbb-token-scopes: [full, branches]
+      x-dbb-token-scopes: [full]
       description: |-
         Returns whether a key is saved and, if so, its report (customer, modules, expiry, state, modules it enabled) and the renewal status. During the trial (30 days without a key) the report has `trial: true`. The key itself is never returned.
 
-        **Action:** `license.read`. Allowed for `full` and `branches` tokens.
+        **Action:** `license.read`. Needs a console session, the local socket, or a `full` token.
       responses:
         '200':
           description: The state.
@@ -3022,11 +3022,11 @@ paths:
       operationId: getLicenseRenewal
       summary: Get the license renewal status
       x-dbb-action: license.read
-      x-dbb-token-scopes: [full, branches]
+      x-dbb-token-scopes: [full]
       description: |-
         The online renewal status of the saved key, from the cluster leader (the request is forwarded to it).
 
-        **Action:** `license.read`. Allowed for `full` and `branches` tokens.
+        **Action:** `license.read`. Needs a console session, the local socket, or a `full` token.
       responses:
         '200':
           description: The status.
@@ -3089,11 +3089,11 @@ paths:
       operationId: getUpdates
       summary: Get update status
       x-dbb-action: update.read
-      x-dbb-token-scopes: [full, branches]
+      x-dbb-token-scopes: [full]
       description: |-
         Nodes with their versions, packages with the newer versions on offer, `latest_minor`, and the current rollout. Updates move every node to a newer minor or patch version, followers first and the leader last.
 
-        **Action:** `update.read`. Allowed for `full` and `branches` tokens.
+        **Action:** `update.read`. Needs a console session, the local socket, or a `full` token.
       responses:
         '200':
           description: The status.

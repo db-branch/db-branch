@@ -119,6 +119,16 @@ func (s *Server) extAPI(w http.ResponseWriter, r *http.Request) {
 		if resp.Status == 0 {
 			resp.Status = http.StatusOK
 		}
+		if module == "auth" && r.Method == http.MethodDelete && resp.Status >= 200 && resp.Status < 300 && s.Tokens != nil {
+			if email, ok := strings.CutPrefix("/"+r.PathValue("path"), "/users/"); ok {
+				email = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(email)), "/")
+				if email != "" && !strings.Contains(email, "/") {
+					if err := s.Tokens.RevokeByOwner(r.Context(), "user:"+email); err != nil && s.Log != nil {
+						s.Log.Warn("revoking personal tokens for deleted user", "owner", "user:"+email, "err", err)
+					}
+				}
+			}
+		}
 		w.WriteHeader(resp.Status)
 		_, _ = w.Write(resp.Body)
 	}

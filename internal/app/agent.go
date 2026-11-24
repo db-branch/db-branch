@@ -246,10 +246,18 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 			srv.PublishBase(runCtx, n)
 		}
 	}})
+	var tokens *token.Service
 	if svc, err := a.Branches(); err == nil {
 		wireModuleHooks(svc, srv.Ext)
+		if st, ok := svc.Store.(domain.TokenStore); ok {
+			tokens = &token.Service{Store: st, Clock: time.Now}
+			if cl != nil {
+				tokens.Settle = 2 * time.Second // a token made on another node may not have arrived yet
+			}
+			srv.Tokens, srv.TokenAuth = tokens, tokens
+		}
 	}
-	startModules(runCtx, a, cfg, node, mods, srv.BranchHost(), srv.ModuleAPI, log)
+	startModules(runCtx, a, cfg, node, mods, srv.BranchHost(), srv.ModuleAPI, tokens, log)
 	if cl != nil {
 		cl.modules = srv.Modules
 		cl.checkpoints = svcCheckpoints(a)
@@ -338,15 +346,6 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		}
 	}
 	srv.Providers = a.Providers()
-	if svc, err := a.Branches(); err == nil {
-		if st, ok := svc.Store.(domain.TokenStore); ok {
-			tokens := &token.Service{Store: st, Clock: time.Now}
-			if cl != nil {
-				tokens.Settle = 2 * time.Second // a token made on another node may not have arrived yet
-			}
-			srv.Tokens, srv.TokenAuth = tokens, tokens
-		}
-	}
 	srv.Uploads = uploadStore(cfg)
 	var backups *backup.Service
 	if cl != nil {
@@ -458,6 +457,7 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 					log.Info("cluster state backed up", "file", f.Name)
 				}
 			}
+			sweepExpiredTokens(runCtx, tokens, func() bool { return cl == nil || cl.store.IsLeader() }, log)
 		})
 		if cl != nil {
 			go cl.replicationLoop(runCtx, svc.Replicate, log)
@@ -489,5 +489,16 @@ func migrateBranchOwners(ctx context.Context, svc *dbbranch.Service, log *slog.L
 	toks, _ := svc.Store.(domain.TokenStore)
 	if err := dbbranch.MigrateBranchOwners(ctx, svc.Store, mig, toks); err != nil && !errors.Is(err, domain.ErrClusterUpgrading) {
 		log.Warn("migrating legacy branch owners", "err", err)
+	}
+}
+
+func sweepExpiredTokens(ctx context.Context, tokens *token.Service, shouldSweep func() bool, log *slog.Logger) {
+	if tokens == nil || (shouldSweep != nil && !shouldSweep()) {
+		return
+	}
+	if n, err := tokens.SweepExpired(ctx); err != nil {
+		log.Error("sweeping expired tokens", "err", err)
+	} else if n > 0 {
+		log.Info("expired API tokens deleted", "count", n)
 	}
 }

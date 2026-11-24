@@ -15,6 +15,9 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	tokuc "github.com/db-branch/db-branch/internal/usecase/token"
+	"github.com/db-branch/db-branch/pkg/ext"
 )
 
 // openAPIFile is the public API description, checked against the routes.
@@ -51,6 +54,7 @@ type openAPIOperation struct {
 	Description string                    `yaml:"description"`
 	Tags        []string                  `yaml:"tags"`
 	Action      string                    `yaml:"x-dbb-action"`
+	TokenScopes []string                  `yaml:"x-dbb-token-scopes"`
 	Responses   map[string]map[string]any `yaml:"responses"`
 	Parameters  []map[string]any          `yaml:"parameters"`
 }
@@ -438,4 +442,22 @@ func TestOpenAPI_全ルートとアクション名とエラーコードがサー
 		}
 	}
 	_ = filepath.Base
+}
+
+func TestOpenAPI_tokenScopesがScoped認可と一致する(t *testing.T) {
+	doc, _ := readOpenAPI(t)
+	ops := specOperations(t, doc)
+	p := ext.Principal{ID: "token:x", Roles: []string{"scope:branches"}}
+	for _, route := range keys(ops) {
+		op := ops[route]
+		if op.Action == "" {
+			continue
+		}
+		docAllowsBranches := slices.Contains(op.TokenScopes, "branches")
+		codeAllowsBranches := (tokuc.Scoped{}).Authorize(t.Context(), p, op.Action, ext.Resource{}) == nil
+		if docAllowsBranches != codeAllowsBranches {
+			t.Errorf("%s (action %q): openapi x-dbb-token-scopes=%v (branches=%v), token.Scoped allows=%v",
+				route, op.Action, op.TokenScopes, docAllowsBranches, codeAllowsBranches)
+		}
+	}
 }

@@ -29,7 +29,7 @@ func (a *App) tokenCommand() *cobra.Command {
 			return nil
 		},
 	}
-	create.Flags().StringVar(&scope, "scope", "branches", "branches (create and use branches, read the rest) or full")
+	create.Flags().StringVar(&scope, "scope", "branches", "branches (create and use branches, read bases/runtimes/operations/metrics) or full")
 	create.Flags().StringVar(&ttl, "ttl", "", "expire after this long, e.g. 720h (default: never)")
 	list := &cobra.Command{
 		Use: "list", Short: "List tokens", Args: cobra.NoArgs,
