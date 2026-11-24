@@ -69,7 +69,22 @@ func (s *Service) CreatePersonal(ctx context.Context, p ext.Principal, name stri
 	if owner == "" {
 		owner = p.ID
 	}
-	return s.issue(ctx, domain.APIToken{Name: name, Scope: domain.ScopeBranches, Owner: p.ID, OwnerName: owner}, ttl)
+	return s.issue(ctx, domain.APIToken{Name: name, Scope: domain.ScopeBranches, Owner: p.ID, OwnerName: owner, OwnerRoles: personalRoles(p.Roles)}, ttl)
+}
+
+// personalRoles keeps p's non-admin, non-scope roles so personal tokens stay
+// bounded by the owner's role restrictions without ever inheriting admin rights.
+func personalRoles(roles []string) []string {
+	var out []string
+	for _, r := range roles {
+		if r == "" || r == "admin" || strings.HasPrefix(r, "scope:") {
+			continue
+		}
+		if !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (s *Service) issue(ctx context.Context, t domain.APIToken, ttl time.Duration) (string, domain.APIToken, error) {
@@ -136,6 +151,63 @@ func (s *Service) RevokeOwned(ctx context.Context, owner, id string) error {
 	return s.Store.DeleteToken(ctx, id)
 }
 
+// RevokeByOwner deletes every personal token belonging to owner.
+// An empty owner is a no-op so service tokens (Owner == "") are never touched.
+// Email-based auth module principals ("user:<email>") match case-insensitively
+// because the auth module normalizes emails to lowercase on delete.
+func (s *Service) RevokeByOwner(ctx context.Context, owner string) error {
+	if owner == "" {
+		return nil
+	}
+	isEmailUser := strings.HasPrefix(owner, "user:")
+	_, err := s.deleteMatching(ctx, func(t domain.APIToken) bool {
+		if t.Owner == owner {
+			return true
+		}
+		return isEmailUser && strings.HasPrefix(t.Owner, "user:") && strings.EqualFold(t.Owner, owner)
+	})
+	return err
+}
+
+// SweepExpired deletes tokens at or past ExpiresAt (matching Authenticate)
+// and returns how many were removed.
+func (s *Service) SweepExpired(ctx context.Context) (int, error) {
+	now := s.now()
+	return s.deleteMatching(ctx, func(t domain.APIToken) bool {
+		return t.ExpiresAt != nil && !now.Before(*t.ExpiresAt)
+	})
+}
+
+func (s *Service) now() time.Time {
+	if s.Clock == nil {
+		return time.Now()
+	}
+	return s.Clock()
+}
+
+func (s *Service) deleteMatching(ctx context.Context, match func(domain.APIToken) bool) (int, error) {
+	all, err := s.Store.ListTokens(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var deleted int
+	var errs []error
+	for _, t := range all {
+		if !match(t) {
+			continue
+		}
+		if err := s.Store.DeleteToken(ctx, t.ID); err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				continue
+			}
+			errs = append(errs, err)
+			continue
+		}
+		deleted++
+	}
+	return deleted, errors.Join(errs...)
+}
+
 // Authenticate implements ext.Authenticator for bearer tokens.
 func (s *Service) Authenticate(ctx context.Context, c ext.Credentials) (ext.Principal, error) {
 	rest, ok := strings.CutPrefix(c.Token, Prefix)
@@ -158,8 +230,9 @@ func (s *Service) Authenticate(ctx context.Context, c ext.Credentials) (ext.Prin
 			return ext.Principal{}, fmt.Errorf("%w: token %s expired", ext.ErrUnauthenticated, t.Name)
 		}
 		if t.Owner != "" {
-			// A personal token acts as its owner, within its scope.
-			return ext.Principal{ID: t.Owner, Name: t.OwnerName, Roles: []string{"scope:" + t.Scope}}, nil
+			// A personal token acts as its owner (with non-admin roles), within its scope.
+			roles := append([]string{"scope:" + t.Scope}, personalRoles(t.OwnerRoles)...)
+			return ext.Principal{ID: t.Owner, Name: t.OwnerName, Roles: roles}, nil
 		}
 		return ext.Principal{ID: "token:" + t.ID, Name: t.Name, Roles: []string{"scope:" + t.Scope}}, nil
 	}
@@ -203,20 +276,51 @@ func (s *Service) find(ctx context.Context, id string) (domain.APIToken, bool, e
 	}
 }
 
-// Scoped is the OSS authorizer for token scopes: a "branches" token may
-// work with branches and read the rest, nothing else.
+// Scoped is the OSS authorizer for token scopes: a "branches" token may only
+// perform the actions explicitly listed in branchesAllowed.
 type Scoped struct{}
 
-// secretReads expose secrets (settings hold the licence key and the open
-// branch password) or other people's access; branches tokens cannot.
-var secretReads = map[string]bool{"setting.read": true, "token.read": true, "base.refresh.read": true, "route-user.read": true, "backup.read": true}
+// branchesAllowed lists the canonical actions a "branches"-scoped token may
+// perform, plus legacy action aliases from W-22 so old UI checks and rollouts
+// receive the same decision.
+var branchesAllowed = map[string]bool{
+	"branch.read":              true,
+	"branch.create":            true,
+	"branch.extend":            true,
+	"branch.delete":            true,
+	"branch.reset":             true,
+	"branch.pause":             true,
+	"branch.resume":            true,
+	"branch.update":            true, // legacy alias for branch.pause / branch.resume
+	"branch.fork":              true,
+	"branch.recreate":          true,
+	"branch.checkpoint.read":   true,
+	"branch.checkpoint":        true,
+	"branch.restore":           true,
+	"branch.checkpoint.delete": true,
+	"branch.checkpoint_delete": true, // legacy alias for branch.checkpoint.delete
+	"branch.upgrade":           true,
+	"branch.merge":             true,
+	"branch.connect":           true,
+	"branch.query":             true,
+	"base.read":                true,
+	"base.public":              true,
+	"runtime.read":             true,
+	"operation.read":           true,
+	"event.read":               true,
+	"capability.read":          true,
+	"metrics.read":             true,
+	"account.preference.read":  true,
+	"account.token.read":       true,
+	"mcp.use":                  true,
+}
 
 func (Scoped) Authorize(_ context.Context, p ext.Principal, action string, _ ext.Resource) error {
 	for _, r := range p.Roles {
 		if r != "scope:"+domain.ScopeBranches {
 			continue
 		}
-		if strings.HasPrefix(action, "branch.") || (strings.HasSuffix(action, ".read") && !secretReads[action]) || action == "mcp.use" || action == "base.public" {
+		if branchesAllowed[action] {
 			return nil
 		}
 		return fmt.Errorf("%w: a %s-scoped token cannot %s", ext.ErrForbidden, domain.ScopeBranches, action)

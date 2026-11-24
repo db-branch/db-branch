@@ -434,3 +434,43 @@ func TestRunAgent_TLS証明書設定の不備は起動時にエラーにする(t
 		})
 	}
 }
+
+func TestRunAgent_期限切れAPIトークンを定期GCで削除する(t *testing.T) {
+	c := cfg(t)
+	c.Socket = shortSocket(t)
+	c.Console.Listen = "127.0.0.1:0"
+	if err := app.SetPool(c, "tank"); err != nil {
+		t.Fatal(err)
+	}
+	st := &filestore.Store{Path: filepath.Join(c.DataDir, "state.json")}
+	now := time.Now().UTC().Truncate(time.Second)
+	past := now.Add(-time.Hour)
+	future := now.Add(time.Hour)
+	for _, tok := range []domain.APIToken{
+		{ID: "exp01", Name: "expired", Scope: domain.ScopeBranches, CreatedAt: past.Add(-time.Hour), ExpiresAt: &past},
+		{ID: "ok01", Name: "active", Scope: domain.ScopeBranches, CreatedAt: now, ExpiresAt: &future},
+		{ID: "inf01", Name: "forever", Scope: domain.ScopeFull, CreatedAt: now},
+	} {
+		if err := st.PutToken(context.Background(), tok); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := app.RunAgent(ctx, c, app.AgentOptions{ExpireEvery: 10 * time.Millisecond}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := st.ListTokens(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("tokens after GC = %+v, want 2 (ok01, inf01)", list)
+	}
+	for _, tok := range list {
+		if tok.ID == "exp01" {
+			t.Errorf("expired token exp01 was not deleted: %+v", list)
+		}
+	}
+}

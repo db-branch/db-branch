@@ -216,7 +216,7 @@ PUT  /v1/auth/password     {"current_password":"...","new_password":"..."} → 2
 
 | ポート | OSS 版 | 有償 `auth` / `audit` モジュール |
 |---|---|---|
-| `Authenticator` | セッション Cookie（admin のみ）とソケットの UID 確認 | 複数ユーザー・SSO（OIDC / SAML）・API トークン（`Authorization: Bearer`） |
+| `Authenticator` | セッション Cookie（admin のみ）、ソケットの UID 確認、API トークン（`Authorization: Bearer dbb_...`） | 複数ユーザー・SSO（OIDC / SAML） |
 | `Authorizer` | 認証済みならすべて許可 | RBAC。拒否時は `403 forbidden` |
 | `AuditSink` | 構造化ログに出すだけ | 永続化・検索・外部転送 |
 
@@ -242,6 +242,23 @@ PUT  /v1/auth/password     {"current_password":"...","new_password":"..."} → 2
 
 - 有償モジュール向けのエンドポイント（ユーザー管理・監査ログの検索など）は、モジュールが `/v1/ext/<module>/...` の下に追加する。OSS の API には含めない
 
+### 3.4 API トークン（Bearer）
+
+スクリプト・CI・MCP クライアント向けの認証手段。`Authorization: Bearer dbb_<id>_<secret>` ヘッダで渡す（Cookie や CSRF トークンは不要）。秘密は発行時に 1 度だけ返し、ストア（単一ノードは `state.json`、クラスタは Raft）には SHA-256 ハッシュのみを保存する。無効・期限切れ・取り消し済みのトークンは `401 unauthenticated` を返す。
+
+- **種別**:
+  - **サービス用**（`POST /v1/tokens`、管理者のみ）: 人に紐付かず、主体 `token:<id>` として動く。スコープは `branches`（既定）または `full`
+  - **個人用**（`POST /v1/account/tokens`、ログイン中の本人）: 作った本人として動き（発行時の `admin` 以外のロールも引き継ぐ）、本人の所有ブランチや `auth` モジュールのロールの範囲で操作できる。スコープは `branches` 固定（`admin` ロールは引き継がない）。トークンから別のトークンを発行・変更・削除することはできない（`403 forbidden`）
+- **スコープと認可（ホワイトリスト）**:
+  - `full`: 管理者と同等（ソケット限定操作を除く）
+  - `branches`: 明示的なホワイトリストにある操作のみを許可し、それ以外はすべて `403 forbidden` で拒否する
+    - ブランチ操作: `branch.read`, `branch.create`, `branch.extend`, `branch.delete`, `branch.reset`, `branch.pause`, `branch.resume`, `branch.fork`, `branch.recreate`, `branch.checkpoint.read`, `branch.checkpoint`, `branch.restore`, `branch.checkpoint.delete`, `branch.upgrade`, `branch.merge`, `branch.connect`, `branch.query`（互換のため旧名別名 `branch.update`, `branch.checkpoint_delete` も同様に許可）
+    - 参照系・MCP: `base.read`, `base.public`, `runtime.read`, `operation.read`, `event.read`, `capability.read`, `metrics.read`, `account.preference.read`, `account.token.read`, `mcp.use`
+    - 拒否対象の例: 拡張モジュール API（`ext.<module>.read` / `ext.<module>.write`）、ライセンス（`license.*`）、クラスタ構成・ノード情報（`cluster.*`）、モジュール管理（`module.*`）、更新管理（`update.*`）、設定・トークン・ルートユーザー・バックアップ・ベース変更・リフレッシュ設定（`setting.*`, `token.*`, `route-user.*`, `backup.*`, `base.refresh*` 等）
+- **失効と期限切れ GC**:
+  - 有償 `auth` モジュールで利用者（`user:<email>`）を削除すると、その利用者に紐付く個人用トークンは即座にすべて失効・削除される（サービス用トークンは影響を受けない）
+  - `expires_at` を過ぎた期限切れトークンは、定期スイープ（GC。クラスタでは Raft リーダーが実行）でストアから自動的に削除される
+
 ## 4. クラスタでの振る舞い
 
 - **どのノードでも受け付ける**。変更系のリクエストは、受けたノードがリーダーへ転送する（クライアントからは見えない）
@@ -259,18 +276,24 @@ PUT  /v1/auth/password     {"current_password":"...","new_password":"..."} → 2
 
 | メソッド | パス | 応答 | action |
 |---|---|---|---|
-| `GET` | `/v1/branches` | 200 一覧 | `branch.list` |
+| `GET` | `/v1/branches` | 200 一覧 | `branch.read` |
 | `POST` | `/v1/branches` | 202 オペレーション | `branch.create` |
-| `GET` | `/v1/branches/{name}` | 200 | `branch.get` |
-| `PATCH` | `/v1/branches/{name}` | 200（TTL の変更のみ） | `branch.update` |
+| `GET` | `/v1/branches/{name}` | 200 | `branch.read` |
+| `PATCH` | `/v1/branches/{name}` | 200（TTL の変更のみ） | `branch.extend` |
 | `DELETE` | `/v1/branches/{name}` | 202 オペレーション | `branch.delete` |
 | `POST` | `/v1/branches/{name}/reset` | 202 オペレーション | `branch.reset` |
-| `GET` | `/v1/branches/{name}/dsn` | 200 接続文字列（パスワード入り） | `branch.dsn` |
+| `POST` | `/v1/branches/{name}/pause` | 202 オペレーション | `branch.pause` |
+| `POST` | `/v1/branches/{name}/resume` | 202 オペレーション | `branch.resume` |
+| `POST` | `/v1/branches/{name}/fork` | 202 オペレーション | `branch.fork` |
+| `POST` | `/v1/branches/{name}/recreate` | 202 オペレーション | `branch.recreate` |
+| `GET` | `/v1/branches/{name}/dsn` | 200 接続文字列（パスワード入り） | `branch.connect` |
+| `POST` | `/v1/branches/{name}/query` | 200 クエリ結果 | `branch.query` |
 | `GET` | `/v1/branches/{name}/checkpoints` | 200 一覧（全ての線のチェックポイント。古い順） | `branch.checkpoint.read` |
 | `POST` | `/v1/branches/{name}/checkpoints` | 201 チェックポイント（スナップショットは一瞬なので同期） | `branch.checkpoint` |
 | `POST` | `/v1/branches/{name}/checkpoints/{checkpoint}/restore` | 202 オペレーション | `branch.restore` |
-| `DELETE` | `/v1/branches/{name}/checkpoints/{checkpoint}` | 204 | `branch.checkpoint_delete` |
+| `DELETE` | `/v1/branches/{name}/checkpoints/{checkpoint}` | 204 | `branch.checkpoint.delete` |
 | `POST` | `/v1/branches/{name}/upgrade` | 202 オペレーション（`result` に結果） | `branch.upgrade` |
+| `POST` | `/v1/branches/{name}/merge` | 202 オペレーション（`result` に結果） | `branch.merge` |
 
 一覧の絞り込み: `?base=prod-masked`、`?node=node1`、`?status=ready`。
 

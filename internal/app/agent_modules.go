@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/db-branch/db-branch/internal/usecase/moduledata"
 	"github.com/db-branch/db-branch/internal/usecase/operation"
 	"github.com/db-branch/db-branch/internal/usecase/settings"
+	"github.com/db-branch/db-branch/internal/usecase/token"
 	"github.com/db-branch/db-branch/pkg/ext"
 	"github.com/db-branch/db-branch/pkg/ext/plugin"
 )
@@ -686,7 +688,7 @@ func wireModuleHooks(svc *dbbranch.Service, m ext.Module) {
 
 // startModules gives each module its host: node-local directory and its
 // cluster-wide store (unavailable before `db-branch init`).
-func startModules(ctx context.Context, a *App, cfg config.Config, node string, mods []*plugin.Loaded, branches ext.BranchHost, api func(module string) ext.ModuleAPI, log *slog.Logger) {
+func startModules(ctx context.Context, a *App, cfg config.Config, node string, mods []*plugin.Loaded, branches ext.BranchHost, api func(module string) ext.ModuleAPI, tokens *token.Service, log *slog.Logger) {
 	var data domain.ModuleDataStore
 	if svc, err := a.Branches(); err == nil {
 		data, _ = svc.Store.(domain.ModuleDataStore)
@@ -700,11 +702,42 @@ func startModules(ctx context.Context, a *App, cfg config.Config, node string, m
 			log.Error("module directory", "module", m.Info.Name, "err", err)
 			continue
 		}
-		h := ext.Host{Node: node, DataDir: dir, Store: moduledata.For(data, m.Info.Name), Branches: branches, API: api(m.Info.Name)}
+		h := ext.Host{Node: node, DataDir: dir, Store: moduleStoreFor(m.Info.Name, data, tokens, log), Branches: branches, API: api(m.Info.Name)}
 		if err := m.Module.Starter.Start(ctx, h); err != nil {
 			log.Error("starting module", "module", m.Info.Name, "err", err)
 		}
 	}
+}
+
+func moduleStoreFor(name string, data domain.ModuleDataStore, tokens *token.Service, log *slog.Logger) ext.Store {
+	st := moduledata.For(data, name)
+	if name != "auth" || tokens == nil {
+		return st
+	}
+	return authUserDeleteStore{Store: st, tokens: tokens, log: log}
+}
+
+// authUserDeleteStore revokes a deleted auth-module user's personal tokens as
+// soon as their "user/<email>" record is removed from the module's store.
+type authUserDeleteStore struct {
+	ext.Store
+	tokens *token.Service
+	log    *slog.Logger
+}
+
+func (s authUserDeleteStore) Delete(ctx context.Context, key string) error {
+	if err := s.Store.Delete(ctx, key); err != nil {
+		return err
+	}
+	if email, ok := strings.CutPrefix(key, "user/"); ok {
+		email = strings.ToLower(strings.TrimSpace(email))
+		if email != "" {
+			if err := s.tokens.RevokeByOwner(ctx, "user:"+email); err != nil && s.log != nil {
+				s.log.Warn("revoking personal tokens for deleted user", "owner", "user:"+email, "err", err)
+			}
+		}
+	}
+	return nil
 }
 
 // attachMaskers makes the masker modules available by name, governed by

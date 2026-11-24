@@ -21,6 +21,7 @@ type Tokens interface {
 	CreatePersonal(ctx context.Context, p ext.Principal, name string, ttl time.Duration) (string, domain.APIToken, error)
 	ListOwned(ctx context.Context, owner string) ([]domain.APIToken, error)
 	RevokeOwned(ctx context.Context, owner, id string) error
+	RevokeByOwner(ctx context.Context, owner string) error
 }
 
 type tokenJSON struct {

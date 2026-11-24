@@ -453,6 +453,7 @@ func (s *Store) ListTokens(context.Context) ([]domain.APIToken, error) {
 	}
 	out := make([]domain.APIToken, 0, len(st.Tokens))
 	for _, t := range st.Tokens {
+		t.OwnerRoles = append([]string(nil), t.OwnerRoles...)
 		out = append(out, t)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
@@ -465,6 +466,7 @@ func (s *Store) PutToken(_ context.Context, t domain.APIToken) error {
 		if st.Tokens == nil {
 			st.Tokens = map[string]domain.APIToken{}
 		}
+		t.OwnerRoles = append([]string(nil), t.OwnerRoles...)
 		st.Tokens[t.ID] = t
 		return nil
 	})

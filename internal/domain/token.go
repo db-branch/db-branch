@@ -24,10 +24,17 @@ type APIToken struct {
 	CreatedAt time.Time  `json:"created_at"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	// Owner is the principal a personal token acts as (empty: a service
-	// token, acting as itself); OwnerName is its display name.
-	Owner     string `json:"owner,omitempty"`
-	OwnerName string `json:"owner_name,omitempty"`
+	// token, acting as itself); OwnerName is its display name; OwnerRoles keeps
+	// the owner's non-admin roles at issuance so role-based authorizers enforce
+	// the owner's limits on the token.
+	Owner      string   `json:"owner,omitempty"`
+	OwnerName  string   `json:"owner_name,omitempty"`
+	OwnerRoles []string `json:"owner_roles,omitempty"`
 }
+
+// ProtocolPersonalTokenRoles is the cluster protocol from which personal API
+// tokens persist OwnerRoles so older nodes cannot drop them during upgrade.
+const ProtocolPersonalTokenRoles = 28
 
 // TokenStore keeps API tokens.
 type TokenStore interface {
