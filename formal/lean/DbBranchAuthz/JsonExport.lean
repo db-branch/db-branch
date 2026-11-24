@@ -326,12 +326,49 @@ def encodeBranchReadCases : List String :=
       "\"can_read\":" ++ jsonBool (canReadBranch r isTok rel) ++
       "}"
 
+def legacyAliasKeys : List String :=
+  [ "branch.pause", "branch.resume", "branch.update"
+  , "branch.checkpoint.delete", "branch.checkpoint_delete"
+  , "base.snapshot.delete", "base.snapshot_delete" ]
+
+def encodeRouteRow (ep : Endpoint) : String :=
+  "{" ++
+  "\"endpoint\":" ++ jsonStr (Endpoint.toString ep) ++ "," ++
+  "\"method\":" ++ jsonStr ep.routeMethod ++ "," ++
+  "\"path\":" ++ jsonStr ep.routePath ++ "," ++
+  "\"action\":" ++ jsonStr ep.action ++ "," ++
+  "\"socket_only\":" ++ jsonBool ep.isSocketOnly ++ "," ++
+  "\"pre_mux_public\":" ++ jsonBool ep.isPreMuxPublic ++ "," ++
+  "\"public_ext\":" ++ jsonBool ep.isPublicExt ++ "," ++
+  "\"anonymous_allowed\":" ++ jsonBool ep.anonymousAllowed ++
+  "}"
+
+def encodeAliasEntry (act : String) : String :=
+  let vals := (legacyAliases act).map jsonStr
+  jsonStr act ++ ":[" ++ String.intercalate "," vals ++ "]"
+
+def allTokenScopeActions : List String :=
+  let raw := (allEndpoints.map Endpoint.action).filter (· != "") ++ legacyAliasKeys ++ branchesAllowedList
+  raw.foldl (fun acc a => if acc.contains a then acc else acc ++ [a]) []
+
+def encodeTokenScopeRow (act : String) : String :=
+  "{" ++
+  "\"action\":" ++ jsonStr act ++ "," ++
+  "\"branches_allowed\":" ++ jsonBool (tokenScopedAuthorize .scopeBranches act) ++
+  "}"
+
 def buildMatrixJSON : String :=
+  let routeRows := allEndpoints.map encodeRouteRow
+  let aliasEntries := legacyAliasKeys.map encodeAliasEntry
+  let scopeRows := allTokenScopeActions.map encodeTokenScopeRow
   let httpRows := enumerateRequests.map encodeHTTPRow
   let branchReads := encodeBranchReadCases
   let licHas := encodeLicenseHasCases
   let licStates := encodeLicenseStateCases
   "{\n" ++
+  "  \"routes\": [\n    " ++ String.intercalate ",\n    " routeRows ++ "\n  ],\n" ++
+  "  \"action_aliases\": {\n    " ++ String.intercalate ",\n    " aliasEntries ++ "\n  },\n" ++
+  "  \"token_scope_cases\": [\n    " ++ String.intercalate ",\n    " scopeRows ++ "\n  ],\n" ++
   "  \"http_cases\": [\n    " ++ String.intercalate ",\n    " httpRows ++ "\n  ],\n" ++
   "  \"branch_read_cases\": [\n    " ++ String.intercalate ",\n    " branchReads ++ "\n  ],\n" ++
   "  \"license_has_cases\": [\n    " ++ String.intercalate ",\n    " licHas ++ "\n  ],\n" ++

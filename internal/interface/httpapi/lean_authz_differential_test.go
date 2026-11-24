@@ -29,10 +29,16 @@ import (
 )
 
 type leanDecisionMatrix struct {
+	TokenScopeCases   []leanTokenScopeRow   `json:"token_scope_cases"`
 	HTTPCases         []leanHTTPRow         `json:"http_cases"`
 	BranchReadCases   []leanBranchReadRow   `json:"branch_read_cases"`
 	LicenseHasCases   []leanLicenseHasRow   `json:"license_has_cases"`
 	LicenseStateCases []leanLicenseStateRow `json:"license_state_cases"`
+}
+
+type leanTokenScopeRow struct {
+	Action          string `json:"action"`
+	BranchesAllowed bool   `json:"branches_allowed"`
 }
 
 type leanBranchReadRow struct {
@@ -152,6 +158,9 @@ func (m leanMemTokens) ListOwned(ctx context.Context, owner string) ([]domain.AP
 }
 func (m leanMemTokens) RevokeOwned(ctx context.Context, owner, id string) error {
 	return m.svc.RevokeOwned(ctx, owner, id)
+}
+func (m leanMemTokens) RevokeByOwner(ctx context.Context, owner string) error {
+	return m.svc.RevokeByOwner(ctx, owner)
 }
 
 type leanCluster struct {
@@ -877,6 +886,15 @@ func TestLeanAuthz_DifferentialMatrix(t *testing.T) {
 		}
 	}
 
+	// Token scope whitelist differential checks (including Decision 13 aliases).
+	branchesPrincipal := ext.Principal{ID: "token:scope-check", Roles: []string{"scope:" + domain.ScopeBranches}}
+	for i, tc := range matrix.TokenScopeCases {
+		gotAllowed := (token.Scoped{}).Authorize(t.Context(), branchesPrincipal, tc.Action, ext.Resource{}) == nil
+		if gotAllowed != tc.BranchesAllowed {
+			t.Fatalf("token_scope[%d] action=%q: go=%v lean=%v", i, tc.Action, gotAllowed, tc.BranchesAllowed)
+		}
+	}
+
 	// License.State and Usable differential checks.
 	baseTime := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	for i, sc := range matrix.LicenseStateCases {
@@ -896,7 +914,7 @@ func TestLeanAuthz_DifferentialMatrix(t *testing.T) {
 	}
 }
 
-// --- Safety Verification & Bug-Candidate Counterexample Reproductions ---
+// --- Safety Verification Tests (R-05, W-22, R-02, F-09) ---
 
 func TestLeanAuthz_R05_Verified_NodeAPI_EnforcesSocketOnly(t *testing.T) {
 	f := newFixture(t)
@@ -958,25 +976,39 @@ func (fn extAuthFunc) Authorize(ctx context.Context, p ext.Principal, a string, 
 	return fn(ctx, p, a, r)
 }
 
-func TestLeanAuthz_BugCandidate2_BranchesTokenBlacklistAndPersonalRoleDrop(t *testing.T) {
-	// Part A: scope:branches token can access cluster.read, license.read, module.read, ext.<mod>.read
+func TestLeanAuthz_R02_Verified_BranchesTokenWhitelistAndPersonalRoleInheritance(t *testing.T) {
+	// Part A: scope:branches token rejects non-whitelisted reads (cluster/license/module/ext/updates/settings/tokens/backups)
+	// with 403 forbidden while allowing whitelisted branch/base/metrics/account reads.
 	f := newFixture(t)
 	f.srv.TokenAuth = leanTokenAuth{}
+	f.srv.Tokens = newLeanMemTokens()
 	f.srv.ExtHandlers = map[string]ext.Handler{"audit": leanExtHandler{}}
 	h := f.srv.Handler(false)
-	for _, path := range []string{"/v1/cluster", "/v1/license", "/v1/modules", "/v1/ext/audit/events"} {
+	for _, path := range []string{"/v1/cluster", "/v1/license", "/v1/modules", "/v1/ext/audit/events", "/v1/updates", "/v1/settings", "/v1/tokens", "/v1/backups"} {
+		resp, body := send(t, h, http.MethodGet, path, nil, bearer("tok-scope-branches-svc"))
+		if resp.StatusCode != http.StatusForbidden || errCode(body) != "forbidden" {
+			t.Fatalf("expected 403 forbidden for scope:branches on %s after R-02, got %d %v", path, resp.StatusCode, body)
+		}
+	}
+	for _, path := range []string{"/v1/branches", "/v1/bases", "/v1/metrics", "/v1/account/tokens", "/v1/account/preferences"} {
 		resp, body := send(t, h, http.MethodGet, path, nil, bearer("tok-scope-branches-svc"))
 		if resp.StatusCode == http.StatusForbidden {
-			t.Fatalf("expected blacklist leak on origin/main for %s, got 403 %v", path, body)
+			t.Fatalf("expected whitelisted %s to be allowed for scope:branches, got 403 %v", path, body)
 		}
 	}
 
-	// Part B: personal token drops owner's "viewer" role, bypassing role-based Ext.Authorizer (viewerReadsOnly)
+	// Part B: personal token preserves owner's "viewer" role (no privilege escalation past viewerReadsOnly)
+	// and strips "admin" role (an admin's personal token cannot perform admin actions).
 	f2 := newFixture(t)
 	store := &memTokenStore{}
 	tokSvc := &token.Service{Store: store, Clock: func() time.Time { return t0 }}
 	viewer := ext.Principal{ID: "sso:alice", Name: "Alice", Roles: []string{"viewer"}}
-	secret, _, err := tokSvc.CreatePersonal(t.Context(), viewer, "mcp", 0)
+	viewerSecret, _, err := tokSvc.CreatePersonal(t.Context(), viewer, "mcp", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminUser := ext.Principal{ID: "admin", Name: "admin", Roles: []string{"admin"}}
+	adminSecret, _, err := tokSvc.CreatePersonal(t.Context(), adminUser, "mcp-admin", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -985,22 +1017,26 @@ func TestLeanAuthz_BugCandidate2_BranchesTokenBlacklistAndPersonalRoleDrop(t *te
 	f2.branches.branches["alices"] = domain.Branch{Name: name("alices"), Base: name("prod"), Status: domain.BranchReady, Owner: "sso:alice", OwnerName: "Alice", Runtime: mysql84}
 	h2 := f2.srv.Handler(false)
 
-	// Viewer session cannot delete their branch due to viewerReadsOnly:
-	if err := (viewerReadsOnly{}).Authorize(t.Context(), viewer, "branch.delete", ext.Resource{Kind: "branch", Name: "alices"}); !errors.Is(err, ext.ErrForbidden) {
-		t.Fatalf("expected viewer to be forbidden from branch.delete, got %v", err)
+	// Viewer's personal token can read her branch, but is denied DELETE (403) because it retains "viewer".
+	if resp, body := send(t, h2, http.MethodGet, "/v1/branches/alices", nil, bearer(viewerSecret)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected viewer personal token GET to succeed, got %d %v", resp.StatusCode, body)
 	}
-	// Yet personal token issued to the same viewer authenticates with Roles=["scope:branches"] (without "viewer") and succeeds!
-	resp, body := send(t, h2, http.MethodDelete, "/v1/branches/alices", nil, bearer(secret))
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("expected personal token of viewer to bypass viewerReadsOnly on origin/main, got %d %v", resp.StatusCode, body)
+	if resp, body := send(t, h2, http.MethodDelete, "/v1/branches/alices", nil, bearer(viewerSecret)); resp.StatusCode != http.StatusForbidden || errCode(body) != "forbidden" {
+		t.Fatalf("expected viewer personal token DELETE to be forbidden after R-02, got %d %v", resp.StatusCode, body)
 	}
-	f2.waitOp(t, body["id"].(string))
+	// Admin's personal token strips "admin" role and is scoped to "branches", so admin endpoints and others' branches are denied (403).
+	if resp, body := send(t, h2, http.MethodGet, "/v1/cluster", nil, bearer(adminSecret)); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected admin personal token GET /v1/cluster to be forbidden, got %d %v", resp.StatusCode, body)
+	}
+	if resp, body := send(t, h2, http.MethodDelete, "/v1/branches/alices", nil, bearer(adminSecret)); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected admin personal token DELETE on other user's branch to be forbidden, got %d %v", resp.StatusCode, body)
+	}
 }
 
-func TestLeanAuthz_BugCandidate3_LegacyUnmigratedBranchDisplayNameCollision(t *testing.T) {
+func TestLeanAuthz_F09_Verified_LegacyUnmigratedBranchRejectsDisplayNameCollision(t *testing.T) {
 	f := newFixture(t)
 	f.srv.TokenAuth = leanTokenAuth{}
-	// Legacy unmigrated branch: OwnerName == "", Owner == "Viewer" (display name, not "token:*")
+	// Legacy unmigrated branch: OwnerName == "", Owner == "Viewer" (display name, not immutable ID)
 	f.branches.branches["legacy-alice"] = domain.Branch{
 		Name: name("legacy-alice"), Base: name("prod"), Status: domain.BranchReady,
 		Owner: "Viewer", OwnerName: "", Runtime: mysql84,
@@ -1012,63 +1048,147 @@ func TestLeanAuthz_BugCandidate3_LegacyUnmigratedBranchDisplayNameCollision(t *t
 	}
 	h := f.srv.Handler(false)
 
-	// Attacker has ID="sso:viewer" (different ID!), Name="Viewer" (colliding display name)
-	resp, _ := send(t, h, http.MethodGet, "/v1/branches/migrated-alice", nil, bearer("tok-viewer"))
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("migrated branch should reject display name collision, got %d", resp.StatusCode)
+	// Attacker has ID="sso:viewer" (different ID!), Name="Viewer" (colliding display name).
+	// Post-F-09: BOTH migrated and legacy unmigrated branches reject display name collisions with 403.
+	for _, bName := range []string{"migrated-alice", "legacy-alice"} {
+		resp, body := send(t, h, http.MethodGet, "/v1/branches/"+bName, nil, bearer("tok-viewer"))
+		if resp.StatusCode != http.StatusForbidden || errCode(body) != "forbidden" {
+			t.Fatalf("%s should reject display name collision after F-09, got %d %v", bName, resp.StatusCode, body)
+		}
+		respDel, bodyDel := send(t, h, http.MethodDelete, "/v1/branches/"+bName, nil, bearer("tok-viewer"))
+		if respDel.StatusCode != http.StatusForbidden || errCode(bodyDel) != "forbidden" {
+			t.Fatalf("%s DELETE should reject display name collision after F-09, got %d %v", bName, respDel.StatusCode, bodyDel)
+		}
 	}
-	resp2, _ := send(t, h, http.MethodGet, "/v1/branches/legacy-alice", nil, bearer("tok-viewer"))
-	if resp2.StatusCode != http.StatusOK {
-		t.Fatalf("expected legacy unmigrated branch to accept colliding display name on origin/main, got %d", resp2.StatusCode)
+	// Admin can still access legacy unmigrated branches.
+	respAdmin, _ := send(t, h, http.MethodGet, "/v1/branches/legacy-alice", nil, bearer("tok-admin"))
+	if respAdmin.StatusCode != http.StatusOK {
+		t.Fatalf("admin should access legacy unmigrated branch, got %d", respAdmin.StatusCode)
 	}
 }
 
-type upgradingRevocations struct{}
-
-func (upgradingRevocations) Revoke(string, time.Time, time.Time) error {
-	return domain.ErrClusterUpgrading
+type leanSwitchableRevocations struct {
+	upgrading atomic.Bool
+	shared    *leanRevocations
 }
-func (upgradingRevocations) Revoked(string) bool { return false }
 
-func TestLeanAuthz_BugCandidate4_LogoutDuringClusterUpgradeStillValidOnOtherNode(t *testing.T) {
+func (r *leanSwitchableRevocations) Revoke(id string, until, now time.Time) error {
+	if r.upgrading.Load() {
+		return domain.ErrClusterUpgrading
+	}
+	return r.shared.Revoke(id, until, now)
+}
+func (r *leanSwitchableRevocations) Revoked(id string) bool { return r.shared.Revoked(id) }
+
+func TestLeanAuthz_F09_Verified_LogoutDuringClusterUpgradeReturns503AndFlushes(t *testing.T) {
 	now := t0
 	creds := &memCreds{}
-	nodeA := &auth.Service{Store: creds, Hasher: sha{}, Clock: func() time.Time { return now }, Revocations: upgradingRevocations{}}
-	nodeB := &auth.Service{Store: creds, Hasher: sha{}, Clock: func() time.Time { return now }, Revocations: upgradingRevocations{}}
+	rev := &leanSwitchableRevocations{shared: &leanRevocations{revoked: map[string]bool{}}}
+	rev.upgrading.Store(true)
+
+	f := newFixture(t)
+	nodeA := &auth.Service{Store: creds, Hasher: sha{}, Clock: func() time.Time { return now }, Revocations: rev}
+	nodeB := &auth.Service{Store: creds, Hasher: sha{}, Clock: func() time.Time { return now }, Revocations: rev}
 	if err := nodeA.SetPassword("correct horse battery"); err != nil {
 		t.Fatal(err)
 	}
-	sess, err := nodeA.Login("admin", "correct horse battery")
-	if err != nil {
-		t.Fatal(err)
+	f.srv.Auth = nodeA
+	h := f.srv.Handler(false)
+
+	respLogin, bodyLogin := send(t, h, http.MethodPost, "/v1/auth/login", map[string]any{"username": "admin", "password": "correct horse battery"}, nil)
+	if respLogin.StatusCode != http.StatusOK {
+		t.Fatalf("login failed: %d %v", respLogin.StatusCode, bodyLogin)
 	}
-	// Logout on nodeA returns nil despite ErrClusterUpgrading, revoking only in nodeA's memory:
-	if err := nodeA.Logout(sess.Token); !errors.Is(err, domain.ErrClusterUpgrading) {
-		t.Fatalf("expected ErrClusterUpgrading, got %v", err)
+	cookie := respLogin.Cookies()[0]
+	csrf := bodyLogin["csrf_token"].(string)
+
+	// During mixed-cluster upgrade (protocol < 24), HTTP POST /v1/auth/logout returns 503 cluster_upgrading
+	// (never silent 204) and preserves the cookie while revoking locally on nodeA.
+	respLogout, bodyLogout := send(t, h, http.MethodPost, "/v1/auth/logout", nil, withSession(cookie, csrf))
+	if respLogout.StatusCode != http.StatusServiceUnavailable || errCode(bodyLogout) != "cluster_upgrading" {
+		t.Fatalf("expected 503 cluster_upgrading on logout during upgrade, got %d %v", respLogout.StatusCode, bodyLogout)
 	}
-	if _, err := nodeA.Session(sess.Token); !errors.Is(err, auth.ErrNoSession) {
+	for _, c := range respLogout.Cookies() {
+		if c.Name == "dbb_session" && c.MaxAge < 0 {
+			t.Fatalf("expected cookie not to be cleared on 503 cluster_upgrading, got %+v", c)
+		}
+	}
+	if _, err := nodeA.Session(cookie.Value); !errors.Is(err, auth.ErrNoSession) {
 		t.Fatalf("nodeA should reject locally, got %v", err)
 	}
-	// nodeB still accepts the logged-out session cookie!
-	if _, err := nodeB.Session(sess.Token); err != nil {
-		t.Fatalf("expected nodeB to still accept session during ErrClusterUpgrading, got %v", err)
+
+	// Once cluster finishes upgrading, FlushRevocations (or retrying logout) replicates to nodeB.
+	rev.upgrading.Store(false)
+	if err := nodeA.FlushRevocations(); err != nil {
+		t.Fatalf("FlushRevocations failed: %v", err)
+	}
+	if _, err := nodeB.Session(cookie.Value); !errors.Is(err, auth.ErrNoSession) {
+		t.Fatalf("expected nodeB to reject session after upgrade + flush, got %v", err)
 	}
 }
 
-func TestLeanAuthz_BugCandidate5_PersonalTokenSurvivesExternalUserDeletion(t *testing.T) {
+func TestLeanAuthz_R02_Verified_ExternalUserDeletionRevokesPersonalTokens(t *testing.T) {
+	f := newFixture(t)
 	store := &memTokenStore{}
 	tokSvc := &token.Service{Store: store, Clock: func() time.Time { return t0 }}
-	alice := ext.Principal{ID: "sso:alice", Name: "Alice", Roles: []string{"developer"}}
-	secret, _, err := tokSvc.CreatePersonal(t.Context(), alice, "laptop", 0)
+	alice := ext.Principal{ID: "user:alice@example.com", Name: "Alice", Roles: []string{"developer"}}
+	bob := ext.Principal{ID: "user:bob@example.com", Name: "Bob", Roles: []string{"developer"}}
+	aliceSecret, _, err := tokSvc.CreatePersonal(t.Context(), alice, "laptop", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Even after Alice is deleted from the external auth provider (simulated by empty active user set),
-	// token.Service has no user-deletion revocation and still authenticates her personal token as sso:alice.
-	p, err := tokSvc.Authenticate(t.Context(), ext.Credentials{Token: secret})
-	if err != nil || p.ID != "sso:alice" {
-		t.Fatalf("expected personal token to remain valid on origin/main, got p=%+v err=%v", p, err)
+	bobSecret, _, err := tokSvc.CreatePersonal(t.Context(), bob, "desktop", 0)
+	if err != nil {
+		t.Fatal(err)
 	}
+	svcSecret, _, err := tokSvc.Create(t.Context(), "ci-bot", domain.ScopeBranches, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f.srv.Tokens = leanMemTokens{svc: tokSvc}
+	f.srv.TokenAuth = tokSvc
+	f.srv.ExtHandlers = map[string]ext.Handler{
+		"auth": extHandlerFunc(func(_ context.Context, req ext.Request) (ext.Response, error) {
+			if req.Method == http.MethodDelete && req.Path == "/users/alice@example.com" {
+				return ext.Response{Status: http.StatusNoContent}, nil
+			}
+			return ext.Response{Status: http.StatusNotFound}, nil
+		}),
+	}
+	h := f.srv.Handler(false)
+
+	// Before deletion, Alice's personal token works.
+	if resp, _ := send(t, h, http.MethodGet, "/v1/branches", nil, bearer(aliceSecret)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected Alice's personal token to succeed before deletion, got %d", resp.StatusCode)
+	}
+
+	// Admin deletes Alice via external auth module API (DELETE /v1/ext/auth/users/alice@example.com).
+	respDel, bodyDel := f.do(t, http.MethodDelete, "/v1/ext/auth/users/alice@example.com", nil)
+	if respDel.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 deleting external user, got %d %v", respDel.StatusCode, bodyDel)
+	}
+
+	// Alice's personal token is immediately revoked (ErrUnauthenticated / 401),
+	// while Bob's personal token and the service token remain valid.
+	if _, err := tokSvc.Authenticate(t.Context(), ext.Credentials{Token: aliceSecret}); !errors.Is(err, ext.ErrUnauthenticated) {
+		t.Fatalf("expected Alice's token to be revoked after user deletion, got err=%v", err)
+	}
+	if resp, _ := send(t, h, http.MethodGet, "/v1/branches", nil, bearer(aliceSecret)); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for deleted user's personal token, got %d", resp.StatusCode)
+	}
+	if resp, _ := send(t, h, http.MethodGet, "/v1/branches", nil, bearer(bobSecret)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected Bob's personal token to remain valid, got %d", resp.StatusCode)
+	}
+	if resp, _ := send(t, h, http.MethodGet, "/v1/branches", nil, bearer(svcSecret)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected service token to remain valid, got %d", resp.StatusCode)
+	}
+}
+
+type extHandlerFunc func(context.Context, ext.Request) (ext.Response, error)
+
+func (fn extHandlerFunc) Serve(ctx context.Context, r ext.Request) (ext.Response, error) {
+	return fn(ctx, r)
 }
 
 type memTokenStore struct {

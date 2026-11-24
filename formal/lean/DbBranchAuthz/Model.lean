@@ -111,6 +111,103 @@ def Endpoint.action : Endpoint → String
   | .extPrivateRead | .extPublicRead => "ext.mod.read"
   | .extPrivateWrite | .extPublicWrite => "ext.mod.write"
 
+/-- HTTP method registered in server.go routes() and outerPatterns. -/
+def Endpoint.routeMethod : Endpoint → String
+  | .healthz | .readyz | .tlsPem | .authMethods | .authSession
+  | .branchList | .branchGet | .branchDSN | .branchCheckpointRead
+  | .baseList | .baseGet | .basePublic | .baseRefreshRead | .uploadRoom
+  | .routeUserRead | .tokenRead | .accountPreferenceRead | .accountTokenRead
+  | .settingRead | .licenseRead | .licenseRenewalRead | .moduleRead | .updateRead
+  | .runtimeRead | .runtimeAvailable | .operationList | .operationGet
+  | .eventRead | .capabilityRead | .clusterRead | .nodeMetrics | .nodeStorage | .metricsRead
+  | .backupRead | .backupDownload
+  | .extPrivateRead | .extPublicRead => "GET"
+  | .branchExtend | .baseDescribe | .basePatchAnonymous | .baseSnapshotPatch => "PATCH"
+  | .authPassword | .baseReplicas | .baseRefreshWrite
+  | .routeUserWrite | .accountPreferenceWrite | .settingWrite | .licenseWrite => "PUT"
+  | .branchDelete | .branchCheckpointDelete | .baseDelete | .baseRefreshDelete
+  | .baseSnapshotDelete | .routeUserDelete | .tokenDelete | .accountTokenDelete
+  | .moduleRemove | .updateCancel | .runtimeRemove | .clusterRemove => "DELETE"
+  | _ => "POST"
+
+/-- Route path pattern registered in server.go routes() and outerPatterns. -/
+def Endpoint.routePath : Endpoint → String
+  | .healthz => "/healthz"
+  | .readyz => "/readyz"
+  | .tlsPem => "/tls.pem"
+  | .authMethods => "/v1/auth/methods"
+  | .authLogin => "/v1/auth/login"
+  | .authSession => "/v1/auth/session"
+  | .authLogout => "/v1/auth/logout"
+  | .authPassword => "/v1/auth/password"
+  | .authReset => "/v1/auth/reset"
+  | .branchList | .branchCreate => "/v1/branches"
+  | .branchGet | .branchDelete | .branchExtend => "/v1/branches/{name}"
+  | .branchDSN => "/v1/branches/{name}/dsn"
+  | .branchQuery => "/v1/branches/{name}/query"
+  | .branchReset => "/v1/branches/{name}/reset"
+  | .branchPause => "/v1/branches/{name}/pause"
+  | .branchResume => "/v1/branches/{name}/resume"
+  | .branchCheckpointRead | .branchCheckpointCreate => "/v1/branches/{name}/checkpoints"
+  | .branchCheckpointDelete => "/v1/branches/{name}/checkpoints/{checkpoint}"
+  | .branchRestore => "/v1/branches/{name}/checkpoints/{checkpoint}/restore"
+  | .branchUpgrade => "/v1/branches/{name}/upgrade"
+  | .branchFork => "/v1/branches/{name}/fork"
+  | .branchMerge => "/v1/branches/{name}/merge"
+  | .branchRecreate => "/v1/branches/{name}/recreate"
+  | .baseList | .baseCreate => "/v1/bases"
+  | .baseGet | .baseDescribe | .baseDelete => "/v1/bases/{name}"
+  | .basePublic => "/v1/public/bases"
+  | .baseReplicas => "/v1/bases/{name}/replicas"
+  | .basePatchAnonymous => "/v1/bases/{name}/anonymous"
+  | .baseSnapshot => "/v1/bases/{name}/snapshots"
+  | .baseMask => "/v1/bases/{name}/mask"
+  | .baseStart => "/v1/bases/{name}/start"
+  | .baseStop => "/v1/bases/{name}/stop"
+  | .baseSQL => "/v1/bases/{name}/sql"
+  | .baseLoadPath | .baseLoadUpload => "/v1/bases/{name}/load"
+  | .baseRefreshRead | .baseRefreshWrite | .baseRefreshDelete => "/v1/bases/{name}/refresh"
+  | .baseRefreshRun => "/v1/bases/{name}/refresh/run"
+  | .uploadCreate => "/v1/uploads"
+  | .uploadRoom => "/v1/uploads/room"
+  | .baseSnapshotPatch | .baseSnapshotDelete => "/v1/bases/{name}/snapshots/{snapshot}"
+  | .routeUserRead => "/v1/route-users"
+  | .routeUserWrite | .routeUserDelete => "/v1/route-users/{name}"
+  | .tokenRead | .tokenWrite => "/v1/tokens"
+  | .tokenDelete => "/v1/tokens/{id}"
+  | .accountPreferenceRead | .accountPreferenceWrite => "/v1/account/preferences"
+  | .accountTokenRead | .accountTokenCreate => "/v1/account/tokens"
+  | .accountTokenDelete => "/v1/account/tokens/{id}"
+  | .mcpUse => "/v1/mcp"
+  | .settingRead => "/v1/settings"
+  | .settingWrite => "/v1/settings/{scope}"
+  | .licenseRead | .licenseWrite => "/v1/license"
+  | .licenseVerify => "/v1/license/verify"
+  | .licenseRenewalRead => "/v1/license/renewal"
+  | .licenseRenew => "/v1/license/renew"
+  | .moduleRead | .moduleInstall => "/v1/modules"
+  | .moduleRemove => "/v1/modules/{name}"
+  | .moduleForget => "/v1/modules/{name}/forget"
+  | .updateRead | .updateApply | .updateCancel => "/v1/updates"
+  | .updateCheck => "/v1/updates/check"
+  | .runtimeRead | .runtimeInstall => "/v1/runtimes"
+  | .runtimeAvailable => "/v1/runtimes/available"
+  | .runtimeRemove => "/v1/runtimes/{engine}/{version}"
+  | .operationList => "/v1/operations"
+  | .operationGet => "/v1/operations/{id}"
+  | .eventRead => "/v1/events"
+  | .capabilityRead => "/v1/capabilities"
+  | .clusterRead => "/v1/cluster"
+  | .nodeMetrics => "/v1/nodes/{name}/metrics"
+  | .nodeStorage => "/v1/nodes/{name}/storage"
+  | .metricsRead => "/v1/metrics"
+  | .clusterRemove => "/v1/cluster/nodes/{name}"
+  | .clusterToken => "/v1/cluster/token"
+  | .backupRead | .backupCreate => "/v1/backups"
+  | .backupDownload => "/v1/backups/{file}"
+  | .backupRestore => "/v1/backups/restore"
+  | .extPrivateRead | .extPrivateWrite | .extPublicRead | .extPublicWrite => "/v1/ext/{name}/{path...}"
+
 /-- Resource kind extracted by strings.Cut(action, "."). -/
 def Endpoint.resourceKind : Endpoint → String
   | .healthz | .readyz | .tlsPem | .authMethods => ""
@@ -162,12 +259,6 @@ def Endpoint.allowedBeforePasswordChange : Endpoint → Bool
 def isAdmin (r : Role) : Bool :=
   r == .localPrincipal || r == .admin || r == .ssoAdmin || r == .scopeFull
 
-/-- secretReads in internal/usecase/token/token.go:212. -/
-def isSecretRead (action : String) : Bool :=
-  action == "setting.read" || action == "token.read" ||
-  action == "base.refresh.read" || action == "route-user.read" ||
-  action == "backup.read"
-
 def isBranchAction (action : String) : Bool :=
   action == "branch.read" || action == "branch.create" || action == "branch.extend" ||
   action == "branch.delete" || action == "branch.reset" || action == "branch.update" ||
@@ -196,39 +287,52 @@ def canonicalAction : String → String
   | "base.snapshot_delete"     => "base.snapshot.delete"
   | a                          => a
 
-/-- token.Scoped.Authorize in internal/usecase/token/token.go:214-225 (origin/main). -/
+/-- branchesAllowed in internal/usecase/token/token.go:286-316 (post-R-02 whitelist). -/
+def branchesAllowedList : List String :=
+  [ "branch.read", "branch.create", "branch.extend", "branch.delete",
+    "branch.reset", "branch.pause", "branch.resume", "branch.update",
+    "branch.fork", "branch.recreate", "branch.checkpoint.read",
+    "branch.checkpoint", "branch.restore", "branch.checkpoint.delete",
+    "branch.checkpoint_delete", "branch.upgrade", "branch.merge",
+    "branch.connect", "branch.query",
+    "base.read", "base.public", "runtime.read", "operation.read",
+    "event.read", "capability.read", "metrics.read",
+    "account.preference.read", "account.token.read", "mcp.use" ]
+
+/-- token.Scoped.Authorize in internal/usecase/token/token.go:318-329 (post-R-02). -/
 def tokenScopedAuthorize (r : Role) (action : String) : Bool :=
   if r != .scopeBranches then
     true
   else
-    isBranchAction action ||
-    (isDotReadAction action && !isSecretRead action) ||
-    action == "mcp.use" ||
-    action == "base.public"
+    branchesAllowedList.contains action
 
-/-- R-02 whitelist version of token.Scoped, normalizing legacy Decision-13 aliases first. -/
-def tokenScopedWhitelist (r : Role) (action : String) : Bool :=
-  if r != .scopeBranches then
-    true
-  else
-    let act := canonicalAction action
-    act == "branch.read" || act == "branch.create" || act == "branch.extend" ||
-    act == "branch.delete" || act == "branch.reset" || act == "branch.update" ||
-    act == "branch.pause" || act == "branch.resume" ||
-    act == "branch.fork" || act == "branch.recreate" ||
-    act == "branch.checkpoint.read" || act == "branch.checkpoint" ||
-    act == "branch.checkpoint.delete" ||
-    act == "branch.restore" || act == "branch.upgrade" || act == "branch.merge" ||
-    act == "branch.connect" || act == "branch.query" ||
-    act == "base.read" || act == "base.public" ||
-    act == "operation.read" || act == "runtime.read" ||
-    act == "capability.read" || act == "mcp.use"
+/-- Kernel-reducible check for `"scope:"` prefix matching `strings.HasPrefix(r, "scope:")`. -/
+def isScopeRole (r : String) : Bool :=
+  r.toList.take 6 == ['s', 'c', 'o', 'p', 'e', ':']
 
-/-- ownsBranch in internal/interface/httpapi/ownership.go:110-115. -/
-def ownsBranch (isTokenID : Bool) (rel : OwnerRel) : Bool :=
+/-- personalRoles in internal/usecase/token/token.go:77-88:
+    keeps non-admin, non-scope, non-empty owner roles (deduplicated). -/
+def personalRoles (roles : List String) : List String :=
+  roles.foldl (fun acc r =>
+    if r == "" || r == "admin" || isScopeRole r || acc.contains r then
+      acc
+    else
+      acc ++ [r]) []
+
+def scopeRoleName : String → String
+  | "branches" => "scope:branches"
+  | "full"     => "scope:full"
+  | s          => "scope:" ++ s
+
+/-- Roles restored by token.Service.Authenticate for a personal token (token.go:234). -/
+def personalTokenRoles (scope : String) (ownerRoles : List String) : List String :=
+  scopeRoleName scope :: personalRoles ownerRoles
+
+/-- ownsBranch in internal/interface/httpapi/ownership.go:108-110 (post-F-09):
+    only immutable ID match is accepted; unmigrated display-name branches are admin-only. -/
+def ownsBranch (_isTokenID : Bool) (rel : OwnerRel) : Bool :=
   match rel with
   | .ownByID => true
-  | .ownByLegacyName => !isTokenID
   | _ => false
 
 /-- canManageBranch in internal/interface/httpapi/ownership.go:92-103. -/
@@ -402,16 +506,6 @@ def evalRequest (req : AuthRequest) : Decision :=
             else
               evalGuarded false false isBuiltIn true true req.role req.isTokenID ep req.ownerRel
 
-/-- Pre-R-05 legacy model (before PR #83) showing the nodeForward socket_only bypass. -/
-def evalRequestPreR05 (req : AuthRequest) : Decision :=
-  if req.channel == .nodeForward && req.endpoint.isSocketOnly then
-    match req.authKind with
-    | .missingForwardHeaders => Decision.deny .forbidden
-    | .malformedForward => evalGuarded true false false false false .emptyRole false req.endpoint req.ownerRel
-    | _ => evalGuarded true (req.role == .localPrincipal) false true false req.role req.isTokenID req.endpoint req.ownerRel
-  else
-    evalRequest req
-
 /-- legacyActionAliases + legacyActionAuthorizer in internal/interface/httpapi/access.go:122-143 (W-22). -/
 def legacyAliases : String → List String
   | "branch.pause"             => ["branch.update"]
@@ -429,7 +523,7 @@ def legacyActionAuthorize (baseAllow : String → Bool) (action : String) : Bool
 /-- Parameterized action-level evaluator (used to prove Decision-13 alias equivalence). -/
 def evalActionWithWhitelist (r : Role) (isTok : Bool) (action : String) (rel : OwnerRel) : Bool :=
   let act := canonicalAction action
-  let scopedOK := tokenScopedWhitelist r act
+  let scopedOK := tokenScopedAuthorize r act
   let ownOK :=
     if r == .anonymous then
       act == "branch.create" || act == "operation.read" || act == "base.public" ||

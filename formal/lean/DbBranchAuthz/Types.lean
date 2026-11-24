@@ -41,7 +41,7 @@ inductive SessState where
 
 /-- Relationship between the acting principal and the target branch (for named branch actions). -/
 inductive OwnerRel where
-  | ownByID         -- Branch owned by p.ID with non-empty OwnerName (migrated / new)
+  | ownByID         -- Branch owned by p.ID
   | ownByLegacyName -- Legacy unmigrated branch (OwnerName == "", Owner == p.Name, not "token:")
   | shared          -- Branch owned by another user who SharesBranches with p
   | other           -- Private branch owned by another user, not shared

@@ -10,10 +10,15 @@
 - `DbBranchAuthz/Model.lean`: `server.go` / `access.go` / `ownership.go` / `ext.go` / `tokens.go` / `uploads.go` / `token.go` / `nodeapi.go` の認可判定モデル
 - `DbBranchAuthz/Session.lean`: `auth.go` / `raftstore/fsm.go` / `authfile/revocations.go` のセッション失効・再起動・クラスター複製モデル、および `token.go` の個人トークン失効モデル
 - `DbBranchAuthz/License.lean`: `pkg/ext/license/license.go` のプラン機能・opt-in・状態判定モデル
-- `DbBranchAuthz/Theorems.lean`: 7 種の安全性定理・ライセンス性質および反例（バグ候補）の存在証明
-- `DbBranchAuthz/JsonExport.lean` / `Main.lean`: 有限入力空間の全列挙と `decision_matrix.json` 出力
-- `decision_matrix.json`: Lean モデルから生成した決定表（Go テストは Lean 未導入環境でもこの JSON で差分検証可能）
-- `verify.sh`: `sorry` 検査・`lake build`・JSON 再生成・Go 差分テスト一括実行
+- `DbBranchAuthz/Theorems.lean`: 7 種の安全性定理・OSS 認可設計仕様・ライセンス性質の形式証明
+- `DbBranchAuthz/JsonExport.lean` / `Main.lean`: 有限入力空間の全列挙と `decision_matrix.json` 出力（全ルート・アクション名・別名・トークンスコープを含む）
+- `decision_matrix.json`: Lean モデルから生成した決定表（Go テストは Lean 未導入環境でもこの JSON で差分検証・ルート網羅検査を実行可能）
+- `verify.sh`: `sorry` 検査・`lake build`・JSON 再生成・Go 差分/網羅/安全性テスト一括実行
+
+## 設計仕様上の前提（OSS 版の認可境界）
+
+- OSS 版単独（有償 `auth` モジュール等による `ext.Authorizer` 未導入時）では、匿名（`anonymous`）と `scope:branches` トークンによる制限、およびローカルソケット限定操作・初期パスワード変更前制限・`admin` パスワード変更を除き、認証済みの主体はロールにかかわらず管理者相当の操作（`cluster.remove`、`setting.write`、`base.delete` 等）を実行できます（`Theorems.lean` の `design_oss_without_ext_authorizer_authenticated_has_admin_access`）。
+- ロールに基づく RBAC（例: `viewer` の読み取り専用制限）は、有償 `auth` モジュールが提供する `ext.Authorizer` の責務です。
 
 ## 検証コマンド
 
@@ -21,7 +26,7 @@
 ./formal/lean/verify.sh
 ```
 
-Go 側のみの差分・反例テスト:
+Go 側のみの差分・網羅・安全性テスト:
 
 ```bash
 go test -v ./internal/interface/httpapi -run TestLeanAuthz
