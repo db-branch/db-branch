@@ -32,6 +32,13 @@
 
 [console]
 # listen = ":7080"
+# Console HTTPS requires TLS 1.3. When tls_cert and tls_key are omitted, a
+# self-signed certificate valid for up to 825 days is generated under
+# data_dir/tls (existing certificates exceeding 825 days are regenerated on
+# startup). Set both tls_cert and tls_key to PEM files to use your own
+# certificate; updates to those files are reloaded without restarting.
+# tls_cert = ""
+# tls_key = ""
 
 [notify]
 # Allow Slack / webhook notifications to reach private network addresses (RFC 1918 / IPv6 ULA).

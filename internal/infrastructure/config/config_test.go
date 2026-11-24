@@ -129,3 +129,25 @@ func TestLoad_通知のプライベートIP許可は既定で無効で設定で�
 		t.Error("a string where a boolean is needed was accepted")
 	}
 }
+
+func TestLoad_コンソールTLS証明書と鍵は両方指定時のみ受理する(t *testing.T) {
+	if d := config.Default(); d.Console.TLSCert != "" || d.Console.TLSKey != "" {
+		t.Fatalf("default console TLS = (%q, %q), want empty", d.Console.TLSCert, d.Console.TLSKey)
+	}
+	got, err := config.Load(writeFile(t, "[console]\ntls_cert = \"/etc/ssl/cert.pem\"\ntls_key = \"/etc/ssl/key.pem\"\n"))
+	if err != nil {
+		t.Fatalf("both set: unexpected error: %v", err)
+	}
+	if got.Console.TLSCert != "/etc/ssl/cert.pem" || got.Console.TLSKey != "/etc/ssl/key.pem" {
+		t.Errorf("got = %+v", got.Console)
+	}
+	for _, body := range []string{
+		"[console]\ntls_cert = \"/etc/ssl/cert.pem\"\n",
+		"[console]\ntls_key = \"/etc/ssl/key.pem\"\n",
+	} {
+		_, err := config.Load(writeFile(t, body))
+		if err == nil || !strings.Contains(err.Error(), "tls_cert") || !strings.Contains(err.Error(), "tls_key") {
+			t.Errorf("body %q: want error mentioning tls_cert and tls_key, got %v", body, err)
+		}
+	}
+}

@@ -101,7 +101,11 @@ func (n Node) finish(ctx context.Context, cfg config.Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, _, err := tlscert.Ensure(filepath.Join(cfg.DataDir, "tls"), []string{hostname(), AdvertiseHost(cfg)}); err != nil {
+	certFile, keyFile, err := tlscert.Resolve(cfg.Console.TLSCert, cfg.Console.TLSKey, filepath.Join(cfg.DataDir, "tls"), []string{hostname(), AdvertiseHost(cfg)})
+	if err != nil {
+		return "", err
+	}
+	if _, err := tlscert.NewReloader(certFile, keyFile, nil); err != nil {
 		return "", err
 	}
 	return password, n.Restart(ctx)

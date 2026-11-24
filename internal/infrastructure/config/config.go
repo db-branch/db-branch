@@ -70,7 +70,9 @@ type Branch struct {
 
 // Console configures the web console.
 type Console struct {
-	Listen string `toml:"listen"`
+	Listen  string `toml:"listen"`
+	TLSCert string `toml:"tls_cert"`
+	TLSKey  string `toml:"tls_key"`
 }
 
 // Default returns the built-in configuration.
@@ -111,6 +113,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Ports.Min > cfg.Ports.Max {
 		return Config{}, fmt.Errorf("config %s: ports.min %d is above ports.max %d", path, cfg.Ports.Min, cfg.Ports.Max)
+	}
+	if (cfg.Console.TLSCert == "") != (cfg.Console.TLSKey == "") {
+		return Config{}, fmt.Errorf("config %s: console.tls_cert and console.tls_key must both be set", path)
 	}
 	return cfg, nil
 }

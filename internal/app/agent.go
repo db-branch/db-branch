@@ -376,26 +376,26 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	if err != nil {
 		return err
 	}
-	certFile, keyFile, err := tlscert.Ensure(filepath.Join(cfg.DataDir, "tls"), []string{node, srv.Host})
+	certFile, keyFile, err := tlscert.Resolve(cfg.Console.TLSCert, cfg.Console.TLSKey, filepath.Join(cfg.DataDir, "tls"), []string{node, srv.Host})
 	if err != nil {
 		sock.Close()
 		return err
 	}
-	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
+	reloader, err := tlscert.NewReloader(certFile, keyFile, log)
 	if err != nil {
 		sock.Close()
-		return fmt.Errorf("console TLS certificate: %w", err)
+		return err
 	}
-	if srv.TLSCertPEM, err = os.ReadFile(certFile); err != nil {
-		sock.Close()
-		return fmt.Errorf("console TLS certificate: %w", err)
-	}
+	srv.TLSCert = reloader.CertPEM
 	// Start cluster background publishers/heartbeats only after srv and cl are fully wired.
 	if cl != nil {
 		go cl.publish(runCtx, srv, bus)
 		go cl.heartbeat(runCtx, log)
 	}
-	console, err := tls.Listen("tcp", cfg.Console.Listen, &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12})
+	console, err := tls.Listen("tcp", cfg.Console.Listen, &tls.Config{
+		GetCertificate: reloader.GetCertificate,
+		MinVersion:     tls.VersionTLS13,
+	})
 	if err != nil {
 		sock.Close()
 		return fmt.Errorf("console listen %s: %w", cfg.Console.Listen, err)
