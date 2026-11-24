@@ -1,5 +1,5 @@
 import { FormEvent, useContext, useState } from "react";
-import { api, Base, Branch, canBase } from "../api";
+import { api, Base, Branch, can, canBase } from "../api";
 import { Engine, Icon, Status } from "../components/marks";
 import { Dialog, Drawer, Empty, ErrorLine, Field, Info } from "../components/ui";
 import { skippedReasons } from "../lib/bases";
@@ -39,12 +39,14 @@ export function Bases() {
     <section className="page">
       <header className="page-head">
         <h1>{t("Bases")}</h1>
-        <button className="primary" onClick={() => setCreating(true)}>
-          <Icon name="plus" /> Base
-        </button>
+        {can("base.create") && (
+          <button className="primary" onClick={() => setCreating(true)}>
+            <Icon name="plus" /> Base
+          </button>
+        )}
       </header>
       <ErrorLine error={error} />
-      {bases && bases.length === 0 && <Empty line={t("No bases.")} action={<button onClick={() => setCreating(true)}>{t("Create a base")}</button>} />}
+      {bases && bases.length === 0 && <Empty line={t("No bases.")} action={can("base.create") ? <button onClick={() => setCreating(true)}>{t("Create a base")}</button> : undefined} />}
       {all.length > 0 && <FilterBar values={filter} onChange={setFilter} facets={facets} shown={shown.length} total={all.length} />}
       {all.length > 0 && shown.length === 0 && <p className="muted">{t("No match")}</p>}
       <div className="bases">
@@ -259,7 +261,7 @@ export function BaseBody({
                       <span className="muted small" title={latest ? t("The latest snapshot is kept") : t("Branches use it")}>
                         {latest ? "kept" : "in use"}
                       </span>
-                    ) : !canBase(base, "base.snapshot_delete") ? null : (
+                    ) : !(canBase(base, "base.snapshot.delete") || canBase(base, "base.snapshot_delete")) ? null : (
                       <button
                         type="button"
                         className="text-button danger"

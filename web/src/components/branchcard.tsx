@@ -23,6 +23,9 @@ export type Job = { name: string; base: string; runtime: string; startedAt: numb
 // left to the server, which decides for the branch's owner.
 export const allowed = (can: Record<string, boolean> | undefined, action: string) => !can || !(action in can) || can[action];
 
+const allowedAction = (can: Record<string, boolean> | undefined, action: string, legacy?: string) =>
+  !can ? true : action in can ? can[action] : legacy && legacy in can ? can[legacy] : true;
+
 // How long a "Confirm" stays armed before it goes back to the plain button.
 const CONFIRM_MS = 8000;
 
@@ -125,10 +128,15 @@ export function BranchRow({
   const soon = ready && ex === "soon";
   const expired = ready && ex === "expired";
   const noRole = t("Your role cannot do this.");
-  const why = (action: string, needsReady = false) => (!allowed(can, action) ? noRole : needsReady && !ready ? t("Available once it is ready.") : undefined);
-  const resetWhy = why("branch.reset", true);
-  const extendWhy = why("branch.update");
-  const deleteWhy = why("branch.delete");
+  const connectAllowed = allowed(can, "branch.connect");
+  const pauseAllowed = allowedAction(can, "branch.pause", "branch.update");
+  const resumeAllowed = allowedAction(can, "branch.resume", "branch.update");
+  const extendAllowed = allowedAction(can, "branch.extend", "branch.update");
+  const resetAllowed = allowed(can, "branch.reset");
+  const deleteAllowed = allowed(can, "branch.delete");
+  const resetWhy = !resetAllowed ? noRole : !ready ? t("Available once it is ready.") : undefined;
+  const extendWhy = !extendAllowed ? noRole : undefined;
+  const deleteWhy = !deleteAllowed ? noRole : undefined;
   const [prefix, rest] = splitOwned(b.name, ownerLabel(b) ?? undefined);
   const more = longerChoices(ttlChoices, b.expires_at, now);
 
@@ -208,23 +216,23 @@ export function BranchRow({
         )}
         <div className="brow-side">
           <span className="brow-actions">
-            <CopyButton text={t("Copy URL")} label={t("Copy connection URL")} load={() => api.dsn(b.name)} disabled={!ready} />
+            {connectAllowed && <CopyButton text={t("Copy URL")} label={t("Copy connection URL")} load={() => api.dsn(b.name)} disabled={!ready} />}
             {open && manage && (ready || paused) && b.checkpoints && allowed(can, "branch.fork") && (
               <button type="button" disabled={working} onClick={() => setForking({})}>
                 Fork
               </button>
             )}
-            {manage && ready && !extendWhy && (
+            {manage && ready && pauseAllowed && (
               <button type="button" disabled={working} onClick={() => run(api.pauseBranch(b.name))}>
                 Pause
               </button>
             )}
-            {manage && paused && !extendWhy && (
+            {manage && paused && resumeAllowed && (
               <button type="button" disabled={working} onClick={() => run(api.resumeBranch(b.name))}>
                 Resume
               </button>
             )}
-            {manage && (
+            {manage && extendAllowed && (
               <button
                 type="button"
                 className={soon || expired ? "primary" : ""}
@@ -260,7 +268,7 @@ export function BranchRow({
       {open && (
         <div className="brow-details" id={detailsId}>
           {fresh && ready && <p className="fresh-note">{t("Your Branch is ready. Connect with the details below.")}</p>}
-          {ready ? <ConnectPanel branch={b.name} proxy={b.proxy} /> : <p className="muted small">{failed || paused ? "" : t("Connection details appear once it is ready.")}</p>}
+          {ready && connectAllowed ? <ConnectPanel branch={b.name} proxy={b.proxy} /> : connectAllowed ? <p className="muted small">{failed || paused ? "" : t("Connection details appear once it is ready.")}</p> : null}
           <dl className="facts two">
             <dt>Snapshot</dt>
             <dd>
@@ -384,16 +392,20 @@ export function BranchRow({
                     </button>
                   </span>
                 </div>
-              ) : (
+              ) : (resetAllowed || deleteAllowed) ? (
                 <div className="brow-danger">
-                  <button type="button" ref={(el) => void (triggers.current.reset = el)} disabled={!!resetWhy || working} title={resetWhy ?? t("Back to the data it started with")} onClick={() => ask({ type: "ask", what: "reset" })}>
-                    {t("Reset")}
-                  </button>
-                  <button type="button" ref={(el) => void (triggers.current.delete = el)} className="danger-button" disabled={!!deleteWhy || working} title={deleteWhy} onClick={() => ask({ type: "ask", what: "delete" })}>
-                    {t("Delete")}
-                  </button>
+                  {resetAllowed && (
+                    <button type="button" ref={(el) => void (triggers.current.reset = el)} disabled={!!resetWhy || working} title={resetWhy ?? t("Back to the data it started with")} onClick={() => ask({ type: "ask", what: "reset" })}>
+                      {t("Reset")}
+                    </button>
+                  )}
+                  {deleteAllowed && (
+                    <button type="button" ref={(el) => void (triggers.current.delete = el)} className="danger-button" disabled={!!deleteWhy || working} title={deleteWhy} onClick={() => ask({ type: "ask", what: "delete" })}>
+                      {t("Delete")}
+                    </button>
+                  )}
                 </div>
-              )}
+              ) : null}
             </div>
           ) : (
             <p className="muted small">{t("Sign in to extend, reset or delete.")}</p>

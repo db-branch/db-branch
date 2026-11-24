@@ -1,5 +1,5 @@
 import { FormEvent, useContext, useState } from "react";
-import { api, Base, Branch, isAdmin, ownerLabel } from "../api";
+import { api, Base, Branch, can, isAdmin, ownerLabel } from "../api";
 import { Icon, Status } from "../components/marks";
 import { Dialog, Drawer, Empty, ErrorLine, Field } from "../components/ui";
 import { relative } from "../lib/format";
@@ -34,15 +34,17 @@ export function Branches() {
     <section className="page">
       <header className="page-head">
         <h1>{t("Branches")}</h1>
-        <button className="primary" onClick={() => setCreating(true)} disabled={ready.length === 0} title={ready.length === 0 ? t("Create a base first") : undefined}>
-          <Icon name="plus" /> Branch
-        </button>
+        {can("branch.create") && (
+          <button className="primary" onClick={() => setCreating(true)} disabled={ready.length === 0} title={ready.length === 0 ? t("Create a base first") : undefined}>
+            <Icon name="plus" /> Branch
+          </button>
+        )}
       </header>
       <ErrorLine error={error} />
       {branches && branches.length === 0 && (
         <Empty
           line={ready.length === 0 ? t("No bases yet.") : t("No branches.")}
-          action={ready.length > 0 && <button onClick={() => setCreating(true)}>{t("Create a branch")}</button>}
+          action={ready.length > 0 && can("branch.create") && <button onClick={() => setCreating(true)}>{t("Create a branch")}</button>}
         />
       )}
       {branches && branches.length > 0 && <FilterBar values={filter} onChange={setFilter} facets={facets} shown={shown.length} total={all.length} />}

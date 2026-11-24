@@ -104,4 +104,4 @@ func main() {
 - 用途: ブランチ A のノードで動くモジュールが、別のノードにあるブランチ B の中身（チェックサムや行）を、B のノードのモジュールに頼む。データベースの認証情報はノードの外に出ない（各ノードのモジュールがローカルのソケットで自分のブランチだけを読み、結果だけが agent 間の相互 TLS を通る）
 - `Principal` は呼び出し元のモジュールが責任を持つ（モジュールは agent と同じ信頼の内側で動く）。受けた要求の利用者をそのまま渡すこと
 - ライセンス（masking）: `license.FeatureMasking` はどのプランにも入れない（トライアルにも入らない）。`Modules` に `masking` を名指しで書いたライセンスだけが `Has` で真になる（`*` は含まない）
-- ライセンス: `license.FeatureDiff`（`diff`）。Lite・Team・Business のすべて（`planFeatures` の 1 か所）。Lite は history と diff だけで 3 ノードまで
+- ライセンス（diff）: `license.FeatureDiff`（`diff`）もどのプランにも入れない（オプトイン。`Modules` に `diff` を名指しで書いたライセンスだけが `Has` で真になる）。Lite は `history` で 3 ノードまで、Team は `users`・`history` で 5 ノードまで、Business は `users`・`audit`・`sso`・`history` で 10 ノードまで（`planFeatures` の 1 か所）

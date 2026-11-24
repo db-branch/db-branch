@@ -44,8 +44,8 @@ const ANON_TTL = 4 * 3600e3;
 const DAY = 24 * 3600e3;
 const CHECKPOINT_NAME = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const MAX_CHECKPOINT_NAME = 40;
-const CONSOLE_ACTIONS = ["base.read", "base.create", "base.delete", "base.load", "base.snapshot", "base.publish", "base.refresh", "base.refresh.read", "runtime.install", "cluster.read", "setting.write", "module.install", "token.write", "backup.read", "route-user.write", "update.read", "update.check", "update.apply", "branch.checkpoint", "branch.checkpoint_delete", "branch.restore", "branch.upgrade", "branch.fork", "branch.merge"];
-const BASE_ACTIONS = ["base.snapshot", "base.load", "base.delete", "base.describe", "base.publish", "base.sql", "base.start", "base.stop", "base.refresh", "base.refresh.read", "base.snapshot_delete", "base.replicas"];
+const CONSOLE_ACTIONS = ["base.read", "base.create", "base.delete", "base.load", "base.snapshot", "base.publish", "base.refresh", "base.refresh.read", "runtime.install", "cluster.read", "setting.write", "module.install", "token.write", "backup.read", "route-user.write", "update.read", "update.check", "update.apply", "branch.read", "branch.create", "branch.connect", "branch.query", "branch.extend", "branch.pause", "branch.resume", "branch.update", "branch.reset", "branch.delete", "branch.recreate", "branch.checkpoint", "branch.checkpoint.delete", "branch.checkpoint_delete", "branch.restore", "branch.upgrade", "branch.fork", "branch.merge"];
+const BASE_ACTIONS = ["base.snapshot", "base.load", "base.delete", "base.describe", "base.publish", "base.sql", "base.start", "base.stop", "base.refresh", "base.refresh.read", "base.snapshot.delete", "base.snapshot_delete", "base.replicas"];
 
 /** Go-style durations: "4h", "90m", "1h30m0s". Null when it is not one. */
 export function parseDuration(s: string): number | null {

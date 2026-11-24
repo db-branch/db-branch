@@ -300,6 +300,7 @@ export type LicenseReport = {
   all: boolean;
   modules: string[];
   unavailable: string[];
+  offline?: boolean;
   enabled: string[];
 };
 export type ModuleState = { requires_license?: boolean; name: string; version: string; wanted: boolean; nodes: { node: string; loaded: string; current: boolean; problem?: string }[] };
@@ -321,6 +322,25 @@ export class ApiError extends Error {
 
 let csrf = "";
 
+type UnauthorizedListener = () => void;
+const unauthorizedListeners = new Set<UnauthorizedListener>();
+
+// onUnauthorized subscribes to session expiration (401) notifications and
+// returns an unsubscribe function.
+export function onUnauthorized(fn: UnauthorizedListener): () => void {
+  unauthorizedListeners.add(fn);
+  return () => void unauthorizedListeners.delete(fn);
+}
+
+// notifyUnauthorized clears the cached session state and prompts re-login.
+export function notifyUnauthorized(): void {
+  current = null;
+  csrf = "";
+  for (const fn of unauthorizedListeners) fn();
+}
+
+export const hasSession = (): boolean => current !== null;
+
 async function call<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -329,6 +349,9 @@ async function call<T>(method: string, path: string, body?: unknown, signal?: Ab
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    if (res.status === 401 && path !== "/v1/auth/login" && current !== null) {
+      notifyUnauthorized();
+    }
     const e = (data as { error?: { code?: string; message?: string } }).error ?? {};
     throw new ApiError(res.status, e.code ?? "error", e.message ?? res.statusText);
   }

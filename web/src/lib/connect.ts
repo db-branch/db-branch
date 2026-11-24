@@ -23,7 +23,7 @@ export type Snippet = { shown: string; copy: string };
 // snippets returns each form twice: as shown (password masked unless
 // reveal) and as copied (always the real password).
 export function snippets(c: Connection, reveal: boolean): { url: Snippet; command: Snippet; env: Snippet } {
-  const withPw = (pw: string) => c.url.replace(/^([a-z]+:\/\/[^:@/]*:)[^@]*@/, `$1${pw}@`);
+  const withPw = (pw: string) => c.url.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^:@/]*:)[^/?#]*@/, `$1${pw}@`);
   const shownUrl = reveal ? c.url : withPw(MASK);
   const command: Snippet =
     c.engine === "postgres"

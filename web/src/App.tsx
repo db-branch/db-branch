@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { api, ApiError, can, isAdmin, LoginMethod, managesBases, Session, ssoReturn } from "./api";
+import { api, ApiError, can, isAdmin, LoginMethod, managesBases, onUnauthorized, Session, ssoReturn } from "./api";
 import { AccountMenu } from "./components/account";
 import { FirstPassword } from "./components/firstpassword";
 import { SideNav } from "./components/sidenav";
@@ -24,13 +24,18 @@ type Page = keyof typeof pages;
 // Who sees each page: maintainers get branches, bases and the cluster;
 // settings are for admins.
 const pageAction: Record<Page, string> = { branches: "branch.read", bases: "base.read", storage: "cluster.read", cluster: "cluster.read", settings: "setting.write" };
-const visiblePages = () => (Object.keys(pages) as Page[]).filter((p) => isAdmin() || can(pageAction[p]));
+export const visiblePages = () => (Object.keys(pages) as Page[]).filter((p) => isAdmin() || can(pageAction[p]));
 
 // The admin console lives under /admin (see lib/nav.ts); main.tsx imports it from here.
 export { ADMIN };
 
+export function nextSessionRoute(s: Session | null): "login" | "first_password" | "in" {
+  if (!s) return "login";
+  return s.must_change_password ? "first_password" : "in";
+}
+
 export function App() {
-  const [state, setState] = useState<"loading" | "login" | "in">("loading");
+  const [state, setState] = useState<"loading" | "login" | "first_password" | "in">("loading");
   const [session, setSession] = useState<Session | null>(null);
   const enter = (s: Session) => {
     setLanguage(chooseLanguage(s.language || remembered(), navigator.language));
@@ -39,13 +44,44 @@ export function App() {
   };
   const [ssoError, setSsoError] = useState<string | undefined>();
   useEffect(() => {
-    ssoReturn().then(({ session, error }) => {
-      if (session) return enter(session);
+    ssoReturn().then(({ session: s, error }) => {
+      if (s) {
+        setLanguage(chooseLanguage(s.language || remembered(), navigator.language));
+        const next = nextSessionRoute(s);
+        if (next === "in") return enter(s);
+        setState(next);
+        return;
+      }
       setSsoError(error);
-      api.session().then((s) => (s.must_change_password ? setState("login") : enter(s)), () => setState("login"));
+      api.session().then(
+        (sess) => {
+          setLanguage(chooseLanguage(sess.language || remembered(), navigator.language));
+          const next = nextSessionRoute(sess);
+          if (next === "in") enter(sess);
+          else setState(next);
+        },
+        () => setState("login"),
+      );
     });
   }, []);
+  useEffect(() => {
+    if (state !== "in" && state !== "first_password") return;
+    return onUnauthorized(() => {
+      disconnect();
+      setSession(null);
+      setState("login");
+    });
+  }, [state]);
   if (state === "loading") return null;
+  if (state === "first_password")
+    return (
+      <main className="login">
+        <div className="wordmark">
+          <Mark /> db-branch
+        </div>
+        <FirstPassword onDone={enter} onSignOut={() => api.signOut(() => setState("login"))} />
+      </main>
+    );
   if (state === "login" || !session)
     return <Login onDone={enter} defaultUser="admin" hint={t("Forgot the admin password? sudo db-branch admin reset-password")} initialError={ssoError} />;
   if (!managesBases()) return <NotAdmin session={session} onLogout={() => setState("login")} />;

@@ -664,3 +664,37 @@ func TestAccess_ドット区切りとpause_resume分離の新アクション名�
 		t.Errorf("reverse aliases in session.can: %v", newCan)
 	}
 }
+
+func TestHTTPAPI_consoleActionsにブランチ系アクションが含まれる(t *testing.T) {
+	f := newFixture(t)
+	az := &legacyOnlyAuthorizer{allow: map[string]bool{
+		"auth.session":    true,
+		"branch.read":     true,
+		"branch.create":   true,
+		"branch.reset":    true,
+		"branch.delete":   true,
+		"branch.recreate": true,
+		"branch.connect":  true,
+		"branch.query":    true,
+		"branch.extend":   true,
+		"branch.pause":    true,
+		"branch.resume":   true,
+		"base.read":       true,
+		"base.create":     true,
+		"cluster.read":    true,
+	}}
+	f.srv.Ext = ext.Module{Authenticator: moduleAuth{}, Authorizer: az}
+	h := f.srv.Handler(false)
+	resp, loginBody := send(t, h, "POST", "/v1/auth/login", map[string]any{"username": "alice", "password": "alice-pw"}, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("login status = %d", resp.StatusCode)
+	}
+	cookie, csrf := resp.Cookies()[0], loginBody["csrf_token"].(string)
+	_, sess := send(t, h, "GET", "/v1/auth/session", nil, withSession(cookie, csrf))
+	can := sess["can"].(map[string]any)
+	for _, a := range []string{"branch.read", "branch.create", "branch.reset", "branch.delete", "branch.recreate", "branch.connect", "branch.query", "branch.extend", "branch.pause", "branch.resume"} {
+		if can[a] != true {
+			t.Errorf("session.can[%q] = %v, want true", a, can[a])
+		}
+	}
+}

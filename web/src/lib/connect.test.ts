@@ -43,3 +43,22 @@ describe("proxyWays", () => {
     expect(proxyWays(p, "feature-x", "postgres").command).toBe("psql -h proxy -p 6033 -U app.feature-x");
   });
 });
+
+describe("TestConnect_非標準スキームURLのパスワードが正しくマスクされる", () => {
+  it("+, -, ., 数字, 大文字を含むスキームや認証情報内の特殊文字でもパスワードをマスクする", () => {
+    for (const url of [
+      "mysql+pymysql://feature-x:s3cret@192.0.2.10:40001/app",
+      "postgresql+psycopg2://feature-x:s3cret@192.0.2.11:5432/postgres?sslmode=require",
+      "clickhouse-http://feature-x:s3cret@192.0.2.12:8123/default",
+      "db2.v1://feature-x:s3cret@192.0.2.13:50000/db",
+      "Postgres://feature-x:s3cret@192.0.2.14:5432/app",
+    ]) {
+      const s = snippets(connectionFrom(url), false);
+      expect(s.url.shown).not.toContain("s3cret");
+      expect(s.url.shown).toContain("••••••@");
+      expect(s.url.copy).toBe(url);
+      expect(s.env.shown).not.toContain("s3cret");
+      expect(s.env.copy).toContain("DB_PASSWORD=s3cret");
+    }
+  });
+});

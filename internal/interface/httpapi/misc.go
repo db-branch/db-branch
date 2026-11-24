@@ -273,7 +273,7 @@ type sessionJSON struct {
 // shows or hides.
 var consoleActions = []string{"base.read", "base.create", "base.delete", "base.load", "base.snapshot", "base.publish", "base.refresh", "base.refresh.read",
 	"runtime.install", "cluster.read", "setting.write", "module.install", "token.write", "backup.read", "route-user.write", "update.read", "update.check", "update.apply", "license.write",
-	"branch.extend", "branch.pause", "branch.resume", "branch.update", "branch.checkpoint", "branch.checkpoint.delete", "branch.checkpoint_delete", "branch.restore", "branch.upgrade", "branch.fork", "branch.merge"}
+	"branch.read", "branch.create", "branch.connect", "branch.query", "branch.extend", "branch.pause", "branch.resume", "branch.update", "branch.reset", "branch.delete", "branch.recreate", "branch.checkpoint", "branch.checkpoint.delete", "branch.checkpoint_delete", "branch.restore", "branch.upgrade", "branch.fork", "branch.merge"}
 
 // adminUser is the session user of the built-in admin password.
 const adminUser = "admin"

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { api, Branch, ownerLabel } from "../api";
+import { extendTtl } from "../lib/branches";
 import { relative } from "../lib/format";
 import { t } from "../lib/i18n";
 import { BranchName } from "./branchname";
@@ -16,6 +17,7 @@ export function BranchView({
   clustered,
   max,
   sections = [],
+  allow,
   onBack,
   onExtend,
   onReset,
@@ -31,6 +33,7 @@ export function BranchView({
   clustered: boolean;
   max: number;
   sections?: BranchSection[];
+  allow?: (action: string) => boolean;
   onBack: () => void;
   onExtend: (ttl: string) => void;
   onReset: () => void;
@@ -43,6 +46,7 @@ export function BranchView({
   onOpenParent?: (name: string) => void;
 }): ReactNode {
   const ready = b.status === "ready";
+  const may = (action: string, legacy?: string) => !allow || allow(action) || (legacy ? allow(legacy) : false);
   return (
     <section className="page branch-page">
       <button type="button" className="text-button back-link" onClick={onBack}>
@@ -89,7 +93,7 @@ export function BranchView({
         <dd className="endpoint">
           {clustered && <span className="mono muted">{b.connection.host}:</span>}
           <span className="mono">{b.connection.port}</span>
-          {ready && <CopyButton label={t("Copy connection URL")} load={() => api.dsn(b.name)} />}
+          {ready && may("branch.connect") && <CopyButton label={t("Copy connection URL")} load={() => api.dsn(b.name)} />}
         </dd>
         {clustered && (
           <>
@@ -111,20 +115,28 @@ export function BranchView({
         </dd>
       </dl>
       <div className="branch-actions" role="group" aria-label={t("Actions")}>
-        {b.status === "lost" && !b.parent_branch && <button onClick={onRecreate}>{t("Recreate")}</button>}
-        {b.proxy && <button onClick={onCopyProxy}>{t("Copy proxy URL")}</button>}
-        {onFork && (b.status === "ready" || b.status === "paused") && b.checkpoints && <button onClick={onFork}>Fork</button>}
-        {b.status === "ready" && <button onClick={onPause}>Pause</button>}
-        {b.status === "paused" && <button onClick={onResume}>Resume</button>}
-        <button onClick={() => onExtend("1h")}>{t("Extend 1h")}</button>
-        <button onClick={() => onExtend("24h")}>{t("Extend 24h")}</button>
-        <button onClick={() => onExtend("168h")}>{t("Extend 7d")}</button>
-        <button onClick={onReset} disabled={!ready}>
-          {t("Reset")}
-        </button>
-        <button className="danger-button" onClick={onDelete} disabled={!["ready", "paused", "failed", "lost"].includes(b.status)}>
-          {t("Delete")}
-        </button>
+        {b.status === "lost" && !b.parent_branch && may("branch.recreate") && <button onClick={onRecreate}>{t("Recreate")}</button>}
+        {b.proxy && may("branch.connect") && <button onClick={onCopyProxy}>{t("Copy proxy URL")}</button>}
+        {onFork && may("branch.fork") && (b.status === "ready" || b.status === "paused") && b.checkpoints && <button onClick={onFork}>Fork</button>}
+        {b.status === "ready" && may("branch.pause", "branch.update") && <button onClick={onPause}>Pause</button>}
+        {b.status === "paused" && may("branch.resume", "branch.update") && <button onClick={onResume}>Resume</button>}
+        {may("branch.extend") && (
+          <>
+            <button onClick={() => onExtend(extendTtl(b.expires_at, Date.now(), 60))}>{t("Extend 1h")}</button>
+            <button onClick={() => onExtend(extendTtl(b.expires_at, Date.now(), 24 * 60))}>{t("Extend 24h")}</button>
+            <button onClick={() => onExtend(extendTtl(b.expires_at, Date.now(), 168 * 60))}>{t("Extend 7d")}</button>
+          </>
+        )}
+        {may("branch.reset") && (
+          <button onClick={onReset} disabled={!ready}>
+            {t("Reset")}
+          </button>
+        )}
+        {may("branch.delete") && (
+          <button className="danger-button" onClick={onDelete} disabled={!["ready", "paused", "failed", "lost"].includes(b.status)}>
+            {t("Delete")}
+          </button>
+        )}
       </div>
       {sections.map((s) => (
         <section key={s.id} id={s.id} className="branch-section">
