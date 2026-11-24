@@ -1,6 +1,6 @@
 # db-branch 設計ドキュメント
 
-ステータス: Draft / 最終更新: 2026-11-09
+ステータス: 1.0 (GA) 基準 / 最終更新: 2026-11-24
 
 ## 1. 目的
 
@@ -86,7 +86,6 @@ db-branch runtime install mysql@8.4.3
 db-branch runtime install postgres@17.2
 db-branch runtime list
 db-branch runtime remove mysql@8.0.40        # 参照するベースがあれば拒否
-db-branch runtime import mysql@8.4.3-custom --path /opt/mysql   # 手元のビルドを登録
 ```
 
 - 配置先: `/var/lib/db-branch/runtimes/<engine>/<version>/`（`bin/`, `lib/`, `share/`）
@@ -116,7 +115,7 @@ db-branch runtime import mysql@8.4.3-custom --path /opt/mysql   # 手元のビ�
 |---|---|---|
 | MySQL | 公式の Linux Generic tarball（glibc 版） | 公式の GPG 署名と MD5/SHA |
 | PostgreSQL | PGDG の apt リポジトリ（`apt.postgresql.org`、旧マイナー版は `apt-archive.postgresql.org`）の .deb を取得し、システムには入れずに展開する | リポジトリの GPG 署名 |
-| 共通 | `import`（ローカルのパス）、ミラー URL（エアギャップ環境向け） | 任意で SHA256 |
+| 共通 | ミラー URL（エアギャップ環境向け）。外部 DB エンジン（Experimental・単一ノード限定）は `db-branch module install github.com/...`（[runtime-module-install.md](runtime-module-install.md)） | Ed25519 / GPG 署名または SHA-256 |
 
 PostgreSQL には公式の汎用バイナリ tarball がないため、PGDG の .deb を展開して使う。こうするとマイナーバージョンまで固定できる。
 
@@ -247,7 +246,7 @@ PostgreSQL や MySQL（InnoDB）はクラッシュ整合性があるため、デ
 
 ZFS は空きメモリの大半を ARC に使おうとする。初期設定のままだと、InnoDB のバッファプールや PostgreSQL の shared_buffers とメモリを取り合い、ブランチの DB サーバーがメモリ不足で落ちることがある。
 
-- **上限を必ず決める**: `db-branch init` で ARC の上限（`zfs_arc_max`）を設定する。既定は「物理メモリの 25%」で、`config.toml` の `[zfs] arc_max` で変えられる
+- **上限を必ず決める**: `db-branch init` で ARC の上限（`zfs_arc_max`）を設定する。既定は「物理メモリの 25%」で、`config.toml` の `[zfs] arc_max_mb` で変えられる
   - 起動中のカーネルには `/sys/module/zfs/parameters/zfs_arc_max` で即時に反映する
   - 再起動後も残るよう `/etc/modprobe.d/db-branch-zfs.conf` に書く（パッケージのインストール時ではなく、`init` のときだけ。既存の設定があれば上書きせず警告する）
 - **管理者が変える**: クラスタ設定 `zfs.arc_max`（コンソールの Settings、または `db-branch settings set core zfs.arc_max=50%`）で全ノードの上限を変えられる。物理メモリに対する割合（`50%`）か大きさ（`8GB`、`512MB`）で指定する。空なら `init` で決めた値のまま（既定）。各ノードは数秒以内に `zfs_arc_max` へ即時反映し、`db-branch-zfs.conf` にも書く（空に戻すと `init` の値に戻す）。その値は 64MB 以上、かつ物理メモリから予備（1GB と 10% の大きいほう）を引いた量以下でなければならず、満たさないノードはそのまま動き続け、クラスタ画面に理由を出す。別の modprobe ファイルが `zfs_arc_max` を決めているときも、再起動後に負ける可能性を同じ場所に出す。上げるとベースが大きいときのブランチ作成が速くなることがある。
@@ -269,10 +268,9 @@ ZFS は空きメモリの大半を ARC に使おうとする。初期設定の�
 
 1 つのブランチは 1 つのデータセットにまとめる（redo ログや WAL を別のデータセットに分けない）。分けると、スナップショットとクローンを複数のデータセットで揃えて扱う必要が出てくるため。
 
-ZFS はコピーオンライトでページの書き込みが壊れないため、次の DB 側の設定を既定で無効にして書き込みを減らす。
+ZFS はコピーオンライトでページの書き込みが壊れないため、MySQL では次の DB 側の設定を既定で無効にして書き込みを減らす。PostgreSQL はライブチェックポイント等の安全性を優先し、既定の `full_page_writes = on` を維持する。
 
 - MySQL: `innodb_doublewrite=OFF`、`innodb_flush_neighbors=0`
-- PostgreSQL: `full_page_writes=off`
 
 ブランチは開発・検証用途なので、既定で `sync=standard` のまま、DB 側の永続性設定（`innodb_flush_log_at_trx_commit` など）も変えない。速さを優先したい場合はブランチ単位で緩められるようにする。
 
@@ -319,7 +317,7 @@ HTTP ヘッダー（例: `X-DB-Branch`）をミドルウェアで読み、この
 
 - 優先順位: コメント > ユーザー名 > ユーザーの既定ブランチ
 - `transaction_persistent=1`: トランザクション途中ではブランチを切り替えない
-- コメント指定は全ブランチ共通のユーザー（ベースから引き継がれる）で接続する前提。誰でも任意のブランチに入れるため、ユーザー単位で無効化できるようにする
+- コメント指定は共有のルートユーザー（`db-branch route user add` で登録した全ブランチ共通ユーザー）でのみ有効とする。ブランチ専用ユーザーではコメントルーティングを行わず、他ブランチへの越境を防ぐ（`/*\s*db_branch\s*=\s*'<name>'\s*\*/` の SQL コメント構文のみに一致）
 - 注意: `mysql` CLI は初期設定でコメントを削る（`-c` が必要）
 
 ### リコンサイル
@@ -344,7 +342,7 @@ HTTP ヘッダー（例: `X-DB-Branch`）をミドルウェアで読み、この
 | `db-branch-proxysql` | バージョン固定の ProxySQL（GPL-3.0）をリパッケージ | — |
 
 - MySQL / PostgreSQL のバイナリはパッケージの依存にしない。ランタイムマネージャで後から追加する（§4）。公式の MySQL バイナリが使う共有ライブラリ（libaio、libnuma）だけは依存に入れる
-- Ubuntu 24.04 / 26.04 と Debian 13 では libaio が `libaio.so.1t64` という名前になっているため、MySQL のランタイムを展開するときに、ランタイム内の `lib/private/` に `libaio.so.1` へのリンクを作る（システムには手を加えない）
+- Ubuntu 24.04 LTS / 26.04 LTS では libaio が `libaio.so.1t64` という名前になっているため、MySQL のランタイムを展開するときに、ランタイム内の `lib/private/` に `libaio.so.1` へのリンクを作る（システムには手を加えない）
 - データ: `/var/lib/db-branch`、ログ: journald、専用システムユーザー `db-branch`
 - インストールだけでディスクに触れず、何もダウンロードしない。ZFS プールの設定は `db-branch init` で明示的に行う
 - ライフサイクル（`apt install` / `upgrade` / `remove` / `purge`）:
@@ -365,10 +363,11 @@ agent が管理画面を配信する。フロントエンド（React + Vite）�
 - TLS: TLS 1.3 必須（`MinVersion: tls.VersionTLS13`）。既定ではノードごとに自己署名証明書（ECDSA P-256、有効期間 825 日以下。起動時に 825 日を超える既存証明書は再生成）を自動生成して使い、`config.toml` の `[console]`（`tls_cert` / `tls_key`）で任意の証明書と秘密鍵（PEM）に差し替えられる（片方のみ指定・読込不能・鍵不一致は起動時エラー）。差し替えた証明書・鍵ファイルの更新は再起動なしで次の TLS ハンドシェイクおよび `/tls.pem` に反映される（更新途中で読込に失敗した場合は直前の有効な証明書を維持して警告ログを残す）
 - 状態の変化は Server-Sent Events で即時に反映する（再読み込み不要）
 - **ブランチごとの画面**：Branches の一覧は、状態・名前・Base だけの軽い表で、名前を選ぶと、そのブランチの専用画面（`/admin/branches/<名前>`、リンクの共有・再読み込みができる）へ移る。専用画面には、Base とスナップショット・エンジン・接続先（コピー）・ノード（クラスタのとき）・所有者・作成・TTL・使用量、操作（Recreate〔lost のとき〕・Copy proxy URL・Extend 1h/24h/7d・Reset・Delete）、そして順に、Connect、Checkpoints（グラフ。Expand ボタンはそのまま）、Transactions（履歴モジュールがあり、記録するブランチで、読む権限があるとき。ライブの線のトランザクションを新しい順の表で。文・テーブルで絞り込み、古いものを続けて読める。読むだけで、復元はグラフで選ぶ）、Upgrade が並ぶ。一覧の操作メニューと、Connect・Checkpoints のダイアログは、この画面へ移した。新規作成は一覧に残る
-- **SQL ランナー（ブランチのページ）**：管理画面のブランチのページと、ユーザーページのブランチのページに、SQL の欄がある（`ready` のブランチで、`branch.query` の権限があるとき）。`;` で区切った複数の文を、先頭から順に1文ずつ（API は1回に1文）、そのブランチ自身のユーザーとして実行し、途中で失敗したらそこで止め（文字列・コメント・`$$` の中の `;` では区切らない）、結果は文ごとに出る。1文ずつ（`POST /v1/branches/{name}/query`）、行は表（最大 500 行。超えると「(cut)」）、行を返さない文は影響行数と時間を出す。値は文字列で、NULL は NULL と出る。Ctrl / ⌘ + Enter で実行できる。変更は、そのブランチに残る（Reset で戻る）。履歴の保存や補完などはない\n- **ブランチの一時停止（Pause / Resume）**：`ready` のブランチのデータベースサーバーだけを、正常停止して、メモリを解放する（`POST /v1/branches/{name}/pause`、`branch pause <name>`）。データセット（差分）・ポート・認証情報は残り、状態は `pausing` → `paused`。`POST …/resume`（`branch resume <name>`）で、同じポート・同じ認証情報のまま、サーバーを起動して `ready` に戻す（`resuming`）。起動できなかったときは、`paused` のまま、理由を `status_reason` に残し、やり直せる。一時停止中は、接続できず（ProxySQL の振り分けにも入らない）、Reset・Checkpoint・アップグレードはできない（先に再開する）。削除と TTL の延長はできる。**TTL は止まらない**（期限が来れば、一時停止中でも削除される）。エージェントの再起動では、`paused` のブランチは起動しない（`pausing` は停止まで、`resuming` は起動まで進める）。権限は TTL の延長と同じ `branch.update`（所有者と管理者）。クラスターの全ノードがプロトコル 18 になるまでは、Pause を `cluster_upgrading` で断る（`paused` という状態を知らない古いノードが、起動や削除を誤るため）。コンソールでは、管理画面のブランチのページとユーザーページの行に、Extend と並んで Pause / Resume があり、状態は一時停止の印（2本の縦棒）と「Paused」で出る
+- **SQL ランナー（ブランチのページ）**：管理画面のブランチのページと、ユーザーページのブランチのページに、SQL の欄がある（`ready` のブランチで、`branch.query` の権限があるとき）。`;` で区切った複数の文を、先頭から順に1文ずつ（API は1回に1文）、そのブランチ自身のユーザーとして実行し、途中で失敗したらそこで止め（文字列・コメント・`$$` の中の `;` では区切らない）、結果は文ごとに出る。1文ずつ（`POST /v1/branches/{name}/query`）、行は表（最大 500 行。超えると「(cut)」）、行を返さない文は影響行数と時間を出す。値は文字列で、NULL は NULL と出る。Ctrl / ⌘ + Enter で実行できる。変更は、そのブランチに残る（Reset で戻る）。履歴の保存や補完などはない
+- **ブランチの一時停止（Pause / Resume）**：`ready` のブランチのデータベースサーバーだけを、正常停止して、メモリを解放する（`POST /v1/branches/{name}/pause`、`branch pause <name>`）。データセット（差分）・ポート・認証情報は残り、状態は `pausing` → `paused`。`POST …/resume`（`branch resume <name>`）で、同じポート・同じ認証情報のまま、サーバーを起動して `ready` に戻す（`resuming`）。起動できなかったときは、`paused` のまま、理由を `status_reason` に残し、やり直せる。一時停止中は、接続できず（ProxySQL の振り分けにも入らない）、Reset・Checkpoint・アップグレードはできない（先に再開する）。削除と TTL の延長はできる。**TTL は止まらない**（期限が来れば、一時停止中でも削除される）。エージェントの再起動では、`paused` のブランチは起動しない（`pausing` は停止まで、`resuming` は起動まで進める）。権限は `branch.pause` / `branch.resume`（所有者と管理者。互換のため旧名 `branch.update` も許容）。一時停止中のブランチは配置のメモリ予算から除外し、再開時にメモリ不足なら `503 no_capacity` で拒否する。クラスターの全ノードがプロトコル 18 になるまでは、Pause を `cluster_upgrading` で断る（`paused` という状態を知らない古いノードが、起動や削除を誤るため）。コンソールでは、管理画面のブランチのページとユーザーページの行に、Extend と並んで Pause / Resume があり、状態は一時停止の印（2本の縦棒）と「Paused」で出る
 - **Storage（管理画面）**：ノードごとに、プールのどれだけを、どの Base・Snapshot・ブランチが使っているかを、**木**で見るページ（`/admin/storage`。Branches・Bases と同じ権限。見るだけで、消す操作はない）。上にプール（db-branch・ほかの用途・空き）の帯、その下に、Base を根にした木が並ぶ。Base（使用量の大きい順）の下に、その Base 自身のデータ（`data`）と Snapshot（新しい順）、Snapshot の下に、その Snapshot から作ったブランチ（大きい順）。複製元の Snapshot がもう無いブランチは Base の直下に、Base がないブランチは「No base」のまとまりに入る。各行に、種類・名前（Base とブランチは、その専用画面へのリンク）・帯・大きさ・プールに占める割合が出る。大きさは、その行とその下をすべて足したもので、Snapshot は、それだけが持つ分も添える。▾ で、下の階層を畳める（Base は開いた状態から始まる）。期限切れのブランチと、他ノードの複製（replica）には印が付く。最後に、Base でもブランチでもないもの（復元で退けた線 `history/…`、作業用 `work/…`）の合計が出る。クラスタでは、見るノードを選ぶ（API は `GET /v1/nodes/{name}/storage`。ZFS の一覧を平らにして返し、木は画面で作る）。ZFS の `used` は、Snapshot では「その Snapshot だけが持つ分」、データセットでは「下にあるものすべて（Snapshot を含む）」。ブランチの大きさは、Base と共有している分を含まない、そのブランチ自身の変更分
 - **一覧の検索と絞り込み**（管理画面の Branches と Bases）：一覧の上に、検索欄と絞り込みの選択肢が並ぶ。検索は空白で区切った語がすべて含まれるものを残し、Branches は名前・所有者・Base・ランタイム・状態・理由、Bases は名前・説明・ランタイム・状態・理由・ノードを見る（大文字小文字は区別しない）。絞り込みは、Branches が Status・Engine・Base・Owner、Bases が Status・Engine・Node（クラスタのときだけ）。選択肢は、一覧にある値だけ。何か指定しているあいだだけ「表示数 / 全体」と Clear が出る。条件は URL（`?q=…&status=…`）に残るので、再読み込みや共有で同じ一覧になる
-- **diff（ブランチの比較）の画面**：diff モジュール（有償）の画面は、管理画面のサイドバーの Modules の Diff (beta)（`/admin/m/diff/ui/`）にある（`?a=<ブランチ>&b=<ブランチ>` で、A と B を入れた状態で開ける）。ブランチの画面にも、ユーザー側（ポータル）にも、入口は置いていない
+- **diff（ブランチの比較）の画面**：diff モジュール（有償・オプトイン）の画面は、管理画面のサイドバーの Modules の Diff（`/admin/m/diff/ui/`）にある（`?a=<ブランチ>&b=<ブランチ>` で、A と B を入れた状態で開ける）。ブランチの画面にも、ユーザー側（ポータル）にも、入口は置いていない
 - **管理画面の Base ごとの画面**：Bases の一覧は、タイムライン付きの一覧のままで、Base の名前を選ぶと、その Base の専用画面（`/admin/bases/<名前>`）へ移る。専用画面は、以前の詳細パネル（ドロワー）の中身（説明・複製先ノード・定期更新・Snapshot の一覧と公開設定・匿名の上限・使っているブランチ、Update data・Take snapshot・Delete base）を、そのまま置いたページで、今後ここに足していく
 - **ユーザー側（ポータル）のブランチごとの画面**：「Your branches」の各行は、状態・名前・エンジン・Base・期限の要約と、コピー（接続 URL）・Extend +4h だけにし、行を選ぶと `/branch/<名前>`（リンクの共有・再読み込み・戻る進むができる）へ移る。行の展開はなくなり、展開で出していたもの（接続、Snapshot・Runtime・ノード・Recording・所有者・作成・期限・使用量、Checkpoints のグラフ、Keep for・Reset・Delete、Upgrade）は、この画面に最初から並ぶ。履歴モジュールがあり、記録するブランチで、読む権限があるときは、その下に Transactions（管理画面と同じ検索つきの表）が出る。ブランチを作って準備ができたときは、一覧にいる間に限り、その画面へ自動で移る（接続情報がすぐ見えるように）。`/branches/...` は、古い管理画面の URL の転送に使うので、ユーザー側は単数形
 
@@ -467,13 +466,14 @@ OSS 版のユーザーは `admin` の 1 人だけ。ユーザーの追加はで�
 
 ### 提供方式
 
-モジュールは別のプロセスとして動かし、agent とは `hashicorp/go-plugin` で通信する（まず net/rpc。他言語のモジュールが要るときに gRPC を足す。[modules.md](modules.md)）。
+1.0 の公開互換契約は `pkg/ext`（Go インターフェース型）と `pkg/ext/proto/runtime/v1`（外部ランタイムモジュール向け gRPC プロトコル）です。従来の拡張モジュールは `hashicorp/go-plugin` 経由で別プロセスとして動かします（`pkg/ext/plugin` の `net/rpc` 実装は内部向け・非推奨扱い。[modules.md](modules.md)、[runtime-modules-standard.md](runtime-modules-standard.md)）。
 
 - OSS のバイナリはそのまま使い、有償リポジトリから `apt install db-branch-auth db-branch-audit` で追加する
-- 配置先: `/usr/lib/db-branch/modules/`。agent が起動時に検出して読み込む
-- ライセンスキーは ed25519 で署名し、オフラインで検証する（エアギャップ環境でも使える）
+- 配置先: `/usr/lib/db-branch/modules/`。agent が起動時に検出して読み込む（`root` 所有かつ他者書き込み不可・シンボリックリンク拒否等の検証を行う）
+- ライセンスキーは **ECDSA P-256**（SHA-256）で署名し、バイナリ埋め込みの本番ルート公開鍵でオフライン検証する（エアギャップ環境でも使える）
 - Web コンソールは `GET /v1/capabilities` で有効なモジュールを確認し、ユーザー管理や監査ログの画面を表示する
 - 有償機能は db-branch 側だけで実装し、ProxySQL（GPL）には手を加えない
+- データマスキング用の `base mask` はマスカーモジュールの別リポジトリ分離に伴い、1.0 では公開 API / CLI / Web コンソール / MCP から一時的に非露出としています（内部の拡張ポイント `pkg/ext` は維持）
 
 ### 設定（2026-11-10）
 
@@ -504,12 +504,13 @@ OSS 版のユーザーは `admin` の 1 人だけ。ユーザーの追加はで�
 ```
 db-branch init --pool tank
 db-branch admin reset-password
-db-branch cluster init | join <addr> | status
-db-branch runtime available | install | list | remove | import
-db-branch base create <name> --runtime mysql@8.4.3 --from-dump dump.sql.gz
+db-branch cluster init | join <addr> | token | status | remove <node> | leave | align-ids
+db-branch runtime available | install | list | remove
+db-branch base create <name> --runtime mysql@8.4.3 --dump dump.sql.gz
 db-branch base snapshot <name>
 db-branch branch create <name> --base <base> [--init f.sql] [--ttl 72h]
-db-branch branch list | show <name> | reset <name> | delete <name>
+db-branch branch list | show <name> | pause <name> | resume <name> | reset <name> | delete <name>
+db-branch branch checkpoint <name> | checkpoints <name> | restore <name> <ckpt> | fork <src> <new> | merge <name>
 db-branch branch upgrade <name> --runtime mysql@8.4.13 [--check-only] [--no-rollback] [--force]
 db-branch branch create <name> --base <base> --runtime mysql@8.4.13   # 作って、すぐ上げる
 db-branch branch dsn <name>        # 接続文字列を表示
@@ -517,12 +518,14 @@ db-branch branch dsn <name>        # 接続文字列を表示
 
 ### REST API（`/v1`）
 
-- ブランチ: `POST /branches`, `GET /branches`, `GET /branches/{name}`, `POST /branches/{name}/reset`, `DELETE /branches/{name}`
-- ベース: `GET /bases`, `POST /bases`, `POST /bases/{name}/snapshots`
+主要エンドポイントの概要（全ルートと正確なスキーマは [`api/openapi.yaml`](../api/openapi.yaml) および [api.md](api.md) を参照）:
+
+- ブランチ: `POST /branches`, `GET /branches`, `GET /branches/{name}`, `PATCH /branches/{name}`, `POST /branches/{name}/{reset,pause,resume,fork,merge,recreate,upgrade}`, `DELETE /branches/{name}`, `GET/POST/DELETE /branches/{name}/checkpoints...`
+- ベース: `GET /bases`, `POST /bases`, `DELETE /bases/{name}`, `POST /bases/{name}/snapshots`
 - ランタイム: `GET /runtimes`, `GET /runtimes/available`, `POST /runtimes`, `DELETE /runtimes/{engine}/{version}`
-- クラスタ: `GET /cluster`
-- 認証: `POST /auth/login`, `POST /auth/logout`, `PUT /auth/password`
-- その他: `GET /capabilities`
+- クラスタ: `GET /cluster`, `DELETE /cluster/nodes/{name}`, `POST /cluster/token`
+- 認証: `POST /auth/login`, `POST /auth/logout`, `PUT /auth/password`, `POST /auth/reset`
+- その他: `GET /capabilities`, `GET /events`, `POST /mcp`, `GET /metrics`
 
 ## 14. 開発の進め方（フェーズ）
 
@@ -532,16 +535,17 @@ db-branch branch dsn <name>        # 接続文字列を表示
 4. **クラスタ**: Raft、配置スケジューラ、ランタイムとベーススナップショットの伝搬 — 状態の複製とメンバー管理（C1）、担当ノードと配置（C2）、ベーススナップショットの伝搬（C3）、ランタイムの配布（C4）、クラスタプロトコル、ノード喪失（C5）は完了（2026-11-10）。手順は [cluster-plan.md](cluster-plan.md)
 5. **クラスタルーティング**: 全ノードの ProxySQL から他ノードのブランチへ振り分け — MySQL は完了（2026-11-10、C6）
 6. **PostgreSQL**: エンジンの実装、ProxySQL の PostgreSQL 対応の検証 — 完了（2026-11-10）。PGDG の .deb（署名付き InRelease → Packages の SHA-256 で固定）を展開してランタイムにし、`db-branch-postgres@.service` で動かす。正常停止は高速シャットダウン（SIGINT）で、`pg_controldata` が `shut down` を示すことを確認してからスナップショットを取る。ProxySQL は 6133 で、ユーザー名・コメントとも MySQL と同じ規則
-7. **配布**: APT リポジトリ、署名、CI からの自動公開 — リポジトリの生成・署名・CI での作成まで完了（2026-11-10）。公開先と本番の署名鍵は未決（[distribution.md](distribution.md)）
+7. **配布**: APT リポジトリ、署名、CI からの自動公開 — `https://apt.db-branch.com`（Cloudflare R2）への署名・自動公開パイプラインを運用中（[distribution.md](distribution.md)）
 8. **拡張ポイントの公開**: `pkg/ext` の安定化（有償モジュールの開発は別リポジトリ） — 完了（2026-11-10）。[modules.md](modules.md)
 
 各フェーズで .deb を作り、検証 VM にインストールして動作確認する。
 
-## 15. 未決事項
+## 15. 1.0 (GA) における既知の制約・今後の予定
 
-- APT リポジトリの置き場（Cloudflare R2 / GitHub Pages 案）
-- ベースの作成元（MySQL: mysqldump / mydumper / XtraBackup、PostgreSQL: pg_dump / pg_basebackup のどれを一次サポートするか）
-- ブランチの DB サーバーのリソース制限（systemd slice での CPU・メモリ上限）
-- 各エンジンの既定バージョン
-- MySQL の Generic tarball の配布 URL と署名検証の具体的な手順
-- 有償モジュールのリポジトリ構成と配布経路
+1.0 スコープおよびセキュリティ境界の詳細は [roadmap.md](roadmap.md) を参照。
+
+- **ブランチ DB サーバー通信の TLS**: 1.0 ではプライベートネットワークまたはプロキシ経由の利用を前提とし、DB サーバー直結の TLS 対応は GA 後（1.1 以降）に実施予定
+- **バックアップの保存時暗号化**: 1.0 では `root` 限定ディレクトリ権限および保管先ストレージ側の暗号化を前提とし、暗号化機能は GA 後に実施予定
+- **PostgreSQL メジャーアップグレード（`pg_upgrade`）**: 1.0 では同一メジャー内のマイナー更新まで対応（メジャー移行は GA 後）
+- **外部ランタイムモジュール**: 1.0 では Experimental（単一ノード限定）として提供し、クラスタ公式対応および Web コンソール統合は GA 後
+- **`base mask`**: マスカー分離に伴い 1.0 では公開 UI/API/CLI から一時非露出とし、マスカー導入時も含めベース作成前マスキングを推奨

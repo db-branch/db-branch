@@ -1,6 +1,32 @@
 # Changelog
 
-All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to follow [Semantic Versioning](https://semver.org/) from 1.0. Until then (Beta), APIs may change.
+All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows [Semantic Versioning](https://semver.org/) from 1.0.
+
+## [Unreleased]
+
+### Added
+
+- **Console TLS Configuration & Hot Reload (`F-08`)**: Added `[console] tls_cert` and `tls_key` options in `config.toml` with zero-restart certificate reload on TLS handshakes and `/tls.pem`, enforced TLS 1.3 minimum, and capped self-signed certificate validity to 825 days (auto-regenerating existing certificates exceeding 825 days on startup).
+- **Lean 4 Formal Authorization Verification (`LEAN-01`, `LEAN-02`)**: Integrated Lean 4 formal model and theorems under `formal/lean/`, Go differential and route/alias coverage tests (`TestLeanAuthz_*`), and CI `lean` verification job.
+
+### Security
+
+- **API Token Scope & Lifecycle (`R-02`)**: Replaced the `branches` token scope denylist with an explicit allowlist, propagated non-admin owner roles onto personal tokens (`OwnerRoles`, Raft Protocol `28`), revoked personal tokens immediately when external `auth` users are deleted, and added periodic GC for expired tokens.
+- **Node API & Join Token Hardening (`R-05`)**: Blocked `socket_only` routes (`POST /v1/auth/reset`, `POST /v1/backups/restore`, `POST /v1/cluster/token`) on `/internal/v1/api/` mTLS forwarding, and made cluster join tokens single-use with configurable TTL (`cluster.join_token_ttl`, default `24h`, Raft Protocol `27`).
+- **Legacy Ownership & Mixed-Cluster Logout (`F-09`)**: Removed display-name fallback ownership matching for unmigrated legacy branches (admin-only), and returned `503 cluster_upgrading` with pending revocation flushing on `POST /v1/auth/logout` when cluster protocol is below `24`.
+
+### Changed
+
+- **1.0 API / CLI / OpenAPI / MCP Contract Unification (`W-22`)**:
+  - Updated `api/openapi.yaml` to `1.0.0`, unified `next_cursor: null` across all list endpoints, separated `branch.pause` / `branch.resume` and dotted checkpoint/snapshot delete action names (preserving legacy action aliases for compatibility), mapped `ErrUnsupportedEngine` to `409 feature_not_supported`, unified MCP branch arguments on `branch` (keeping `name` as a deprecated alias), and fixed `branch create --runtime -o json` double JSON output and `base` name validation.
+  - Fixed `base mask` cluster forwarding and port reservation bugs, and temporarily hid `base mask` from the 1.0 CLI, public API, Web Console, and MCP surfaces (preserving internal interfaces and cluster forwarding for `refresh` follow-up).
+- **Documentation Sync (`W-25`)**: Updated `SECURITY.md` (`db-branch-admin` group), `README.md`, `SUPPORT.md`, `CHANGELOG.md`, and `docs/` for 1.0 GA consistency, removing stale Beta/Draft notices, broken references, and implementation mismatches, and added automated documentation verification tests in `scripts/docs_test.go`.
+
+### Fixed
+
+- **MySQL Admin SQL Binlog Isolation (`F-06`)**: Executed MySQL administrative SQL (`CreateUser`, `fixup`, etc.) with `sql_log_bin = 0` so administrative statements do not pollute `history` module binlogs.
+- **Debian Maintainer Scripts (`F-07`)**: Branched `postinst`, `prerm`, `postrm`, and `db-branch-proxysql` scripts by `$1` lifecycle action so `upgrade` does not stop `db-branch.service` in `prerm`, missing `config.toml` does not fail upgrades, and `purge` removes package-generated configuration while preserving `/var/lib/db-branch` and ZFS datasets.
+- **Web Console GA Fixes (`W-23`)**: Subscribed to `setting.updated` / `module.updated` SSE events and handled 401 session expiration cleanly, fixed `Extend` buttons adding to remaining TTL instead of shortening it, restored `Branches` navigation and action-based button gating for Maintainer roles, aligned plan feature labels with `pkg/ext/license`, fixed `must_change_password` reloads on Portal/Admin, and fixed RFC 3986 scheme URL password masking.
 
 ## [0.3.1] - 2026-11-24
 
@@ -36,7 +62,7 @@ This release includes **Branch Fork**, **Branch Line Merge**, **External Runtime
 
 - **Branch Fork (`F-01`)**: Create an independent child branch from a running or paused branch's live state or from any existing checkpoint (`db-branch branch fork`, `POST /v1/branches/{name}/fork`, MCP `fork_branch`, and the Fork action in the web console). Supports `--checkpoint`, `--clean`, `--init-sql` / `--init-file`, `--ttl`, `--node`, `--owner`, `--access`, and `--record`. Uses Raft Protocol `25`. See `docs/branch-fork.md`.
 - **Branch Line Merge (`F-02`)**: Logically 3-way merge changes from a past history line (or checkpoint) into the live line of the same branch (`db-branch branch merge`, `POST /v1/branches/{name}/merge`, MCP `merge_line`, and the Merge action in the web console), with `--dry-run`, `--checkpoint`, and conflict reporting at the table/row/key level without modifying the live line on failure. Uses Raft Protocol `26`. See `docs/branch-merge.md`.
-- **Runtime Modules Standard (Experimental, single-node)**: Pluggable database engine contract (`RuntimeRegistry`, `RuntimeProvider`, `RuntimeCaps`) and gRPC protocol (`pkg/ext/proto/runtime/v1`) for external database engines, with Ed25519 signature verification, dedicated unprivileged OS users (`db-branch-rt-<engine>`), systemd isolation (`db-branch-rt@.service`), conformance suite (`db-branch-conformance`), and CLI management (`db-branch module install|remove|list|trust`). Supports `branch upgrade` and source dump/load on external engines. Uses Raft Protocol `21`. Cluster usage is restricted/warned as single-node experimental in 1.0.
+- **Runtime Modules Standard (Experimental, single-node)**: Pluggable database engine contract (`RuntimeRegistry`, `RuntimeProvider`, `RuntimeCaps`) and gRPC protocol (`pkg/ext/proto/runtime/v1`) for external database engines, with Ed25519 signature verification, optional `allow_unsigned_runtimes` dev setting, dedicated unprivileged OS users (`db-branch-rt-<engine>`), systemd isolation (`db-branch-rt@.service`), conformance suite (`db-branch-conformance`), and CLI management (`db-branch module install|remove|list|trust`). Supports `branch upgrade` and source dump/load on external engines. Uses Raft Protocol `21`. Cluster usage is restricted/warned as single-node experimental in 1.0.
 - `db-branch module forget <name>` (`POST /v1/modules/{name}/forget`, console **Forget** button): deletes the cluster record of a removed module so it is no longer listed (Raft Protocol `22`).
 - **Cluster node removal (`W-17`)**: `db-branch cluster remove <node>` and `db-branch cluster leave` (`DELETE /v1/cluster/nodes/{name}`), refusing removal by default if bases or branches remain on the node unless `--force` is given.
 - **License verification (`W-21`)**: Embedded production license root public key with offline `Verify` support and improved console TLS error handling.

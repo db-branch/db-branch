@@ -1,12 +1,12 @@
 # db-branch REST API 設計
 
-ステータス: Draft / 最終更新: 2026-11-09
+ステータス: 1.0 (GA) 基準 / 最終更新: 2026-11-24
 
-対応する機械可読な定義: [`api/openapi.yaml`](../api/openapi.yaml)（OpenAPI 3.1）。全体設計は [design.md](design.md) を参照。
+対応する機械可読な定義: [`api/openapi.yaml`](../api/openapi.yaml)（OpenAPI 3.1、version `1.0.0`）。全体設計は [design.md](design.md) を参照。
 
 `api/openapi.yaml` は、エージェントが実際に返すコア API の全ルート（メソッド・パス・スキーマ・エラーコード・認証・`x-dbb-action`・トークンのスコープ）を記述する公開 API リファレンスで、Redoc で表示できる（`npx @redocly/cli lint api/openapi.yaml` で検証）。`internal/interface/httpapi/openapi_test.go` が、サーバーが登録したルートとこのファイルのオペレーションが過不足なく一致すること、`operationId` が一意でタグとエラー応答があること、`$ref` がすべて解決できることを検査する。ルートを足したら同じ変更で `openapi.yaml` も更新する（さもないと `make test` が失敗する）。有償モジュールの `/v1/ext/<module>/...` はモジュールが自分で文書化し、`openapi.yaml` には載せない。
 
-この文書は設計の記録で、実装と食い違う箇所がある（`Idempotency-Key`、`ETag` / `If-Match`、カーソル式ページング、`X-DB-Branch-Index`、`?min_index` は未実装）。実際に返すものは `openapi.yaml` を正とする。
+この文書は REST API の設計ガイドおよび運用上の概念解説であり、スキーマやパラメータの厳密な定義は [`api/openapi.yaml`](../api/openapi.yaml) を正とする。
 
 ## 1. 方針
 
@@ -39,87 +39,92 @@
 
 ### 2.3 エラー
 
-すべてのエラーは同じ形で返す。
+すべてのエラーは同じ形で返す（`code` と `message` のみ）。
 
 ```json
 {
   "error": {
     "code": "not_found",
-    "message": "branch \"feature-x\" not found",
-    "details": { "resource": "branch", "name": "feature-x" }
+    "message": "branch feature-x: not found"
   }
 }
 ```
 
-- `code`: 機械向けの安定した値（下表）。クライアントはこれで分岐する
+- `code`: 機械向けの安定した値（下表は主なエラーコード。エンドポイント固有の詳細は `api/openapi.yaml` を参照）。クライアントはこれで分岐する
 - `message`: 人間向けの英文。内容は変わりうるので、プログラムで解釈しない
-- `details`: 任意。`code` ごとに中身が決まっている
 
-| HTTP | code | 意味 | details |
-|---|---|---|---|
-| 400 | `invalid_request` | JSON が壊れている、必須項目がない、型が違う | `field` |
-| 400 | `invalid_name` | 名前の規則に合わない | `field`, `value` |
-| 400 | `invalid_runtime` | `engine@version` の形でない | `value` |
-| 401 | `unauthenticated` | セッションがない・切れた | — |
-| 403 | `csrf_failed` | CSRF トークンがない・違う | — |
-| 403 | `forbidden` | 認可で拒否された（有償 `auth` モジュール導入時） | `action` |
-| 403 | `socket_only` | UNIX ソケット経由でしか呼べない操作 | — |
-| 404 | `not_found` | リソースがない | `resource`, `name` |
-| 409 | `already_exists` | 同じ名前のリソースがある | `resource`, `name` |
-| 409 | `conflict` | 状態が合わない（例: 準備中のブランチをリセット） | `status` |
-| 409 | `in_use` | 参照されているので消せない（例: ベースが使っているランタイム） | `used_by` |
-| 409 | `unclean_shutdown` | DB サーバーの正常停止を確認できず、スナップショットを取れなかった | `base`, `log` |
-| 412 | `precondition_failed` | `If-Match` の ETag が古い | `current_etag` |
-| 422 | `idempotency_key_reused` | 同じ冪等キーで違う内容が送られた | — |
-| 422 | `runtime_unavailable` | カタログにない・このアーキテクチャ向けがない | `runtime`, `arch` |
-| 429 | `rate_limited` | ログイン試行の上限 | — （`Retry-After` ヘッダー） |
-| 503 | `no_leader` | リーダーがいない（選出中・過半数割れ） | — （`Retry-After` ヘッダー） |
-| 507 | `insufficient_capacity` | 配置できるノードに空き容量がない | `required`, `available` |
-| 500 | `internal` | 想定外のエラー | — |
+| HTTP | code | 意味 |
+|---|---|---|
+| 400 | `invalid_request` | JSON が壊れている、未知のフィールド、必須項目不足、不正な名前・ランタイム・TTL・設定値 |
+| 400 | `weak_password` | 新しいパスワードが強度要件を満たさない |
+| 401 | `unauthenticated` | セッション・トークンがない、または無効・失効 |
+| 401 | `invalid_credentials` | ユーザー名またはパスワード誤り |
+| 403 | `csrf_failed` | セッション Cookie 使用時に有効な `X-CSRF-Token` がない |
+| 403 | `forbidden` | 呼び出し元またはトークンスコープに権限がない |
+| 403 | `password_change_required` | 評価用初期パスワードの変更が完了するまで他操作不可 |
+| 403 | `socket_only` | ローカル UNIX ソケット経由でのみ呼べる操作 |
+| 403 | `managed_elsewhere` | 外部認証プロバイダ管理のパスワードのため変更不可 |
+| 404 | `not_found` | リソースが存在しない |
+| 404 | `runtime_not_installed` | 指定のランタイムが対象ノードに入っていない |
+| 409 | `already_exists` | 同名リソースまたは同ランタイムが既に存在する |
+| 409 | `conflict` | 状態や前提条件が合わない（例: `ready` でないブランチの操作、OS 不一致、`cluster remove` のクォーラム割れ） |
+| 409 | `in_use` | 参照中のため削除できない（例: ベースが使用中のランタイム、ブランチが残るノード） |
+| 409 | `unclean_shutdown` | DB サーバーの正常停止を確認できず、スナップショットを取れなかった |
+| 409 | `feature_not_supported` | エンジンのランタイム契約がその機能に対応していない |
+| 409 | `other_node` | 担当ノードではない（内部エラー／構成不整合） |
+| 409 | `rollout_running` | ローリングアップデート実行中 |
+| 409 | `checkpoints_unavailable` | モジュール／共有ストレージ上のためチェックポイント非対応 |
+| 409 | `not_routable` / `no_proxy` | ProxySQL ルーティング未導入、またはブランチがプロキシ経由で到達不能 |
+| 409 | `not_clustered` | クラスタ未構成のノードでクラスタ専用操作を実行 |
+| 409 | `auto_renew_off` / `not_renewable` / `in_progress` | ライセンス自動更新無効、更新非対応キー、または更新実行中 |
+| 411 | `length_required` | `POST /v1/uploads` で `Content-Length` ヘッダが欠落 |
+| 413 | `too_large` | アップロード・JSON・MCP 本文の上限超過 |
+| 422 | `runtime_unavailable` | カタログにない・このアーキテクチャ向けがない |
+| 422 | `upgrade_not_allowed` | 許可されないアップグレード経路（ダウングレード、LTS 飛び越し等） |
+| 422 | `invalid_license` / `license_unusable` | ライセンスキーの署名不正、または期限切れ・ノード上限超過 |
+| 422 | `query_failed` / `restore_failed` | `base sql` のクエリ失敗、またはバックアップ復元の失敗 |
+| 429 | `rate_limited` | ログイン試行や匿名作成等の回数制限超過（`Retry-After` ヘッダ付き） |
+| 429 | `quota_exceeded` | ユーザー別最大ブランチ数 (`branch.max_per_user`) 超過 |
+| 500 | `internal` | 想定外の内部エラー（詳細はノードのログのみに出力） |
+| 501 | `cannot_verify` / `not_implemented` | ライセンスルート公開鍵のないビルド、または単一ノード未対応機能（バックアップ等） |
+| 503 | `no_leader` | Raft リーダー不在（選出中・過半数割れ） |
+| 503 | `no_capacity` | 配置・再開に必要なメモリ予算に空きがない |
+| 503 | `not_initialized` | `db-branch init` 未実行 |
+| 503 | `modules_pending` | クラスタ記録済みの拡張モジュールがノードで未読み込み |
+| 503 | `cluster_upgrading` | クラスタ内の全ノードが必要なプロトコルに達していない |
+| 503 | `audit_unavailable` | `audit.fail_closed = true` 時に監査ログの記録に失敗 |
+| 507 | `no_space` | ZFS プール空き容量が最小ガード（10% または 1 GiB）未満 |
 
 ### 2.4 一覧とページング
 
-一覧はカーソル方式。
-
-```
-GET /v1/branches?limit=50&cursor=eyJu...
-```
+すべての一覧エンドポイントは統一形式で全件を返します。
 
 ```json
-{ "items": [ ... ], "next_cursor": "eyJu..." }
+{ "items": [ ... ], "next_cursor": null }
 ```
 
-- `limit` の既定は 100、上限は 500
-- `next_cursor` が `null` なら最後のページ
-- 並び順はエンドポイントごとに固定（ブランチは名前順、オペレーションは新しい順）
+- 1.0 では `limit` や `cursor` クエリパラメータはなく、`next_cursor` は常に `null` です
+- 並び順はエンドポイントごとに固定（ブランチとベースは名前順、オペレーションは新しい順）
 
-### 2.5 冪等キー
+### 2.5 長時間の操作（オペレーション）
 
-作成系の `POST`（ブランチ・ベース・スナップショット・ランタイムのインストール）は `Idempotency-Key` ヘッダーを受け付ける。
-
-- 同じキーで同じ内容が再送されたら、最初の結果（同じオペレーション）をそのまま返す
-- 同じキーで違う内容なら `422 idempotency_key_reused`
-- キーは Raft に 24 時間保存する。リーダーが替わっても有効
-- 省略可。CLI は毎回ランダムなキーを付ける（ネットワークの再試行で二重作成しないため）
-
-### 2.6 ETag と If-Match
-
-- 単体取得（`GET /v1/branches/{name}` など）は `ETag` ヘッダーを返す。値は Raft の更新インデックスから作る
-- 更新（`PATCH /v1/branches/{name}`）は `If-Match` を必須にする。古ければ `412 precondition_failed`
-- 削除・リセットでは `If-Match` を任意とする（付ければ検査する）。コンソールは付ける
-
-### 2.7 長時間の操作（オペレーション）
-
-次の操作は数秒〜数十分かかるので、受け付けた時点で `202 Accepted` を返す。
+次の操作は数秒〜数十分かかるため、受け付けた時点で `202 Accepted` を返します。
 
 | 操作 | kind |
 |---|---|
 | ランタイムのインストール（全ノードへの配布を含む） | `runtime.install` |
 | ベースの作成（ダンプの流し込み） | `base.create` |
+| ベースのダンプ再読込 | `base.load` |
+| ベースの定期／手動リフレッシュ | `base.refresh` |
 | ベーススナップショットの作成と伝搬 | `base.snapshot` |
 | ブランチの作成 | `branch.create` |
+| ブランチのフォーク | `branch.fork` |
+| ブランチの履歴ラインマージ | `branch.merge` |
 | ブランチのリセット | `branch.reset` |
-| ブランチのチェックポイントの復元 | `branch.restore` |
+| ブランチの一時停止／再開 | `branch.pause` / `branch.resume` |
+| ブランチのチェックポイント復元 | `branch.restore` |
+| ブランチのアップグレード | `branch.upgrade` |
+| ブランチの別ノード再作成 | `branch.recreate` |
 | ブランチの削除 | `branch.delete` |
 
 レスポンス:
@@ -144,13 +149,13 @@ Location: /v1/operations/op_01JC8Z6Q4M7V3X2N9K5R8T1W0B
 ```
 
 - `state`: `pending` → `running` → `succeeded` / `failed`
-- `phase`: 実行中の段階（`running` のときだけ）。`base.snapshot` は `quiescing` → `stopping` → `verifying` → `snapshotting` → `restarting` → `propagating`、`branch.create` は `cloning` → `starting` → `init_sql` → `stopping` → `snapshotting` → `starting`（design.md §5・§6。スナップショットは DB サーバーを正常停止してから取る）
+- `phase`: 実行中の段階（`running` のときだけ。例: `base.snapshot` は `stopping` → `snapshotting` → `restarting`、`branch.create` は `cloning` → `starting` → `init_sql` → `stopping` → `snapshotting` → `starting`）
 - `progress`: コンソールの `2/3` 表示にそのまま使う。`unit` は `nodes`（配布・伝搬）か `bytes`（ダウンロード・流し込み）。分からないときは `null`
-- `error`: 失敗時に §2.3 の `error` と同じ形
+- `error`: 失敗時にメッセージ文字列またはエラー情報が入る
 - 対象リソース（ブランチなど）自体も作成直後から `GET` で見え、`status` で状態を表す。オペレーションは「その操作の経過」、リソースは「今の状態」を表す
-- 完了したオペレーションは 7 日間保存する
+- 完了したオペレーションは最新 200 件を保持する
 
-### 2.8 イベント（SSE）
+### 2.6 イベント（SSE）
 
 ```
 GET /v1/events
@@ -168,12 +173,11 @@ event: operation.updated
 data: {"id":"op_...","state":"running","progress":{"done":2,"total":3,"unit":"nodes"}, ...}
 ```
 
-- `event`: `<resource>.updated` / `<resource>.deleted`。resource は `branch`・`base`・`runtime`・`node`・`operation`
-- `data`: `updated` は単体取得と同じ完全な表現。`deleted` は `{"name": ...}`（オペレーションは `{"id": ...}`）
-- `id`: Raft のインデックス。`Last-Event-ID` を付けて再接続すれば取りこぼした分から再送する。古すぎて再送できないときは `event: resync` を送るので、クライアントは一覧を取り直す
+- `event`: `<resource>.updated` / `<resource>.deleted`（`branch`, `base`, `runtime`, `node`, `operation`, `setting`, `module`, `update`）
+- `data`: `updated` は単体取得と同じ表現。`deleted` は `{"name": ...}`（オペレーションは `{"id": ...}`）
+- `id`: イベントバスの連番。`Last-Event-ID` を付けて再接続すれば取りこぼした分から再送する。古すぎて再送できないときは `event: resync` を送るので、クライアントは一覧を取り直す
 - 15 秒ごとにコメント行（`: ping`）を送って接続を保つ
 - 受け取れるイベントは呼び出し元の権限で絞る。管理者は全部。それ以外は、自分（と SharesBranches で共有する相手）のブランチ・オペレーション、open なブランチ、`base.read` などのアクションが許された種類のイベントだけ。宛先を持たないイベントは管理者だけに送る（既定は閉じる）。絞った分の ID は飛ぶ
-- 絞り込み: `?types=branch,operation`
 
 ## 3. 認証
 
@@ -204,7 +208,7 @@ PUT  /v1/auth/password     {"current_password":"...","new_password":"..."} → 2
 - `/run/db-branch/agent.sock` で同じ API を提供する。HTTP をソケット上で話す
 - 接続元のプロセスの UID/GID を `SO_PEERCRED` で確かめ、root か `db-branch-admin` グループなら認証済みとして扱う（DB サーバーが動く `db-branch` グループは含めない）。Cookie・CSRF は不要
 - 主体（principal）は `local:<ユーザー名>` として監査イベントに記録する
-- ソケット限定の操作: `POST /v1/auth/reset`、`POST /v1/backups/restore`、`POST /v1/cluster/token`（および未実装設計の `POST /v1/runtimes/import`）。TCP（HTTPS）およびノード間 API（`/internal/v1/api/` 経由の転送）から呼ぶと `403 socket_only`
+- ソケット限定の操作: `POST /v1/auth/reset`、`POST /v1/backups/restore`、`POST /v1/cluster/token`。TCP（HTTPS）およびノード間 API（`/internal/v1/api/` 経由の転送）から呼ぶと `403 socket_only`
 - クラスタの初期化・参加（`cluster init` / `join`）は API にせず CLI だけで行う（参加トークンと証明書の発行を伴うため）。`POST /v1/cluster/token` は 1 回限り・有効期限付き（省略時は設定 `cluster.join_token_ttl`、既定 `24h`。任意で `{"ttl": "1h"}` を指定可）のトークンを発行し、`token` と `expires_at` を返す
 
 ### 3.3 拡張ポイントとの関係
@@ -264,14 +268,10 @@ PUT  /v1/auth/password     {"current_password":"...","new_password":"..."} → 2
 
 ## 4. クラスタでの振る舞い
 
-- **どのノードでも受け付ける**。変更系のリクエストは、受けたノードがリーダーへ転送する（クライアントからは見えない）
+- **どのノードでも受け付ける**。変更系のリクエストやリソース担当ノードに依存する操作は、受けたノードがリーダーまたは担当ノードへ転送する（クライアントからは見えない）
 - リーダーがいないときは `503 no_leader` と `Retry-After: 2` を返す。既存ブランチへの DB 接続（ProxySQL → DB サーバー）はこの間も止まらない
-- **読み取りは受けたノードの手元の状態から返す**。リーダーより少し遅れている可能性がある（通常は数百ミリ秒以内）
-  - 全レスポンスに `X-DB-Branch-Index`（その状態の Raft インデックス）と `X-DB-Branch-Node`（応答したノード）を付ける
-  - 直前の自分の書き込みを確実に読みたいときは `?min_index=<書き込み応答のインデックス>` を付ける。手元が追いつくまで最大 5 秒待ち、追いつかなければリーダーへ転送する
-  - `?consistent=true` なら常にリーダーで読む
-- 変更系の応答（202 / 200）にも `X-DB-Branch-Index` を付ける。CLI は続けて読むときにこれを `min_index` に使う
-- 削除・状態遷移は SSE にも同じ順で流れるので、コンソールは SSE を正として表示を更新する
+- **読み取りは受けたノードの Raft 状態から返す**（書き込み後に他ノードへ即座にフォールバックせずとも、書き込み応答を受けた後に最新状態を参照できるよう、状態更新の適用後に応答する）
+- 削除・状態遷移は SSE にも流れるので、コンソールは SSE を正として表示を更新する
 
 ## 5. リソース
 
@@ -298,8 +298,6 @@ PUT  /v1/auth/password     {"current_password":"...","new_password":"..."} → 2
 | `POST` | `/v1/branches/{name}/upgrade` | 202 オペレーション（`result` に結果） | `branch.upgrade` |
 | `POST` | `/v1/branches/{name}/merge` | 202 オペレーション（`result` に結果） | `branch.merge` |
 
-一覧の絞り込み: `?base=prod-masked`、`?node=node1`、`?status=ready`。
-
 チェックポイント（[checkpoints.md](checkpoints.md)）:
 
 ```json
@@ -311,7 +309,7 @@ POST /v1/branches/feature-x/checkpoints
 ```
 
 - 一覧は ZFS から読む（Raft には置かない）。担当ノード以外に届いた要求は担当ノードへ転送する
-- `size` はそのチェックポイントだけが持つ容量、`line` は履歴の線の番号（復元のたびに新しい線ができる）、`auto` は復元の前にシステムが取ったもの、`current` は現在のデータの元になったもの
+- `size` はそのチェックポイントだけが持つ容量、`line` は履歴の線の番号（復元のたびに新しい線ができる）、`auto` はシステムが自動取得したもの（アップグレード前の `before-upgrade-*`、または旧版が復元前に取った `before-restore-*`）、`current` は現在のデータの元になったもの
 - 上限は設定 `branch.max_checkpoints`（既定 20）。数えるのは手動のチェックポイントだけで、超える作成は `409 conflict`。自動のもの（アップグレードの前の `before-upgrade-<時刻>`、以前の版が復元の前に取った `before-restore-<時刻>`）は数えず、復元を断る理由にもならない。自動のものは新しい 5 件だけ残り、6 件目ができるアップグレードは一番古いものを通常の削除と同じ手順で消す
 - 作成（`201`）の応答には、ブランチの使用量（ライブ + 履歴）がプールの空きの半分を超えるとき `warning`（英文の文字列）が付く。作成は断らない。空きが不明なら付かない
 - 復元（`branch.restore`）はブランチが `ready` のときだけ。いまの状態は置き換わり、最後のチェックポイントより後の変更は復元で失われる（自動では保存されない。残したい場合は先に `POST …/checkpoints` で取る。取った他のチェックポイントは全て残る）。進捗は `cloning` `stopping` `swapping` `promoting` `starting`
@@ -348,8 +346,8 @@ POST /v1/branches
 ```
 
 - `snapshot` を省略するとベースの最新スナップショットを使う
-- `init_sql` はリクエストに直接入れる（上限 1 MiB）。適用後にリセットポイントを取る。**ブランチのログインとして**実行するので、管理者の権限が要る SQL（`CREATE USER`、`GRANT`、`COPY ... PROGRAM` など）は使えない。PostgreSQL は平文の SQL と `\connect` だけを受け付け、MySQL はクライアントのコマンド（`system` など）を無効にして流す。ログインなしの呼び出しは `init_sql` を渡せない（403）
-- `ttl` を省略すると期限なし。`"0"` は不可（省略で表す）
+- `init_sql` はリクエストに直接入れる（リクエスト JSON 本文全体で上限 2 MiB）。適用後にリセットポイントを取る。**ブランチのログインとして**実行するので、管理者の権限が要る SQL（`CREATE USER`、`GRANT`、`COPY ... PROGRAM` など）は使えない。PostgreSQL は平文の SQL と `\connect` だけを受け付け、MySQL はクライアントのコマンド（`system` など）を無効にして流す。ログインなしの呼び出しは `init_sql` を渡せない（403）
+- `ttl` を省略すると期限なし（ただし `branch.max_ttl` 設定時はその値が適用される）。`"0"` は不可（省略で表す）
 
 表現:
 
@@ -361,50 +359,58 @@ POST /v1/branches
   "base": "prod-masked",
   "snapshot": "s20261109",
   "runtime": "mysql@8.4.13",
+  "base_runtime": "mysql@8.4.13",
   "node": "node2",
   "created_at": "2026-11-09T12:00:00Z",
   "expires_at": "2026-11-12T12:00:00Z",
   "reset_at": "2026-11-09T12:00:08Z",
   "storage": { "used": 1048576, "referenced": 524288000 },
-  "checkpoints": true,
   "connection": {
     "host": "node2",
-    "port": 33061,
-    "user": "app.feature-x",
-    "database": "app"
+    "port": 40001,
+    "user": "feature-x"
   },
-  "routing": {
-    "proxysql_user": "app.feature-x",
-    "comment": "/*db_branch='feature-x'*/"
+  "proxy": {
+    "host": "node2",
+    "port": 6033,
+    "user": "feature-x"
   },
-  "operation": null
+  "operation": null,
+  "owner": "admin",
+  "owner_name": "admin",
+  "id": "admin/feature-x",
+  "access": "private",
+  "record": false,
+  "checkpoints": true
 }
 ```
 
-- `status`: `provisioning`（作成中・リセット中）/ `ready` / `failed` / `lost`（ノード喪失）/ `deleting`
-- `status_reason`: `failed`・`lost` のときに短い英文
+- `status`: `provisioning` / `ready` / `resetting` / `restoring` / `upgrading` / `pausing` / `paused` / `resuming` / `forking` / `merging` / `failed` / `lost` / `deleting`
+- `status_reason`: `failed`・`lost` 等での短い英文
 - `expires_at`: 期限なしなら `null`。コンソールは `created_at` から `expires_at` までの残りで TTL バーを描く
 - `storage.used` はこのブランチ固有の差分、`storage.referenced` はベースと共有している分を含む全体（ZFS の値そのまま）
 - `checkpoints`: ブランチを持つノードのストレージがチェックポイントに対応しているか（そのノード自身の ZFS なら `true`。モジュール／共有ストレージでは `false`。クラスタではブランチのノードが報告した値で、未報告の古いノードも `false`）。`false` のとき、チェックポイントの API は `409`（エラーコード `checkpoints_unavailable`）を返し、コンソールはチェックポイントの操作を出さない
-- `connection`: 直接つなぐ場合。ProxySQL を使う場合は `routing` を見る（フェーズ 3 以降。それまでは `null`）
-- `operation`: 進行中のオペレーションがあればその ID とkind。なければ `null`
-- `GET /v1/branches/{name}/dsn` は `{"dsn": "mysql://app.feature-x:<password>@node2:33061/app"}` を返す。パスワードは一覧・単体取得には含めない。この呼び出しは読み取りだが監査イベントを出す
+- `connection`: 直接つなぐ場合。ProxySQL 経由で到達可能な場合は `proxy` が付く（そうでなければ `null`）
+- `operation`: 進行中のオペレーションがあればその ID と kind。なければ `null`
+- `GET /v1/branches/{name}/dsn` は `{"dsn": "mysql://feature-x:<password>@node2:40001/"}`（`?via=proxy` 指定時はプロキシ経由）を返す。パスワードは一覧・単体取得には含めない。この呼び出しは読み取りだが監査イベントを出す
 
 ### 5.2 ベースとスナップショット
 
 | メソッド | パス | 応答 | action |
 |---|---|---|---|
-| `GET` | `/v1/bases` | 200 一覧 | `base.list` |
+| `GET` | `/v1/bases` | 200 一覧 | `base.read` |
+| `GET` | `/v1/public/bases` | 200 公開ベース一覧（認証不要） | `base.public` |
 | `POST` | `/v1/bases` | 202 オペレーション | `base.create` |
-| `GET` | `/v1/bases/{name}` | 200 | `base.get` |
-| `GET` | `/v1/bases/{name}/snapshots` | 200 一覧（新しい順） | `base.get` |
+| `GET` | `/v1/bases/{name}` | 200 | `base.read` |
+| `DELETE` | `/v1/bases/{name}` | 202 オペレーション | `base.delete` |
 | `POST` | `/v1/bases/{name}/snapshots` | 202 オペレーション（作成と伝搬） | `base.snapshot` |
-| `GET` | `/v1/bases/{name}/snapshots/{snapshot}` | 200 | `base.get` |
 | `PATCH` | `/v1/bases/{name}/snapshots/{snapshot}` | 200 ベース（`{"public": true}` で公開） | `base.publish` |
-| `DELETE` | `/v1/bases/{name}/snapshots/{snapshot}` | 204 | `base.snapshot_delete` |
+| `DELETE` | `/v1/bases/{name}/snapshots/{snapshot}` | 204 | `base.snapshot.delete` |
 | `PATCH` | `/v1/bases/{name}` | 200 ベース（`{"description": "..."}`、1000 バイトまで） | `base.describe` |
 | `PUT` | `/v1/bases/{name}/replicas` | 200 ベース（`{"replica_nodes": null}` で全ノード、`[]` で起点ノードだけ、`["n2","n3"]` でそれらと起点）。存在しないノードは 400 | `base.replicas` |
 | `PATCH` | `/v1/bases/{name}/anonymous` | 200 ベース（ログインなしの上限。`{"max_branches": 3, "max_ttl": "4h"}`。書いたキーだけ変わり、`null` は継承に戻す。負の数・0 以下の期間・型違いは 400） | `base.publish` |
+| `POST` | `/v1/bases/{name}/start` | 200 ベース（ベースの DB サーバーを起動） | `base.start` |
+| `POST` | `/v1/bases/{name}/stop` | 200 ベース（ベースの DB サーバーを停止） | `base.stop` |
 | `POST` | `/v1/bases/{name}/load` | 202 オペレーション（`{"dump": "upload:<id>" か ノード上のパス, "snapshot": true}`） | `base.load` |
 | `POST` | `/v1/uploads?name=x.sql.gz&node=N` | 201 `{"id":"upload:<id>","size":...,"node":...}`（本文はファイルそのもの） | `base.upload` |
 | `GET` | `/v1/uploads/room?node=N` | 200 `{"max_bytes":...,"reason":"limit"/"pool"}` | `base.upload` |
@@ -414,6 +420,8 @@ POST /v1/branches
 | `POST` | `/v1/bases/{name}/refresh/run` | 202 オペレーション（`base.refresh`。今すぐ更新する） | `base.refresh` |
 | `POST` | `/v1/bases/{name}/sql` | 204（`{"sql": "..."}` をベースのサーバーで管理者として実行） | `base.sql` |
 
+（`base mask` はマスカーモジュールの別リポジトリ分離に伴い、1.0 の公開 API からは非露出としています。）
+
 作成:
 
 ```json
@@ -421,50 +429,51 @@ POST /v1/bases
 {
   "name": "prod-masked",
   "runtime": "mysql@8.4.13",
-  "source": { "type": "dump", "path": "/srv/dumps/prod-masked.sql.gz" }
+  "dump": "/srv/dumps/prod-masked.sql.gz"
 }
 ```
 
-- `source.path` はベースオリジンになるノード（リクエストを受けたノード）上のパス。agent が読める場所に置く
-- ダンプの形式（mysqldump / mydumper など）は design.md §15 の未決事項に従う
+- `dump` はベースオリジンになるノード（`node` 指定先、省略時はリクエストを受けたノード）上のパス、または `POST /v1/uploads` で得た `upload:<id>`。HTTPS 経由ではローカルパスを指定できない（`upload:<id>` またはローカルソケットが必要）
 
-ベースの表現:
+ベースの表現（主要フィールド。全フィールドは `api/openapi.yaml` の `Base` スキーマ参照）:
 
 ```json
 {
   "name": "prod-masked",
   "runtime": "mysql@8.4.13",
-  "origin_node": "node1",
   "status": "ready",
+  "status_reason": null,
+  "node": "node1",
+  "port": 40000,
   "created_at": "2026-11-09T10:00:00Z",
   "latest_snapshot": "s20261109",
-  "branch_count": 4,
-  "storage": { "used": 524288000, "referenced": 524288000 }
+  "snapshots": [ ... ],
+  "replicas": { "s20261109": ["node2", "node3"] },
+  "replica_nodes": null,
+  "holders": [
+    { "node": "node1", "state": "held", "origin": true },
+    { "node": "node2", "state": "held", "origin": false },
+    { "node": "node3", "state": "pulling", "origin": false }
+  ],
+  "operation": null,
+  "description": "",
+  "anonymous": { "max_branches": null, "max_ttl": null },
+  "can": { ... }
 }
 ```
 
-スナップショットの表現:
+スナップショットの表現（`Base.snapshots` の要素）:
 
 ```json
 {
   "name": "s20261109",
-  "base": "prod-masked",
   "created_at": "2026-11-09T11:00:00Z",
-  "propagation": {
-    "done": 2,
-    "total": 3,
-    "nodes": [
-      { "node": "node1", "state": "present" },
-      { "node": "node2", "state": "present" },
-      { "node": "node3", "state": "receiving", "progress": { "done": 104857600, "total": 524288000, "unit": "bytes" } }
-    ]
-  },
-  "branch_count": 2
+  "public": false
 }
 ```
 
-- `propagation.nodes[].state`: `present` / `receiving` / `pending` / `failed`
-- `GET /v1/bases` と `GET /v1/bases/{name}` の各ベースには `can`（action 名から true/false への対応）が付く。呼び出した人がそのベースに対してできる操作で、認可の拡張点に `Resource{Kind:"base", Name:<ベース名>}` を渡して調べる（ベースごとのメンテナーの権限が反映される）。対象は `base.snapshot` / `base.load` / `base.delete` / `base.describe` / `base.mask` / `base.publish` / `base.sql` / `base.start` / `base.stop` / `base.refresh` / `base.refresh.read` / `base.snapshot_delete` / `base.replicas`。イベント（`base.updated`）には付かない。コンソールは `can` を見てボタンを出し、無ければセッションの全体の権限（`can`）を使う
+- `holders[].state`: `held` / `pulling` / `draining` / `skipped`
+- `GET /v1/bases` と `GET /v1/bases/{name}` の各ベースには `can`（action 名から true/false への対応）が付く。呼び出した人がそのベースに対してできる操作で、認可の拡張点に `Resource{Kind:"base", Name:<ベース名>}` を渡して調べる（ベースごとのメンテナーの権限が反映される）。対象は `base.snapshot` / `base.load` / `base.delete` / `base.describe` / `base.publish` / `base.sql` / `base.start` / `base.stop` / `base.refresh` / `base.refresh.read` / `base.snapshot.delete` / `base.replicas`（互換のため `base.snapshot_delete` 別名も許容）。イベント（`base.updated`）には付かない。コンソールは `can` を見てボタンを出し、無ければセッションの全体の権限（`can`）を使う
 - レプリカ先（design.md §6「コピーを置くノードを選ぶ」）: `POST /v1/bases` は `replica_nodes`（省略か `null` で全ノード、`[]` で起点ノードだけ、名前の配列でそれらと起点）を受け取る。ベースの表現には `replica_nodes`（`null` は全ノード）と、ノードごとの保持状況 `holders`（`[{"node": "n2", "state": "held"|"pulling"|"draining", "origin": false}]`）が付く。`pulling` はコピーを取得中（まだ最新を持たない）、`skipped` はコピーの対象だが別の OS のため作らない（PostgreSQL のみ。`reason` は `other OS: ubuntu-26.04`、`distro` はそのノードのディストリビューション。どちらも `skipped` のときだけ付く。[mixed-os.md](mixed-os.md)）、`draining` は一覧から外れたが、そのノードのブランチがまだ使っていて消せない。コピーのサイズはまだ返さない。全ノードが新しいプロトコル（13）になるまで、`replica_nodes` を指定した作成と `PUT .../replicas` は `503 cluster_upgrading` で断る
 - ログインなしの上限（design.md §6「ログインなしの作成の上限」）: `GET /v1/bases` と `GET /v1/bases/{name}` の各ベースには `anonymous` が付く。`{"max_branches": 3, "max_ttl": "4h0m0s"}` の形で、**`null` は「継承」**（`max_branches` が `null` なら全体の上限 `branch.anonymous_max` だけが効き、`max_ttl` が `null` なら `branch.anonymous_ttl` が効く）。`max_branches: 0` は、スナップショットが公開でもこのベースからはログインなしで作らせない。どのベースにも到達できるかは、これまでどおり公開スナップショットだけで決まる（この設定は公開を増やさない）。変更は `PATCH .../anonymous`（権限 `base.publish`）。全ノードが新しいプロトコル（14）になるまで、`503 cluster_upgrading` で断る
 - `POST .../snapshots` の `name` は省略可（省略時は `sYYYYMMDDhhmm`）
@@ -540,85 +549,70 @@ PUT /v1/bases/prod/refresh
 
 | メソッド | パス | 応答 | action |
 |---|---|---|---|
-| `GET` | `/v1/runtimes` | 200 一覧（クラスタ全体） | `runtime.list` |
-| `GET` | `/v1/runtimes/available` | 200 カタログ | `runtime.list` |
+| `GET` | `/v1/runtimes` | 200 一覧（`?node=` でノード指定可） | `runtime.read` |
+| `GET` | `/v1/runtimes/available` | 200 カタログ | `runtime.read` |
 | `POST` | `/v1/runtimes` | 202 オペレーション | `runtime.install` |
-| `POST` | `/v1/runtimes/import` | 202 オペレーション（**ソケット限定**） | `runtime.install` |
-| `GET` | `/v1/runtimes/{engine}/{version}` | 200 | `runtime.get` |
 | `DELETE` | `/v1/runtimes/{engine}/{version}` | 204 | `runtime.remove` |
 
 ```json
 POST /v1/runtimes          {"runtime": "mysql@8.4.13"}
-POST /v1/runtimes/import   {"runtime": "mysql@8.4.13-custom", "path": "/opt/mysql"}
 GET  /v1/runtimes/available?engine=mysql
-→ {"items": [{"runtime": "mysql@8.4.13", "engine": "mysql", "version": "8.4.13", "archs": ["amd64"], "size": 79753532}]}
+→ {"items": [{"runtime": "mysql@8.4.13", "engine": "mysql", "version": "8.4.13"}], "next_cursor": null}
 ```
 
-ランタイムの表現:
-
-```json
-{
-  "runtime": "mysql@8.4.13",
-  "engine": "mysql",
-  "version": "8.4.13",
-  "source": "catalog",
-  "sha256": "5dfbb764...",
-  "distribution": {
-    "done": 3,
-    "total": 3,
-    "nodes": [ { "node": "node1", "state": "present" } ]
-  },
-  "used_by": { "bases": ["prod-masked"] }
-}
-```
-
-- インストールはリーダーが外部から取得し、他のノードはリーダーから受け取る（design.md §4）。その進み具合が `distribution`
-- 削除は全ノードから消す。ベースが使っていれば `409 in_use`
-- `source`: `catalog` / `import`
+- インストールはリーダーが外部から取得し、他のノードはリーダーから受け取る（design.md §4）
+- 削除は全ノードから消す。ベースやブランチが使っていれば `409 in_use`
 
 ### 5.4 クラスタとノード
 
 | メソッド | パス | 応答 | action |
 |---|---|---|---|
-| `GET` | `/v1/cluster` | 200 | `cluster.get` |
-| `GET` | `/v1/cluster/nodes` | 200 一覧 | `cluster.get` |
-| `GET` | `/v1/cluster/nodes/{node}` | 200 | `cluster.get` |
+| `GET` | `/v1/cluster` | 200 | `cluster.read` |
+| `POST` | `/v1/cluster/token` | 200（ソケット限定、1 回限り・期限付き） | `cluster.token` |
 | `DELETE` | `/v1/cluster/nodes/{name}` | 200 外した内訳（`?force=true` で、残る記録を忘れて外す） | `cluster.remove` |
+| `GET` | `/v1/nodes/{name}/metrics` | 200 ノードの最新メトリクスサンプル | `cluster.read` |
+| `GET` | `/v1/nodes/{name}/storage` | 200 ノードの ZFS データセット／スナップショット一覧 | `cluster.read` |
 
 ```json
 GET /v1/cluster
 {
-  "id": "c_7f3a...",
+  "mode": "cluster",
+  "self": "node1",
   "leader": "node1",
-  "quorum": { "voters": 3, "healthy": 3 },
-  "index": 18344,
+  "protocol": 28,
+  "service_ids": { "uid": 109, "gid": 112 },
   "nodes": [ ... ]
 }
 ```
 
-ノードの表現:
+ノードの表現（`nodes[]` の要素）:
 
 ```json
 {
   "name": "node1",
+  "host": "node1",
   "address": "192.0.2.10",
+  "version": "1.0.0",
   "leader": true,
-  "status": "up",
-  "last_seen_at": "2026-11-09T12:00:00Z",
-  "version": "0.1.0",
-  "arch": "amd64",
-  "capacity": { "pool": "tank", "size": 53150220288, "allocated": 1048576000, "free": 52101644288 },
-  "branch_count": 3,
-  "branches": ["feature-x", "pr-1234", "qa"],
-  "system": { "distro": "ubuntu-26.04", "os": "Ubuntu 26.04.1 LTS", "kernel": "7.0.0-14-generic", "zfs": "2.4.0-1ubuntu1" }
+  "voter": true,
+  "down": false,
+  "pool_size": 53150220288,
+  "pool_free": 52101644288,
+  "runtimes": ["mysql@8.4.13"],
+  "protocol": 28,
+  "modules": [],
+  "metrics": null,
+  "arc_max_mb": 1024,
+  "system": { "distro": "ubuntu-26.04", "os": "Ubuntu 26.04.1 LTS", "kernel": "7.0.0-14-generic", "zfs": "2.4.0-1ubuntu1" },
+  "service_ids": { "uid": 109, "gid": 112 },
+  "last_seen": "2026-11-24T12:00:00Z"
 }
 ```
 
 - `system`: ノードの OS（ディストリビューションのキー `distro`、表示名 `os`）、カーネル（`uname -r`）、ZFS の版（ユーザーランド。カーネルモジュールの版が違えば `2.3.1-1 (kmod 2.2.2-0ubuntu9)` のように続ける）。ハートビートで運ばれ、古いノードが報告しない項目は `"unknown"`。ノードごとに OS が違うクラスタでの PostgreSQL の扱いは [mixed-os.md](mixed-os.md)。PostgreSQL のベースを別ディストリビューションのノードに置く指定（`node`、`replica_nodes`）は `409 conflict` で断られる
 - `service_ids` / `id_problem`: ノードの `db-branch` ユーザーの uid/gid と、クラスタのものと食い違うときの理由（[service-user-ids.md](service-user-ids.md)）。`GET /v1/cluster` のトップレベルの `service_ids` はクラスタの値。食い違うノードには新しいブランチもレプリカも置かれず、`node` で指定すると `409 conflict`
-- `status`: `up` / `down` / `joining` / `leaving`
-- 単一ノード構成でも同じ形で返す（`voters: 1`）
-- コンソールは `capacity.allocated / capacity.size` で容量バーを描き、80% で琥珀色、90% で赤にする
+- 単一ノード構成でも `mode: "single"` として同じ形で返す
+- コンソールは `(pool_size - pool_free) / pool_size` で容量バーを描き、80% で琥珀色、90% で赤にする
 
 #### 5.4.1 更新
 
@@ -653,41 +647,30 @@ GET /v1/updates
 
 | メソッド | パス | 応答 | action |
 |---|---|---|---|
-| `GET` | `/v1/operations` | 200 一覧（新しい順） | `operation.list` |
-| `GET` | `/v1/operations/{id}` | 200 | `operation.get` |
+| `GET` | `/v1/operations` | 200 一覧（新しい順） | `operation.read` |
+| `GET` | `/v1/operations/{id}` | 200 | `operation.read` |
 
 見えるのは、自分が始めたオペレーション、SharesBranches で共有する相手のもの、管理者は全部。システムが始めたもの（ランタイムの導入、定期リフレッシュ）は管理者だけ。見えないオペレーションは存在しないときと同じ 404 を返す。
-
-絞り込み: `?state=running`、`?kind=branch.create`、`?target=branch/feature-x`。取り消しは当面提供しない。
 
 ### 5.6 その他
 
 ```
 GET /v1/capabilities
 {
-  "version": "0.1.0",
-  "engines": ["mysql"],
+  "version": "1.0.0",
+  "node": "node1",
   "modules": [],
-  "features": { "proxysql": false, "cluster": false }
+  "pages": [],
+  "record": false,
+  "engines": [ ... ]
 }
 ```
 
-- `modules`: 有効な有償モジュール。例: `[{"name": "audit", "version": "1.0.0", "licensed_until": "2027-11-09T00:00:00Z"}]`
-- コンソールはここを見て、表示する画面を切り替える
-- 認証なしで呼べるのは `GET /v1/capabilities`（`version` と `modules[].name` だけを返す縮小版）、`POST /v1/auth/login`、`GET /v1/healthz` だけ
+- `modules`: 有効なモジュール一覧（`"name version"` の文字列配列）
+- コンソールはここを見て、表示する画面や機能を切り替える
+- 認証なしで呼べるのは `/healthz`、`/readyz`、`/tls.pem`、`GET /v1/auth/methods`、`POST /v1/auth/login`、`GET /v1/public/bases`、匿名作成可能な `POST /v1/branches` およびその匿名ブランチの参照・`dsn`・オペレーション参照だけ
 
 ```
-GET /v1/healthz  → 200 {"status":"ok"} / 503 {"status":"degraded","reasons":["no_leader"]}
+GET /healthz  → 200 "ok\n"
+GET /readyz   → 200 "ready\n" / 503 "not ready\n"
 ```
-
-## 6. 未決事項
-
-- ~~ダンプの受け渡し~~ → `POST /v1/uploads`（§5.2）で解決。ノード上のパスも引き続き使える
-- `init_sql` の上限（1 MiB）と、ファイル参照（ノード上のパス）も許すか
-- TTL の延長（`PATCH` の `ttl`）を OSS に含めるか
-- リセット中の `status` を `provisioning` で表すか、`resetting` を追加するか
-- ベースとスナップショットの削除 API（design.md では世代数による自動削除のみ）
-- ブランチ用 DB ユーザーのパスワードの扱い（固定・作成時に生成・ローテーション）
-- `GET /v1/events` を `Last-Event-ID` で再送できる期間（Raft ログの保持量に依存）
-- オペレーションの取り消し（特に大きなランタイムのダウンロード）
-- PostgreSQL 版の `connection` / `dsn` の形（`postgres://`、`sslmode`）

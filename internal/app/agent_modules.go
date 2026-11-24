@@ -43,7 +43,7 @@ func coreSettings(cfg config.Config) []ext.Setting {
 		{Key: "branch.memory_mb", Label: "Branch memory (MB)", Type: "int", Default: strconv.Itoa(cfg.Branch.MemoryMB),
 			Help: "InnoDB buffer pool / shared_buffers of each branch server. Branches started from now on use it."},
 		{Key: "branch.max_checkpoints", Label: "Checkpoints per branch", Type: "int", Default: strconv.Itoa(domain.DefaultMaxCheckpoints),
-			Help: "The most checkpoints you take yourself that one branch may hold, over all its lines of history. The checkpoints taken automatically before a restore are not counted and never block a restore: the newest five are kept, older ones are deleted. Each checkpoint keeps the data it protects, so it uses disk space as the branch changes. 0: none."},
+			Help: "The most checkpoints you take yourself that one branch may hold, over all its lines of history. Automatic checkpoints such as before-upgrade-* (or legacy before-restore-*) are not counted: the newest five are kept, older ones are deleted. Each checkpoint keeps the data it protects, so it uses disk space as the branch changes. 0: none."},
 		{Key: "branch.default_ttl", Label: "Default TTL", Type: "duration", Default: "",
 			Help: "Expiry for branches created without one, e.g. 72h. Empty: no expiry."},
 		{Key: "branch.refquota_gb", Label: "Largest branch size (GB)", Type: "int", Default: "0",

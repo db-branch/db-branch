@@ -15,7 +15,7 @@
 
 1. 1 回限り・期限付きの参加トークン（`db-branch cluster token`、既定 24 時間）で参加先のメンバーに接続し、CA を受け取る（トークンはその場で消費される）。同じ応答に、クラスタの uid/gid（`service_ids`）が入っている。記録がまだないクラスタでは、リーダーが自分の値を返す。古いメンバーは何も返さない（その場合は揃えず、後でクラスタが記録した時点で食い違いとして報告される）。
 2. **データを受け取る前に**、ローカルの `db-branch` の uid/gid と比べる。同じなら何もしない。
-3. 違い、かつクラスタの uid/gid がローカルで **空いている** なら: `db-branch.service` と `db-branch-mysqld@*` / `db-branch-postgres@*` を止め、`/var/lib/db-branch`、`/etc/db-branch`、`/run/db-branch*`、`<pool>/db-branch` 以下の ZFS データセットのマウントで、古い uid/gid の持ち物を新しい値に付け替え（シンボリックリンクはリンク自体）、`groupmod -g` / `usermod -u -g` で `db-branch` を変更する。付け替えを先に行うので、途中で失敗しても同じコマンドをもう一度実行すれば続きから直る。
+3. 違い、かつクラスタの uid/gid がローカルで **空いている** なら: `db-branch.service` と `db-branch-mysqld@*` / `db-branch-postgres@*` / `db-branch-rt@*` を止め、`/var/lib/db-branch`、`/etc/db-branch`、`/run/db-branch*`、`<pool>/db-branch` 以下の ZFS データセットのマウントで、古い uid/gid の持ち物を新しい値に付け替え（シンボリックリンクはリンク自体）、`groupmod -g` / `usermod -u -g` で `db-branch` を変更する。付け替えを先に行うので、途中で失敗しても同じコマンドをもう一度実行すれば続きから直る。なお、外部ランタイムモジュールはエンジン別の専用ユーザー（`db-branch-rt-<engine>`）を使うため、`db-branch` の uid/gid 付け替えとは独立している（1.0 では単一ノード限定 Experimental）。
 4. クラスタの uid/gid が **ローカルの別のユーザー / グループで使われている** なら、何も変えずに参加を断る。メッセージにどのアカウントが使っているかと対処（そのアカウントを別の id に変えてファイルも付け替える、または id が空いているマシンで作り直す）が出る。
 5. 続けて CA と証明書を保存し、エージェントを再起動する。
 

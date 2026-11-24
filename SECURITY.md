@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest release receives security fixes. db-branch is in Beta; please upgrade to the newest version before reporting, if you can.
+Only the latest release receives security fixes. Please upgrade to the newest version before reporting, if you can.
 
 ## Reporting a vulnerability
 
@@ -23,4 +23,4 @@ This is a small project and the response is best effort, with no SLA and no guar
 
 This repository is the Apache-2.0 core, including the free modules shipped from it. The paid modules (auth/SSO, audit, history, diff, FSx storage) are separate, closed-source packages and are not in this repository, but you may report issues in them through the same channel.
 
-Out of scope: vulnerabilities in third-party software that db-branch installs or drives (MySQL, PostgreSQL, ProxySQL, ZFS) should be reported to those projects, and findings that need a root or `db-branch` group account on the node, which are already trusted.
+Out of scope: vulnerabilities in third-party software that db-branch installs or drives (MySQL, PostgreSQL, ProxySQL, ZFS) should be reported to those projects, and findings that need a `root` or `db-branch-admin` group account on the node, which are already trusted. Privilege escalation from the unprivileged `db-branch` or `db-branch-rt-*` database service accounts/groups to `db-branch-admin` or `root` is in scope.

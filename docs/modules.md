@@ -1,12 +1,12 @@
 # 拡張モジュールの作り方
 
-有償モジュール（`auth`・`audit` など）や独自の拡張は、db-branch 本体を変えずに別のバイナリとして追加する。公開 API は `pkg/ext`（ポート）と `pkg/ext/plugin`（プロセス間通信）。
+有償モジュール（`auth`・`audit` など）や独自の拡張は、db-branch 本体を変えずに別のバイナリとして追加する。1.0 の公開互換契約は `pkg/ext`（ポート）と `pkg/ext/proto/runtime/v1`（外部ランタイムモジュール向け gRPC プロトコル）であり、`pkg/ext/plugin`（`net/rpc`）は内部向け・非推奨扱い。
 
 ## ポート
 
 | ポート | 呼ばれるとき | OSS の既定 |
 |---|---|---|
-| `ext.Authenticator` | コンソールのログイン（ユーザー名とパスワード）、API の `Authorization: Bearer <token>` | admin 1 人のパスワード（トークンは扱わない） |
+| `ext.Authenticator` | コンソールのログイン（ユーザー名とパスワード）、API の `Authorization: Bearer <token>` | admin 1 人のパスワード認証と API トークン（個人用・サービス用） |
 | `ext.Authorizer` | すべての API 呼び出しの前（`branch.create`、`branch.read`、`base.delete` などのアクション名と対象） | ログインしていれば許可 |
 | `ext.AuditSink` | 変更を伴う呼び出し・拒否・ログインの後 | agent の構造化ログに 1 行 |
 | `ext.Router` | 振り分けの設定（ブランチごとの hostgroup・ユーザー・コメントの規則）が変わったとき | なし（振り分けをしない）。`db-branch-proxysql` モジュールが ProxySQL を設定する |
@@ -56,14 +56,13 @@ func main() {
 
 ## 配置
 
-- バイナリを `/usr/lib/db-branch/modules/` に置き、agent を再起動する。root 所有で、グループやその他が書き換えられないこと（そうでなければ読み込まない）
+- バイナリを `/usr/lib/db-branch/modules/` に置き、agent を再起動する。root 所有で、グループやその他が書き換えられないこと（シンボリックリンク・親ディレクトリ権限・setuid も検証し、満たさなければ読み込まない）。子プロセスにはホスト環境変数を渡さない（`SkipHostEnv`）
 - agent は起動時にディレクトリ内の実行ファイルを名前順に起動し、ハンドシェイク（`plugin.Handshake`）に応えたものだけを使う
 - 読み込んだモジュールは `GET /v1/capabilities` の `modules` に出る
-- 通信は hashicorp/go-plugin の net/rpc。design.md §12 では gRPC としていたが、protobuf の生成なしで済む net/rpc から始めた。ポートの形は同じなので、他言語のモジュールが必要になったら gRPC を足す
+- 従来の拡張モジュールの通信は `hashicorp/go-plugin` の net/rpc（内部向け・非推奨扱い）、外部ランタイムモジュールは `pkg/ext/proto/runtime/v1` の gRPC を用いる（[runtime-modules-standard.md](runtime-modules-standard.md)）
 
 ## 未実装
 
-- ライセンスキー（ECDSA P-256 署名のオフライン検証。pkg/ext/license）は有償モジュール側で行う
 - ProxySQL の接続記録を AuditSink に流す処理
 
 ## モジュールの API・画面・クラスタ共通データ（プロトコル 9）
