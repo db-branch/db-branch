@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -190,12 +191,28 @@ func (c removalCatalog) SetReplicaNodes(ctx context.Context, base domain.Name, n
 }
 
 // NewToken implements httpapi.Cluster.
-func (c *clusterRuntime) NewToken(ctx context.Context) (string, error) {
-	secret := clusterpki.NewSecret()
-	if err := c.store.SetJoinSecretHash(ctx, clusterpki.HashSecret(secret)); err != nil {
-		return "", err
+func (c *clusterRuntime) NewToken(ctx context.Context, ttl time.Duration) (string, time.Time, error) {
+	explicitTTL := ttl > 0
+	if !explicitTTL {
+		ttl = time.Duration(clusterJoinTokenTTL.Load())
+		if ttl <= 0 {
+			ttl = clusterpki.DefaultJoinTokenTTL
+		}
 	}
-	return clusterpki.Token{Fingerprint: c.ca.Fingerprint(), Secret: secret}.String(), nil
+	secret := clusterpki.NewSecret()
+	hash := clusterpki.HashSecret(secret)
+	exp := time.Now().UTC().Add(ttl)
+	if err := c.store.SetJoinToken(ctx, hash, exp); err != nil {
+		if explicitTTL || !errors.Is(err, domain.ErrClusterUpgrading) {
+			return "", time.Time{}, err
+		}
+		// Mixed-version cluster with default TTL: fall back to Protocol 1 until all nodes speak ProtocolJoinToken.
+		if err := c.store.SetJoinSecretHash(ctx, hash); err != nil {
+			return "", time.Time{}, err
+		}
+		return clusterpki.Token{Fingerprint: c.ca.Fingerprint(), Secret: secret}.String(), time.Time{}, nil
+	}
+	return clusterpki.Token{Fingerprint: c.ca.Fingerprint(), Secret: secret}.String(), exp, nil
 }
 
 // Forward implements httpapi.Cluster.

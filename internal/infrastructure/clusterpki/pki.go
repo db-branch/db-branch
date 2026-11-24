@@ -241,6 +241,10 @@ func PinnedTLS(fingerprint string) *tls.Config {
 	}
 }
 
+// DefaultJoinTokenTTL is how long a join token stays valid when no custom TTL
+// is configured.
+const DefaultJoinTokenTTL = 24 * time.Hour
+
 // Token lets a new node join: it pins the CA and proves the node was invited.
 type Token struct {
 	Fingerprint string

@@ -100,10 +100,50 @@ func TestResourceLimits_設定値がサービスの上限に変換され既定�
 	for _, s := range coreSettings(config.Default()) {
 		keys[s.Key] = s.Default
 	}
-	for _, k := range []string{"base.refresh_max_gb", "branch.refquota_gb", "branch.max_per_user", "branch.max_ttl"} {
+	for _, k := range []string{"base.refresh_max_gb", "branch.refquota_gb", "branch.max_per_user", "branch.max_ttl", "cluster.join_token_ttl"} {
 		if _, ok := keys[k]; !ok {
 			t.Errorf("setting %s is not declared", k)
 		}
+	}
+}
+
+func TestWireModulesAndSettings_clusterJoinTokenTTLを検証し反映する(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	st := &filestore.Store{Path: filepath.Join(cfg.DataDir, "state.json")}
+	svc := &dbbranch.Service{Store: st}
+	srv := &httpapi.Server{Auth: &auth.Service{}}
+	arc := &arcNode{ctl: &arccap.Controller{}}
+	problems := &moduleProblems{m: map[string]string{}}
+
+	prev := clusterJoinTokenTTL.Load()
+	t.Cleanup(func() { clusterJoinTokenTTL.Store(prev) })
+
+	wCtx, wCancel := context.WithCancel(ctx)
+	_ = wireModulesAndSettings(wCtx, cfg, svc, srv, nil, nil, nil, nil,
+		func() int { return 1 }, problems, arc, nil, nil, func() bool { return true }, discardLog())
+	wCancel()
+
+	if got := time.Duration(clusterJoinTokenTTL.Load()); got != 24*time.Hour {
+		t.Fatalf("default clusterJoinTokenTTL = %v, want 24h", got)
+	}
+	for _, bad := range []string{"0s", "-1h", "soon"} {
+		if err := srv.Settings.Put(ctx, settings.CoreScope, map[string]string{"cluster.join_token_ttl": bad}); !errors.Is(err, settings.ErrInvalid) {
+			t.Errorf("Put(cluster.join_token_ttl=%q) = %v, want ErrInvalid", bad, err)
+		}
+	}
+	if err := srv.Settings.Put(ctx, settings.CoreScope, map[string]string{"cluster.join_token_ttl": "2h"}); err != nil {
+		t.Fatalf("Put valid cluster.join_token_ttl: %v", err)
+	}
+	wCtx2, wCancel2 := context.WithCancel(ctx)
+	_ = wireModulesAndSettings(wCtx2, cfg, svc, srv, nil, nil, nil, nil,
+		func() int { return 1 }, problems, arc, nil, nil, func() bool { return true }, discardLog())
+	wCancel2()
+	if got := time.Duration(clusterJoinTokenTTL.Load()); got != 2*time.Hour {
+		t.Errorf("updated clusterJoinTokenTTL = %v, want 2h", got)
 	}
 }
 

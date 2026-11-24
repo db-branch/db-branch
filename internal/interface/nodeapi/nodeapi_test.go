@@ -414,7 +414,9 @@ func TestJoin_既存ノード名一覧を返し同名別アドレスのAddMember
 
 	// PutNode adds another known node name; JoinInfo.Nodes returns sorted union.
 	_ = a.store.PutNode(ctx, domain.Node{Name: "node-b", Address: "127.0.0.1:7070"})
-	info, err = nodeapi.Join(ctx, a.api, clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: secret})
+	secret2 := clusterpki.NewSecret()
+	_ = a.store.SetJoinSecretHash(ctx, clusterpki.HashSecret(secret2))
+	info, err = nodeapi.Join(ctx, a.api, clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: secret2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,5 +428,251 @@ func TestJoin_既存ノード名一覧を返し同名別アドレスのAddMember
 	err = nodeapi.NewClient(n.ClientTLS()).AddMember(ctx, a.api, "node-a", "127.0.0.1:9999")
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Errorf("duplicate AddMember: err = %v, want ErrAlreadyExists", err)
+	}
+}
+
+func TestProxy_ノード間API経由のsocketOnlyエンドポイントは拒否し通常の転送は通す(t *testing.T) {
+	ca, _ := clusterpki.InitCA(t.TempDir())
+	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "%s %s", r.Method, r.URL.Path)
+	})
+	a := startWithAPI(t, ca, "node-a", api)
+	n, _ := ca.IssueNode(t.TempDir(), "node-b", nil)
+	proxy := nodeapi.NewClient(n.ClientTLS()).Proxy(a.api)
+
+	for _, path := range []string{"/v1/backups/restore", "/v1/auth/reset", "/v1/cluster/token", "/v1/backups/restore/"} {
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		req.Header.Set("X-Db-Branch-Forwarded", "node-b")
+		req.Header.Set("X-Db-Branch-Principal", `{"id":"local","name":"local","roles":["admin"]}`)
+		rec := httptest.NewRecorder()
+		proxy.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "socket_only") {
+			t.Errorf("POST %s via nodeapi: status=%d body=%q, want 403 socket_only", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Legitimate forwarded endpoints still work.
+	for _, tc := range []struct {
+		method, path string
+	}{
+		{http.MethodPost, "/v1/branches/x/reset"},
+		{http.MethodPost, "/v1/backups"},
+		{http.MethodGet, "/v1/backups"},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		req.Header.Set("X-Db-Branch-Forwarded", "node-b")
+		req.Header.Set("X-Db-Branch-Principal", `{"id":"local","name":"local","roles":["admin"]}`)
+		rec := httptest.NewRecorder()
+		proxy.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || rec.Body.String() != tc.method+" "+tc.path {
+			t.Errorf("%s %s via nodeapi: status=%d body=%q", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestJoin_トークンは1回限りで2回目は拒否され期限切れと同時使用も拒否される(t *testing.T) {
+	ca, _ := clusterpki.InitCA(t.TempDir())
+	a := start(t, ca, "node-a")
+	if err := a.store.Bootstrap([]raft.Server{{ID: "node-a", Address: raft.ServerAddress(a.raft)}}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, a.store.IsLeader)
+	if err := a.store.PutNode(ctx, domain.Node{Name: "node-a", Address: a.api, RaftAddress: a.raft, Protocol: raftstore.Protocol}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Single-use: first Join succeeds, second with the same token is rejected.
+	secret := clusterpki.NewSecret()
+	if err := a.store.SetJoinToken(ctx, clusterpki.HashSecret(secret), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	tok := clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: secret}
+	if _, err := nodeapi.Join(ctx, a.api, tok); err != nil {
+		t.Fatalf("first join: %v", err)
+	}
+	if _, err := nodeapi.Join(ctx, a.api, tok); !errors.Is(err, nodeapi.ErrRejected) {
+		t.Errorf("second join with same token: %v, want ErrRejected", err)
+	}
+
+	// 2. Expired token is rejected.
+	expiredSecret := clusterpki.NewSecret()
+	if err := a.store.SetJoinToken(ctx, clusterpki.HashSecret(expiredSecret), time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nodeapi.Join(ctx, a.api, clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: expiredSecret}); !errors.Is(err, nodeapi.ErrRejected) {
+		t.Errorf("expired join: %v, want ErrRejected", err)
+	}
+
+	// 3. Concurrent race: only one caller succeeds with the same token.
+	raceSecret := clusterpki.NewSecret()
+	if err := a.store.SetJoinToken(ctx, clusterpki.HashSecret(raceSecret), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	raceTok := clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: raceSecret}
+	const workers = 5
+	errs := make(chan error, workers)
+	for range workers {
+		go func() {
+			_, err := nodeapi.Join(ctx, a.api, raceTok)
+			errs <- err
+		}()
+	}
+	succeeded, rejected := 0, 0
+	for range workers {
+		err := <-errs
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, nodeapi.ErrRejected):
+			rejected++
+		default:
+			t.Errorf("unexpected race error: %v", err)
+		}
+	}
+	if succeeded != 1 || rejected != workers-1 {
+		t.Errorf("concurrent join: succeeded=%d rejected=%d, want 1 and %d", succeeded, rejected, workers-1)
+	}
+
+	// 4. Legacy token (issued via SetJoinSecretHash) is accepted once and cleared after upgrade to Protocol 27.
+	legacySecret := clusterpki.NewSecret()
+	if err := a.store.SetJoinSecretHash(ctx, clusterpki.HashSecret(legacySecret)); err != nil {
+		t.Fatal(err)
+	}
+	legacyTok := clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: legacySecret}
+	if _, err := nodeapi.Join(ctx, a.api, legacyTok); err != nil {
+		t.Fatalf("legacy token after upgrade: %v", err)
+	}
+	if _, err := nodeapi.Join(ctx, a.api, legacyTok); !errors.Is(err, nodeapi.ErrRejected) {
+		t.Errorf("reused legacy token: %v, want ErrRejected", err)
+	}
+}
+
+func TestJoin_混在バージョンのクラスタでもJoinが壊れずトークンを無効化する(t *testing.T) {
+	ca, _ := clusterpki.InitCA(t.TempDir())
+	a := start(t, ca, "node-a")
+	if err := a.store.Bootstrap([]raft.Server{{ID: "node-a", Address: raft.ServerAddress(a.raft)}}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, a.store.IsLeader)
+	// Simulate an older member in the cluster holding back ClusterProtocol.
+	if err := a.store.PutNode(ctx, domain.Node{Name: "old", Protocol: domain.ProtocolJoinToken - 1}); err != nil {
+		t.Fatal(err)
+	}
+	secret := clusterpki.NewSecret()
+	if err := a.store.SetJoinSecretHash(ctx, clusterpki.HashSecret(secret)); err != nil {
+		t.Fatal(err)
+	}
+	tok := clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: secret}
+	if _, err := nodeapi.Join(ctx, a.api, tok); err != nil {
+		t.Fatalf("mixed-version join failed: %v", err)
+	}
+	if _, err := nodeapi.Join(ctx, a.api, tok); !errors.Is(err, nodeapi.ErrRejected) {
+		t.Errorf("reused token in mixed-version cluster: %v, want ErrRejected", err)
+	}
+
+	// Concurrent joins against this node in mixed-version mode also allow only one caller.
+	raceSecret := clusterpki.NewSecret()
+	if err := a.store.SetJoinSecretHash(ctx, clusterpki.HashSecret(raceSecret)); err != nil {
+		t.Fatal(err)
+	}
+	raceTok := clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: raceSecret}
+	const workers = 4
+	errs := make(chan error, workers)
+	for range workers {
+		go func() {
+			_, err := nodeapi.Join(ctx, a.api, raceTok)
+			errs <- err
+		}()
+	}
+	succeeded, rejected := 0, 0
+	for range workers {
+		err := <-errs
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, nodeapi.ErrRejected):
+			rejected++
+		default:
+			t.Errorf("unexpected mixed race error: %v", err)
+		}
+	}
+	if succeeded != 1 || rejected != workers-1 {
+		t.Errorf("mixed concurrent join: succeeded=%d rejected=%d, want 1 and %d", succeeded, rejected, workers-1)
+	}
+}
+
+func TestJoin_フォロワー経由のJoinでも1回限り消費と同時競合の拒否がErrRejectedになる(t *testing.T) {
+	ca, _ := clusterpki.InitCA(t.TempDir())
+	a := start(t, ca, "node-a")
+	if err := a.store.Bootstrap([]raft.Server{{ID: "node-a", Address: raft.ServerAddress(a.raft)}}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, a.store.IsLeader)
+	if err := a.store.PutNode(ctx, domain.Node{Name: "node-a", Address: a.api, RaftAddress: a.raft, Protocol: raftstore.Protocol}); err != nil {
+		t.Fatal(err)
+	}
+
+	b := start(t, ca, "node-b")
+	if err := nodeapi.NewClient(b.cert.ClientTLS()).AddMember(ctx, a.api, "node-b", b.raft); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.PutNode(ctx, domain.Node{Name: "node-b", Address: b.api, RaftAddress: b.raft, Protocol: raftstore.Protocol}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() bool {
+		id, _ := b.store.Leader()
+		nodes, _ := b.store.ListNodes(ctx)
+		return id == "node-a" && len(nodes) == 2 && b.store.ClusterProtocol() >= domain.ProtocolJoinToken
+	})
+
+	// 1. Join via follower succeeds once, second attempt via follower returns ErrRejected (not 500).
+	s1 := clusterpki.NewSecret()
+	if err := a.store.SetJoinToken(ctx, clusterpki.HashSecret(s1), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	tok1 := clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: s1}
+	eventually(t, func() bool { return b.store.JoinSecretHash() == clusterpki.HashSecret(s1) })
+	if _, err := nodeapi.Join(ctx, b.api, tok1); err != nil {
+		t.Fatalf("follower join: %v", err)
+	}
+	if _, err := nodeapi.Join(ctx, b.api, tok1); !errors.Is(err, nodeapi.ErrRejected) {
+		t.Errorf("second follower join: %v, want ErrRejected", err)
+	}
+
+	// 2. Concurrent race between leader and follower allows only one caller; loser gets ErrRejected.
+	s2 := clusterpki.NewSecret()
+	if err := a.store.SetJoinToken(ctx, clusterpki.HashSecret(s2), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	tok2 := clusterpki.Token{Fingerprint: ca.Fingerprint(), Secret: s2}
+	eventually(t, func() bool { return b.store.JoinSecretHash() == clusterpki.HashSecret(s2) })
+
+	const attempts = 6
+	errs := make(chan error, attempts)
+	for i := range attempts {
+		target := b.api
+		if i%2 == 0 {
+			target = a.api
+		}
+		go func() {
+			_, err := nodeapi.Join(ctx, target, tok2)
+			errs <- err
+		}()
+	}
+	succeeded, rejected := 0, 0
+	for range attempts {
+		err := <-errs
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, nodeapi.ErrRejected):
+			rejected++
+		default:
+			t.Errorf("unexpected leader/follower race error: %v", err)
+		}
+	}
+	if succeeded != 1 || rejected != attempts-1 {
+		t.Errorf("leader/follower race: succeeded=%d rejected=%d, want 1 and %d", succeeded, rejected, attempts-1)
 	}
 }

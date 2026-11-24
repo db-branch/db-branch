@@ -951,3 +951,30 @@ func TestBranchFork_フォークブランチは全ノードがプロトコル25�
 		t.Fatalf("got = %+v, err = %v", got, err)
 	}
 }
+
+func TestJoinToken_プロトコル27で期限つき1回限り消費が動き混在クラスタではErrClusterUpgrading(t *testing.T) {
+	if raftstore.Protocol < domain.ProtocolJoinToken {
+		t.Fatalf("Protocol = %d, below domain.ProtocolJoinToken (%d)", raftstore.Protocol, domain.ProtocolJoinToken)
+	}
+	cl := newCluster(t, 2)
+	l := cl.leader(t)
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: domain.ProtocolJoinToken - 1})
+	now := time.Unix(1000, 0)
+	if err := l.SetJoinToken(ctx, "h1", now.Add(time.Hour)); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("SetJoinToken with old node: %v, want ErrClusterUpgrading", err)
+	}
+	if err := l.ConsumeJoinSecret(ctx, "h1", now); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("ConsumeJoinSecret with old node: %v, want ErrClusterUpgrading", err)
+	}
+
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: domain.ProtocolJoinToken})
+	if err := l.SetJoinToken(ctx, "h1", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.ConsumeJoinSecret(ctx, "h1", now); err != nil {
+		t.Fatalf("first ConsumeJoinSecret: %v", err)
+	}
+	if err := l.ConsumeJoinSecret(ctx, "h1", now); !errors.Is(err, raftstore.ErrInvalidJoinSecret) {
+		t.Fatalf("second ConsumeJoinSecret: %v, want ErrInvalidJoinSecret", err)
+	}
+}

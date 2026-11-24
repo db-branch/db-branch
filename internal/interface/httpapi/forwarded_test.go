@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/usecase/licensing"
@@ -24,7 +25,9 @@ type stubCluster struct {
 func (c *stubCluster) Status(context.Context) (ClusterStatus, error) {
 	return ClusterStatus{Mode: "cluster", Leader: c.leader}, nil
 }
-func (c *stubCluster) NewToken(context.Context) (string, error) { return "", nil }
+func (c *stubCluster) NewToken(context.Context, time.Duration) (string, time.Time, error) {
+	return "", time.Time{}, nil
+}
 func (c *stubCluster) Forward(string) (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c.forwarded++

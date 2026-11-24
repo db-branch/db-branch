@@ -89,8 +89,7 @@ const maxRestoreBytes = 64 << 20
 // on a node's socket: restoring replaces the admin password and tokens.
 func (s *Server) restoreBackup(local bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !local {
-			writeError(w, http.StatusForbidden, "socket_only", "run `db-branch backup restore <file>` on a node")
+		if !allowSocketOnly(w, r, local, "run `db-branch backup restore <file>` on a node") {
 			return
 		}
 		if s.Backups == nil {

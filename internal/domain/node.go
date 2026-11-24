@@ -96,6 +96,10 @@ type NodeStore interface {
 	DeleteNode(ctx context.Context, name string) error
 }
 
+// ProtocolJoinToken is the cluster protocol from which join tokens carry an
+// expiration time and are consumed on first use through the Raft log.
+const ProtocolJoinToken = 27
+
 // ErrClusterUpgrading is returned for a change some cluster members cannot
 // apply yet; it becomes possible once every node runs a newer version.
 var ErrClusterUpgrading = errors.New("not every cluster node supports this yet; upgrade all nodes")

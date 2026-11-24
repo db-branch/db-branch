@@ -14,10 +14,12 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
@@ -37,6 +39,8 @@ type Store interface {
 	AddNonvoter(id, addr string) error
 	Servers(ctx context.Context) ([]membership.Server, error)
 	JoinSecretHash() string
+	SetJoinSecretHash(ctx context.Context, hash string) error
+	ConsumeJoinSecret(ctx context.Context, hash string, now time.Time) error
 	State() raftstore.State
 }
 
@@ -56,6 +60,8 @@ type Server struct {
 	// ServiceIDs returns the db-branch uid/gid of the cluster, told to nodes
 	// that join so they can adopt them before any data arrives. Optional.
 	ServiceIDs func() domain.ServiceIDs
+
+	joinMu sync.Mutex
 }
 
 // APIPrefix is where a member's /v1 API is mounted on the node API.
@@ -81,19 +87,35 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /internal/v1/bases/{name}/stream", member(s.stream))
 	}
 	if s.API != nil {
-		mux.Handle(APIPrefix+"/", member(forwardedAPI(http.StripPrefix(APIPrefix, s.API)).ServeHTTP))
+		mux.Handle(APIPrefix+"/", member(http.StripPrefix(APIPrefix, forwardedAPI(s.API)).ServeHTTP))
 	}
 	return mux
 }
 
+var socketOnlyRoutes = map[string]bool{
+	"POST /v1/auth/reset":      true,
+	"POST /v1/backups/restore": true,
+	"POST /v1/cluster/token":   true,
+}
+
 // forwardedAPI ensures requests reaching /internal/v1/api/ over mTLS carry both
-// forwarding headers so they can never be mistaken for local UNIX socket calls.
+// forwarding headers so they can never be mistaken for local UNIX socket calls,
+// and refuses socket-only routes over the node-to-node API.
 func forwardedAPI(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fwd := r.Header.Values(forwardedHeader)
 		prin := r.Header.Values(principalHeader)
 		if len(fwd) != 1 || fwd[0] == "" || len(prin) != 1 || prin[0] == "" {
 			http.Error(w, "forwarded headers required", http.StatusForbidden)
+			return
+		}
+		if socketOnlyRoutes[r.Method+" "+path.Clean(r.URL.Path)] {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{
+				"code":    "socket_only",
+				"message": "this operation is only allowed on a node's local socket",
+			}})
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -145,6 +167,8 @@ func reply(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, domain.ErrClusterUpgrading):
 		http.Error(w, err.Error(), http.StatusPreconditionFailed)
+	case errors.Is(err, raftstore.ErrInvalidJoinSecret), errors.Is(err, raftstore.ErrExpiredJoinSecret):
+		http.Error(w, err.Error(), http.StatusForbidden)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -192,6 +216,33 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	got := clusterpki.HashSecret(in.Secret)
 	if want == "" || subtle.ConstantTimeCompare([]byte(want), []byte(got)) != 1 {
 		http.Error(w, "invalid join secret", http.StatusForbidden)
+		return
+	}
+	now := time.Now()
+	if exp := s.Store.State().JoinSecretExpiresAt; exp > 0 && now.Unix() >= exp {
+		http.Error(w, "join token expired", http.StatusForbidden)
+		return
+	}
+	err := s.Store.ConsumeJoinSecret(r.Context(), got, now)
+	if errors.Is(err, domain.ErrClusterUpgrading) {
+		// Mixed-version cluster: serialize fallback on this node and re-check
+		// the hash before clearing via Protocol 1 so concurrent joins here
+		// cannot both consume the same token.
+		s.joinMu.Lock()
+		if cur := s.Store.JoinSecretHash(); cur == "" || subtle.ConstantTimeCompare([]byte(cur), []byte(got)) != 1 {
+			s.joinMu.Unlock()
+			http.Error(w, raftstore.ErrInvalidJoinSecret.Error(), http.StatusForbidden)
+			return
+		}
+		err = s.Store.SetJoinSecretHash(r.Context(), "")
+		s.joinMu.Unlock()
+	}
+	if err != nil {
+		if errors.Is(err, ErrRejected) {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		reply(w, err)
 		return
 	}
 	cert, key := s.CA.PEM()

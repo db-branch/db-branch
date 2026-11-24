@@ -357,7 +357,7 @@ func TestStartCluster_join未完了再起動でもraft構成空ならjoinAsMembe
 	if err := clA.waitLeader(ctx); err != nil {
 		t.Fatalf("node-a did not become leader: %v", err)
 	}
-	if err := clA.store.PutNode(ctx, domain.Node{Name: "node-a", Address: ccA.APIAddr, RaftAddress: ccA.RaftAddr}); err != nil {
+	if err := clA.store.PutNode(ctx, domain.Node{Name: "node-a", Address: ccA.APIAddr, RaftAddress: ccA.RaftAddr, Protocol: raftstore.Protocol}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -442,11 +442,14 @@ func TestStartCluster_join未完了再起動でもraft構成空ならjoinAsMembe
 	}
 
 	// Duplicate node name during ClusterJoin must be rejected before writing cluster.json.
-	tok, err := clA.NewToken(ctx)
+	tok, exp, err := clA.NewToken(ctx, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := clA.store.PutNode(ctx, domain.Node{Name: hostname(), Address: "127.0.0.1:7070"}); err != nil {
+	if exp.IsZero() {
+		t.Error("NewToken should return non-zero expiry")
+	}
+	if err := clA.store.PutNode(ctx, domain.Node{Name: hostname(), Address: "127.0.0.1:7070", Protocol: raftstore.Protocol}); err != nil {
 		t.Fatal(err)
 	}
 	cfgDup := config.Default()
@@ -459,19 +462,40 @@ func TestStartCluster_join未完了再起動でもraft構成空ならjoinAsMembe
 	if cc, _ := LoadClusterConfig(cfgDup); cc != nil {
 		t.Errorf("cluster.json should not be created on rejected duplicate join: %+v", cc)
 	}
+	// Single-use: reusing tok after the first join call must be rejected.
+	if err := (Node{Notes: &notes, Restart: func(context.Context) error { return nil }}).ClusterJoin(ctx, cfgDup, ccA.APIAddr, tok); err == nil || errors.Is(err, domain.ErrAlreadyExists) {
+		t.Errorf("reused token ClusterJoin = %v, want rejection", err)
+	}
 
 	// ClusterJoin with corrupt node.json must fail without restarting the agent.
 	_ = clA.store.DeleteNode(ctx, hostname())
+	tok2, _, err := clA.NewToken(ctx, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfgBadNode := config.Default()
 	cfgBadNode.DataDir = t.TempDir()
 	_ = os.WriteFile(filepath.Join(cfgBadNode.DataDir, "node.json"), []byte("{"), 0o600)
 	restarts := 0
-	err = (Node{Notes: &notes, Restart: func(context.Context) error { restarts++; return nil }}).ClusterJoin(ctx, cfgBadNode, ccA.APIAddr, tok)
+	err = (Node{Notes: &notes, Restart: func(context.Context) error { restarts++; return nil }}).ClusterJoin(ctx, cfgBadNode, ccA.APIAddr, tok2)
 	if err == nil {
 		t.Error("ClusterJoin with corrupt node.json: want error")
 	}
 	if restarts != 0 {
 		t.Errorf("ClusterJoin restarts = %d, want 0 when loadNode failed", restarts)
+	}
+
+	// Mixed-version cluster: default NewToken falls back to SetJoinSecretHash without failing,
+	// whereas an explicit custom TTL fails with ErrClusterUpgrading instead of silently ignoring TTL.
+	if err := clA.store.PutNode(ctx, domain.Node{Name: "old-node", Protocol: domain.ProtocolJoinToken - 1}); err != nil {
+		t.Fatal(err)
+	}
+	tokMixed, expMixed, err := clA.NewToken(ctx, 0)
+	if err != nil || tokMixed == "" || !expMixed.IsZero() {
+		t.Errorf("mixed NewToken(0) = (%q, %v, %v), want non-empty token with zero exp and nil err", tokMixed, expMixed, err)
+	}
+	if _, _, err := clA.NewToken(ctx, time.Minute); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Errorf("mixed NewToken(1m) = %v, want ErrClusterUpgrading", err)
 	}
 }
 

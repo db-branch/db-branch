@@ -36,6 +36,17 @@ func forwardedFromNode(r *http.Request) bool {
 	return v
 }
 
+// allowSocketOnly reports whether r arrived directly on the local UNIX socket
+// (not over HTTPS and not forwarded from another node). Otherwise it answers
+// 403 socket_only with hint.
+func allowSocketOnly(w http.ResponseWriter, r *http.Request, local bool, hint string) bool {
+	if local && !forwardedFromNode(r) {
+		return true
+	}
+	writeError(w, http.StatusForbidden, "socket_only", hint)
+	return false
+}
+
 // principalHeader carries the principal of a request one node forwards to
 // another (over mutual TLS, into the trusted socket handler).
 const principalHeader = "X-Db-Branch-Principal"

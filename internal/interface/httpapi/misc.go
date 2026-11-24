@@ -416,8 +416,7 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 // socket is root or in the db-branch group on a node.
 func (s *Server) resetPassword(local bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !local {
-			writeError(w, http.StatusForbidden, "socket_only", "run `db-branch admin reset-password` on a node")
+		if !allowSocketOnly(w, r, local, "run `db-branch admin reset-password` on a node") {
 			return
 		}
 		password := auth.GeneratePassword()

@@ -2,7 +2,9 @@
 package raftstore
 
 import (
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -22,8 +24,9 @@ type State struct {
 	Branches map[string]domain.Branch `json:"branches"`
 	Nodes    map[string]domain.Node   `json:"nodes"`
 	// Operations keeps the running ones and the newest finished ones.
-	Operations     map[string]operation.Operation `json:"operations"`
-	JoinSecretHash string                         `json:"join_secret_hash"`
+	Operations          map[string]operation.Operation `json:"operations"`
+	JoinSecretHash      string                         `json:"join_secret_hash"`
+	JoinSecretExpiresAt int64                          `json:"join_secret_expires_at,omitempty"`
 	// Admin is the console password, one for the whole cluster.
 	Admin *auth.Credentials `json:"admin,omitempty"`
 	// Runtimes every node should have installed ("engine@version").
@@ -163,7 +166,12 @@ type BranchOwner struct {
 // line, carrying the merging status inside insert_branch / put_branch. Older
 // nodes do not know BranchMerging, so line merges wait for protocol 26
 // everywhere (domain.ProtocolBranchMerge).
-const Protocol = 26
+//
+// 27: join token expiry and single-use: set_join_token records an expiry time
+// and consume_join_secret validates and clears the secret atomically in the
+// log. Older nodes do not know those commands, so they wait for protocol 27
+// everywhere (domain.ProtocolJoinToken).
+const Protocol = 27
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a
@@ -189,6 +197,8 @@ var opProtocol = map[string]int{
 	"delete_module":        22,
 	"migrate_branch_owner": domain.ProtocolBranchOwnerID,
 	"revoke_session":       domain.ProtocolSessionRevocation,
+	"set_join_token":       domain.ProtocolJoinToken,
+	"consume_join_secret":  domain.ProtocolJoinToken,
 }
 
 // Needs returns the protocol the command requires (0 for unknown commands).
@@ -246,6 +256,25 @@ func RevokeSession(id string, expires, at time.Time) Command {
 func PutNode(n domain.Node) Command     { return Command{Op: "put_node", Node: &n} }
 func DeleteNode(name string) Command    { return Command{Op: "delete_node", Name: name} }
 func SetJoinSecret(hash string) Command { return Command{Op: "set_join_secret", Name: hash} }
+
+// SetJoinToken records hash with an expiration time (unix seconds).
+func SetJoinToken(hash string, expiresAt time.Time) Command {
+	return Command{Op: "set_join_token", Name: hash, Expires: expiresAt.Unix()}
+}
+
+// ConsumeJoinSecret validates hash against the stored token at now and clears
+// it atomically so a join token can only be used once.
+func ConsumeJoinSecret(hash string, at time.Time) Command {
+	return Command{Op: "consume_join_secret", Name: hash, At: at.Unix()}
+}
+
+var (
+	// ErrInvalidJoinSecret is returned when the presented join secret does not
+	// match the active join token (or the token was already used).
+	ErrInvalidJoinSecret = errors.New("invalid or used join secret")
+	// ErrExpiredJoinSecret is returned when the join token has expired.
+	ErrExpiredJoinSecret = errors.New("join token expired")
+)
 
 // InsertBase and InsertBranch fail with ErrAlreadyExists when the name is taken,
 // which makes name reservations race-free across nodes.
@@ -433,6 +462,10 @@ func (c Command) complete() bool {
 		return c.Name != "" && c.Expires > 0
 	case "migrate_branch_owner":
 		return c.BranchOwner != nil && c.BranchOwner.Name != "" && c.BranchOwner.Owner != "" && c.BranchOwner.OwnerName != ""
+	case "set_join_token":
+		return c.Name != "" && c.Expires > 0
+	case "consume_join_secret":
+		return c.Name != "" && c.At > 0
 	}
 	return true
 }
@@ -641,6 +674,21 @@ func (f *FSM) apply(c Command) error {
 		delete(s.Nodes, c.Name)
 	case "set_join_secret":
 		s.JoinSecretHash = c.Name
+		s.JoinSecretExpiresAt = 0
+	case "set_join_token":
+		s.JoinSecretHash = c.Name
+		s.JoinSecretExpiresAt = c.Expires
+	case "consume_join_secret":
+		if s.JoinSecretHash == "" || subtle.ConstantTimeCompare([]byte(s.JoinSecretHash), []byte(c.Name)) != 1 {
+			return ErrInvalidJoinSecret
+		}
+		if s.JoinSecretExpiresAt > 0 && c.At >= s.JoinSecretExpiresAt {
+			s.JoinSecretHash = ""
+			s.JoinSecretExpiresAt = 0
+			return ErrExpiredJoinSecret
+		}
+		s.JoinSecretHash = ""
+		s.JoinSecretExpiresAt = 0
 	case "set_admin":
 		admin := *c.Admin
 		s.Admin = &admin
@@ -677,6 +725,7 @@ func (f *FSM) State() State {
 		out.Operations[k] = v
 	}
 	out.JoinSecretHash = f.state.JoinSecretHash
+	out.JoinSecretExpiresAt = f.state.JoinSecretExpiresAt
 	if f.state.ServiceIDs != nil {
 		ids := *f.state.ServiceIDs
 		out.ServiceIDs = &ids

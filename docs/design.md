@@ -331,8 +331,8 @@ HTTP ヘッダー（例: `X-DB-Branch`）をミドルウェアで読み、この
 - `hashicorp/raft` をバイナリに組み込み、外部の etcd 等は不要
 - リーダーは自動選出。フェイルオーバーには 3 台以上（奇数）が必要
 - リーダーが担うのは状態の書き込み（作成・削除・配置・TTL）だけ。既存ブランチへの接続はデータ経路（ProxySQL → DB サーバー）だけで完結し、リーダー不在でも止まらない
-- 参加: `db-branch cluster init` / `db-branch cluster join <addr>`。参加したノードは非投票者で、リーダーが奇数台（最大 5）になるよう昇格・降格する（docs/cluster-plan.md C1）
-- ノード間通信は mTLS（`cluster init` 時に CA を生成し、join トークンで証明書を発行）
+- 参加: `db-branch cluster init` / `db-branch cluster join <addr> --token <token>`。参加トークンは `db-branch cluster token [--ttl <duration>]` で発行し、既定 24 時間（設定 `cluster.join_token_ttl`）で失効する 1 回限りのトークンとする（使用後は Raft ログ上で即座に無効化）。参加したノードは非投票者で、リーダーが奇数台（最大 5）になるよう昇格・降格する（docs/cluster-plan.md C1）
+- ノード間通信は mTLS（`cluster init` 時に CA を生成し、join トークンで証明書を発行）。ノード間 API（`/internal/v1/api/`）経由の転送では `socket_only` 操作（パスワードリセット・バックアップ復元・参加トークン発行）を拒否し、ローカル UNIX ソケットからのみ実行できる境界を保つ
 - ノードの OS・カーネル・ZFS の版はハートビートで共有し、クラスタ表示に出す。ディストリビューションが混在するクラスタでは、PostgreSQL のブランチは元のスナップショットと同じディストリビューションのノードにだけ置く（照合順序ライブラリの違いによるインデックス破損を避ける）。詳細は [mixed-os.md](mixed-os.md)
 - `db-branch` ユーザーの uid/gid はクラスタで 1 組に揃える。ベースのコピーは数値の所有者のまま運ばれるため、uid が違うノードではブランチのサーバーが起動できない。クラスタの値は Raft の状態に記録し（`init_service_ids`、Protocol 15）、`cluster join` はデータを受け取る前にローカルの `db-branch` をその値に付け替える（別のアカウントが使っていれば断る）。食い違うノードはハートビートで報告され、配置から外れる。パッケージで uid を固定しないのは、既存のシステムとの衝突を避けるため。詳細は [service-user-ids.md](service-user-ids.md)
 

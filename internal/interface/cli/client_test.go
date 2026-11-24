@@ -404,6 +404,18 @@ func TestClusterコマンド(t *testing.T) {
 	if _, out, _ := runAPI(t, api, "cluster", "token"); !strings.Contains(out, "dbb1.abc.def") || !strings.Contains(out, "cluster join") {
 		t.Errorf("token: %q", out)
 	}
+	api.answers["POST /v1/cluster/token"] = map[string]any{"token": "dbb1.abc.def", "expires_at": "2026-11-25T12:00:00Z"}
+	if code, out, _ := runAPI(t, api, "cluster", "token", "--ttl", "1h"); code != 0 || !strings.Contains(out, "2026-11-25T12:00:00Z") {
+		t.Errorf("token --ttl: code=%d out=%q", code, out)
+	}
+	if b, _ := api.bodies["POST /v1/cluster/token"].(map[string]string); b == nil || b["ttl"] != "1h" {
+		t.Errorf("token --ttl body = %#v", api.bodies["POST /v1/cluster/token"])
+	}
+	for _, bad := range []string{"0s", "-1h", "soon"} {
+		if code, _, _ := runAPI(t, api, "cluster", "token", "--ttl", bad); code == 0 {
+			t.Errorf("token --ttl %s: want error", bad)
+		}
+	}
 	_, out, _ := runAPI(t, api, "cluster", "status")
 	for _, want := range []string{"NODE", "n1", "leader", "n2", "down", "60.0 GiB", "ENGINES", "VOTING", "voter", "non-voter", "OS", "ubuntu-26.04", "unknown"} {
 		if !strings.Contains(out, want) {

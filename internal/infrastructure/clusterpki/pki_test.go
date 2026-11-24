@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/infrastructure/clusterpki"
 )
@@ -129,6 +130,9 @@ func TestToken_指紋と秘密値を往復できる(t *testing.T) {
 	}
 	if clusterpki.HashSecret("x") == clusterpki.HashSecret("y") || len(clusterpki.NewSecret()) < 32 {
 		t.Error("secret helpers")
+	}
+	if clusterpki.DefaultJoinTokenTTL != 24*time.Hour {
+		t.Errorf("DefaultJoinTokenTTL = %v, want 24h", clusterpki.DefaultJoinTokenTTL)
 	}
 }
 

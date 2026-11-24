@@ -203,8 +203,8 @@ PUT  /v1/auth/password     {"current_password":"...","new_password":"..."} → 2
 - `/run/db-branch/agent.sock` で同じ API を提供する。HTTP をソケット上で話す
 - 接続元のプロセスの UID/GID を `SO_PEERCRED` で確かめ、root か `db-branch-admin` グループなら認証済みとして扱う（DB サーバーが動く `db-branch` グループは含めない）。Cookie・CSRF は不要
 - 主体（principal）は `local:<ユーザー名>` として監査イベントに記録する
-- ソケット限定の操作: `POST /v1/runtimes/import`（ノード上のパスを読むため）。TCP から呼ぶと `403 socket_only`
-- クラスタの初期化・参加（`cluster init` / `join`）は API にせず CLI だけで行う（参加トークンと証明書の発行を伴うため）
+- ソケット限定の操作: `POST /v1/auth/reset`、`POST /v1/backups/restore`、`POST /v1/cluster/token`（および未実装設計の `POST /v1/runtimes/import`）。TCP（HTTPS）およびノード間 API（`/internal/v1/api/` 経由の転送）から呼ぶと `403 socket_only`
+- クラスタの初期化・参加（`cluster init` / `join`）は API にせず CLI だけで行う（参加トークンと証明書の発行を伴うため）。`POST /v1/cluster/token` は 1 回限り・有効期限付き（省略時は設定 `cluster.join_token_ttl`、既定 `24h`。任意で `{"ttl": "1h"}` を指定可）のトークンを発行し、`token` と `expires_at` を返す
 
 ### 3.3 拡張ポイントとの関係
 

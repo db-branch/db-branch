@@ -43,6 +43,8 @@ type fakeCluster struct {
 	removals   []string
 	removeErr  error
 	removeDone membership.RemoveReport
+	tokenTTL   time.Duration
+	tokenExp   time.Time
 }
 
 func (f *fakeCluster) RemoveNode(_ context.Context, node string, force bool) (membership.RemoveReport, error) {
@@ -98,7 +100,10 @@ func (f *fakeCluster) NodeHost(node string) string {
 }
 
 func (f *fakeCluster) Status(context.Context) (httpapi.ClusterStatus, error) { return f.status, f.err }
-func (f *fakeCluster) NewToken(context.Context) (string, error)              { return "dbb1.token", f.err }
+func (f *fakeCluster) NewToken(_ context.Context, ttl time.Duration) (string, time.Time, error) {
+	f.tokenTTL = ttl
+	return "dbb1.token", f.tokenExp, f.err
+}
 
 func TestCluster_ノードとリーダーを返す(t *testing.T) {
 	f := newFixture(t)
@@ -141,6 +146,53 @@ func TestClusterToken_ソケットからだけ発行できる(t *testing.T) {
 	resp, body = send(t, f.srv.Handler(false), "POST", "/v1/cluster/token", nil, withSession(cookie, csrf))
 	if resp.StatusCode != 403 || errCode(body) != "socket_only" {
 		t.Errorf("console: %d %v", resp.StatusCode, body)
+	}
+}
+
+func TestClusterToken_TTLの指定とバリデーション(t *testing.T) {
+	f := newFixture(t)
+	exp := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	fc := &fakeCluster{tokenExp: exp}
+	f.srv.Cluster = fc
+
+	resp, body := f.do(t, "POST", "/v1/cluster/token", map[string]any{"ttl": "1h"})
+	if resp.StatusCode != 200 || body["token"] != "dbb1.token" || body["expires_at"] != "2026-11-25T12:00:00Z" || fc.tokenTTL != time.Hour {
+		t.Errorf("custom ttl: %d %v gotTTL=%v", resp.StatusCode, body, fc.tokenTTL)
+	}
+	for _, bad := range []any{
+		map[string]any{"ttl": "0s"},
+		map[string]any{"ttl": "-1h"},
+		map[string]any{"ttl": "soon"},
+		map[string]any{"unknown": 1},
+	} {
+		resp, body := f.do(t, "POST", "/v1/cluster/token", bad)
+		if resp.StatusCode != 400 || errCode(body) != "invalid_request" {
+			t.Errorf("bad body %v: %d %v, want 400 invalid_request", bad, resp.StatusCode, body)
+		}
+	}
+}
+
+func TestSocketOnly_ノード間転送ヘッダ付きではsocketOnlyエンドポイントを拒否する(t *testing.T) {
+	f := newFixture(t)
+	f.srv.Cluster = &fakeCluster{}
+	f.srv.Backups = &fakeBackups{}
+	h := f.srv.Handler(true)
+
+	for _, tc := range []struct {
+		path string
+		body any
+	}{
+		{"/v1/cluster/token", nil},
+		{"/v1/auth/reset", nil},
+		{"/v1/backups/restore", map[string]any{}},
+	} {
+		resp, body := send(t, h, "POST", tc.path, tc.body, func(r *http.Request) {
+			r.Header.Set("X-Db-Branch-Forwarded", "n2")
+			r.Header.Set("X-Db-Branch-Principal", `{"id":"local","name":"local","roles":["admin"]}`)
+		})
+		if resp.StatusCode != 403 || errCode(body) != "socket_only" {
+			t.Errorf("forwarded %s: status=%d body=%v, want 403 socket_only", tc.path, resp.StatusCode, body)
+		}
 	}
 }
 

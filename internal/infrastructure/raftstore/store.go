@@ -395,6 +395,16 @@ func (s *Store) SetJoinSecretHash(ctx context.Context, hash string) error {
 	return s.Apply(ctx, SetJoinSecret(hash))
 }
 
+// SetJoinToken records the hash of a join secret together with its expiry.
+func (s *Store) SetJoinToken(ctx context.Context, hash string, expiresAt time.Time) error {
+	return s.Apply(ctx, SetJoinToken(hash, expiresAt))
+}
+
+// ConsumeJoinSecret validates hash at now and clears it atomically in the log.
+func (s *Store) ConsumeJoinSecret(ctx context.Context, hash string, now time.Time) error {
+	return s.Apply(ctx, ConsumeJoinSecret(hash, now))
+}
+
 // JoinSecretHash returns the recorded join secret hash.
 func (s *Store) JoinSecretHash() string { return s.fsm.State().JoinSecretHash }
 
