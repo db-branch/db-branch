@@ -125,6 +125,28 @@ export const ja: Record<string, string> = {
   "For an app's .env: frameworks read DATABASE_URL; the DB_* lines suit the rest.": "アプリの .env 用です。多くのフレームワークは DATABASE_URL を読み、ほかは DB_* の行を使います。",
   "For tools that ask for each field separately.": "項目ごとに入力するツール向けです。",
   "Copies include the password: do not paste them into chats or tickets.": "コピーにはパスワードが含まれます。チャットやチケットに貼らないでください。",
+  "Place in your DBeaver workspace (.dbeaver/data-sources*.json) or import via Project.":
+    "DBeaver のワークスペース（.dbeaver/data-sources*.json）に配置するか、Project からインポートしてください。",
+  "Save or merge into .idea/dataSources.xml in your project, or copy the JDBC URL for Data Source from URL.":
+    "プロジェクトの .idea/dataSources.xml に保存または追記するか、JDBC URL をコピーして「Data Source from URL」に貼り付けてください。",
+  "Choose File → Import Connections in Navicat (also supported by DBeaver and Chat2DB).":
+    "Navicat の「File → Import Connections」から読み込めます（DBeaver や Chat2DB でも読み込めます）。",
+  "Open Tools → Import/Export Servers in pgAdmin and select this file.":
+    "pgAdmin の「Tools → Import/Export Servers」を開いて、このファイルを選択してください。",
+  "Rename to connections.xml in your MySQL Workbench config folder (merge the Connection block if one already exists).":
+    "MySQL Workbench の設定フォルダに connections.xml へリネームして配置してください（既存ファイルがある場合は上書きせず Connection 要素を追記してください）。",
+  "Copy the URL and choose Import Connection → From URL in TablePlus.":
+    "URL をコピーし、TablePlus の「Import Connection → From URL」に貼り付けてください。",
+  "No client configuration file is available for this engine.":
+    "このエンジンに対応するクライアント設定ファイルはありません。",
+  "dataSources.xml omits the password; only the copied JDBC URL includes it when checked.":
+    "dataSources.xml にはパスワードを含めません。チェックを入れた場合のみ、コピー用の JDBC URL に含まれます。",
+  "The exported file or copied URL includes the plaintext password: do not share it or post it in chats or tickets.":
+    "出力ファイルやコピーした URL には平文のパスワードが含まれます。共有したり、チャットやチケットに貼ったりしないでください。",
+  "This format stores the password in plaintext when included. By default it is omitted; enter it in the client.":
+    "この形式はパスワードを含める場合に平文で保存されます。既定では含めないため、クライアント側で入力してください。",
+  "This format does not store passwords in plaintext. Enter the password when connecting.":
+    "この形式は平文のパスワードを保持しません。接続時にクライアント側で入力してください。",
 
   // Operation phases
 
