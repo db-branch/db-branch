@@ -28,7 +28,7 @@ export function FirstPasswordView({
   onAgain: (v: string) => void;
   onSubmit: (e: FormEvent) => void;
   onSignOut?: () => void;
-  error: string | null;
+  error: unknown;
 }) {
   const mismatch = again !== "" && again !== next;
   const incomplete = (needCurrent && !current) || next.length < MIN_PASSWORD || next !== again;
@@ -65,7 +65,7 @@ export function FirstPassword({ current, onDone, onSignOut }: { current?: string
   const [typedCurrent, setTypedCurrent] = useState("");
   const [next, setNext] = useState("");
   const [again, setAgain] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const currentPassword = needCurrent ? typedCurrent : current;
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -73,7 +73,7 @@ export function FirstPassword({ current, onDone, onSignOut }: { current?: string
       await api.changePassword(currentPassword, next);
       onDone(await api.session());
     } catch (err) {
-      setError((err as Error).message);
+      setError(err);
     }
   };
   return (

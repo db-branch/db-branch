@@ -16,7 +16,7 @@ export function AnonymousCard({ base, branches }: { base: Base; branches: Branch
   const [max, setMax] = useState(inputsOf(current).max);
   const [ttl, setTtl] = useState(inputsOf(current).ttl);
   const [bad, setBad] = useState<"max" | "ttl" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     setMax(inputsOf(current).max);
@@ -43,7 +43,7 @@ export function AnonymousCard({ base, branches }: { base: Base; branches: Branch
       await api.setBaseAnonymous(base.name, parsed.body);
       setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      setError(e);
     } finally {
       setBusy(false);
     }

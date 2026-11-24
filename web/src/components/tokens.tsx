@@ -26,8 +26,8 @@ export function TokenManager({ title, hint, list, create, revoke, withScope, pla
   const [scope, setScope] = useState("branches");
   const [ttl, setTTL] = useState("720h");
   const [issued, setIssued] = useState<APIToken | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const run = (p: Promise<unknown>) => p.then(() => (setError(null), reload()), (e: Error) => setError(e.message));
+  const [error, setError] = useState<unknown>(null);
+  const run = (p: Promise<unknown>) => p.then(() => (setError(null), reload()), (e: unknown) => setError(e));
   const endpoint = `https://${apiHost()}/v1/mcp`;
   const command = issued ? `claude mcp add --transport http db-branch ${endpoint} --header "Authorization: Bearer ${issued.token}"` : "";
 

@@ -127,7 +127,7 @@ export type Step =
   | { kind: "choose" }
   | { kind: "confirm"; target: string; force: boolean }
   | { kind: "running"; target: string; checkOnly: boolean; phase: string }
-  | { kind: "done"; target: string; result?: UpgradeResult; error?: string };
+  | { kind: "done"; target: string; result?: UpgradeResult; error?: unknown };
 
 export type StepAction =
   | { type: "open" }
@@ -136,7 +136,7 @@ export type StepAction =
   | { type: "back" }
   | { type: "run"; target: string; checkOnly: boolean }
   | { type: "phase"; phase: string }
-  | { type: "finish"; target: string; result?: UpgradeResult; error?: string };
+  | { type: "finish"; target: string; result?: UpgradeResult; error?: unknown };
 
 // stepReducer: choose a version, confirm, wait, read the result.
 export function stepReducer(s: Step, a: StepAction): Step {

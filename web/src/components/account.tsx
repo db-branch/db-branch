@@ -164,7 +164,7 @@ function PasswordForm() {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [again, setAgain] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [done, setDone] = useState(false);
   const mismatch = again !== "" && again !== next;
   const submit = async (e: FormEvent) => {
@@ -178,7 +178,7 @@ function PasswordForm() {
       setNext("");
       setAgain("");
     } catch (err) {
-      setError((err as Error).message);
+      setError(err);
     }
   };
   return (

@@ -148,6 +148,9 @@ export function uploadDump(file: File, node: string | undefined, onProgress: (f:
 }
 
 import type { UpgradeResult } from "./lib/upgrade";
+import { ApiError, errorText } from "./lib/errors";
+
+export { ApiError };
 
 export type Runtime = { runtime: string; engine: string; version: string };
 
@@ -310,16 +313,6 @@ export type APIToken = { id: string; name: string; scope: string; created_at: st
 export type ModulePage = { module: string; path: string; title: string };
 export type Capabilities = { version: string; node: string; modules: string[]; pages: ModulePage[]; record?: boolean };
 
-export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
 let csrf = "";
 
 type UnauthorizedListener = () => void;
@@ -393,7 +386,7 @@ export const managesBases = () => isAdmin() || can("base.create");
 // ssoReturn signs in with the one-time ticket single sign-on leaves in the
 // URL (?sso_ticket=), and removes it; it returns the error the provider
 // reported (?sso_error=), if any.
-export async function ssoReturn(): Promise<{ session?: Session; error?: string }> {
+export async function ssoReturn(): Promise<{ session?: Session; error?: unknown }> {
   const q = new URLSearchParams(location.search);
   const ticket = q.get("sso_ticket");
   const error = q.get("sso_error");
@@ -401,11 +394,11 @@ export async function ssoReturn(): Promise<{ session?: Session; error?: string }
   q.delete("sso_ticket");
   q.delete("sso_error");
   history.replaceState(null, "", location.pathname + (q.toString() ? `?${q}` : ""));
-  if (error) return { error };
+  if (error) return { error: new ApiError(0, "unknown", error) };
   try {
     return { session: await api.login("sso", ticket!) };
   } catch (e) {
-    return { error: (e as Error).message };
+    return { error: e };
   }
 }
 
@@ -431,7 +424,7 @@ export const api = {
   signOut: (done: () => void) =>
     call<void>("POST", "/v1/auth/logout").then(done, (err: unknown) => {
       if (err instanceof ApiError && err.status !== 503) done();
-      else window.alert((err as Error).message);
+      else window.alert(errorText(err));
     }),
   changePassword: (current_password: string, new_password: string) =>
     call<void>("PUT", "/v1/auth/password", { current_password, new_password }),

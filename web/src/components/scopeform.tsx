@@ -19,7 +19,7 @@ export function ScopeForm({ scope, bare }: { scope: SettingScope; bare?: boolean
   const initial = Object.fromEntries(scope.settings.map((s) => [s.key, initialValue(s)]));
   const [values, setValues] = useState<Record<string, string>>(initial);
   const [cleared, setCleared] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [saved, setSaved] = useState(false);
   // secret_set is part of the key: saving a secret changes only that.
   const key = JSON.stringify([initial, scope.settings.map((s) => !!s.secret_set)]);
@@ -41,7 +41,7 @@ export function ScopeForm({ scope, bare }: { scope: SettingScope; bare?: boolean
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
     } catch (err) {
-      setError((err as Error).message);
+      setError(err);
     }
   };
   const field = (s: Setting) => (

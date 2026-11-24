@@ -1,8 +1,9 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { api, Branch } from "../api";
 import { t } from "../lib/i18n";
+import { serverError } from "../lib/errors";
 import { canForce, countLevel, Finding, installHint, PHASES, resultTone, stepReducer, UpgradeResult, upgradeChoices } from "../lib/upgrade";
-import { ErrorLine } from "./ui";
+import { ErrorLine, ErrorText } from "./ui";
 
 const POLL_MS = 1000;
 
@@ -52,7 +53,7 @@ export function UpgradeResultView({ result: r }: { result: UpgradeResult }) {
       <p role="status" className="upgrade-headline">
         {headline(r)}
       </p>
-      {r.error && r.status !== "refused" && <p className="small upgrade-error">{r.error}</p>}
+      {r.error && r.status !== "refused" && <p className="small upgrade-error"><ErrorText error={serverError(r.error)} /></p>}
       <Findings title={t("Pre-check")} list={r.pre_check} />
       <Findings title={t("Server log during the upgrade")} list={r.log} />
       {r.log_excerpt && (
@@ -72,7 +73,7 @@ export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Br
   const [installed, setInstalled] = useState<string[] | null>(null);
   const [available, setAvailable] = useState<string[]>([]);
   const [target, setTarget] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const alive = useRef(true);
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => () => void (alive.current = false), []);
@@ -89,7 +90,7 @@ export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Br
     );
     api.runtimes().then(
       (rs) => alive.current && setInstalled(rs.map((r) => r.runtime)),
-      (e: Error) => alive.current && setError(e.message),
+      (e: unknown) => alive.current && setError(e),
     );
   }, [step.kind, installed]);
   const { targets, toInstall } = installed ? upgradeChoices(b.runtime, installed, available) : { targets: [], toInstall: [] };
@@ -111,13 +112,13 @@ export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Br
         if (!alive.current) return;
         if (o.phase) dispatch({ type: "phase", phase: o.phase });
         if (o.state !== "running") {
-          dispatch({ type: "finish", target: to, result: o.result ?? undefined, error: o.state === "failed" && !o.result ? o.error : undefined });
+          dispatch({ type: "finish", target: to, result: o.result ?? undefined, error: o.state === "failed" && !o.result && o.error ? serverError(o.error) : undefined });
           break;
         }
         await new Promise((r) => setTimeout(r, POLL_MS));
       }
     } catch (e) {
-      if (alive.current) dispatch({ type: "finish", target: to, error: (e as Error).message });
+      if (alive.current) dispatch({ type: "finish", target: to, error: e });
     }
     if (alive.current) onChange();
   };

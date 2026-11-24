@@ -18,7 +18,7 @@ export function RecordingBadge({ record }: { record?: boolean }) {
 export function RecordingValue({ record }: { record?: boolean }) {
   return record ? (
     <>
-      on <span className="muted">(since creation)</span>
+      on <span className="muted">{t("(since creation)")}</span>
     </>
   ) : (
     <>off</>

@@ -89,9 +89,9 @@ export function subscribeEvents(resources: string[], onReload: () => void): () =
 }
 
 /** useLive loads data and reloads it whenever an event of one of the given resources arrives. */
-export function useLive<T>(load: () => Promise<T>, resources: string[]): { data: T | undefined; error: string | null; reload: () => void } {
+export function useLive<T>(load: () => Promise<T>, resources: string[]): { data: T | undefined; error: unknown; reload: () => void } {
   const [data, setData] = useState<T>();
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const loadRef = useRef(load);
   loadRef.current = load;
   const reload = useCallback(() => {
@@ -100,7 +100,7 @@ export function useLive<T>(load: () => Promise<T>, resources: string[]): { data:
         setData(d);
         setError(null);
       },
-      (e: Error) => setError(e.message),
+      (e: unknown) => setError(e),
     );
   }, []);
   const key = resources.join(",");

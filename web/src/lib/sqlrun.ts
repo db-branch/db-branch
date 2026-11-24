@@ -1,5 +1,7 @@
 // The SQL runner of a branch page: how a result is told. Pure.
 import type { QueryResult } from "../api";
+import { errorText } from "./errors";
+import { t } from "./i18n";
 
 // cellText: a value as text; a SQL null is shown as NULL.
 export const cellText = (v: string | null): string => (v === null ? "NULL" : v);
@@ -7,9 +9,12 @@ export const cellText = (v: string | null): string => (v === null ? "NULL" : v);
 // resultSummary is the line under a result: rows (or rows affected) and the time.
 export function resultSummary(r: Pick<QueryResult, "rows" | "affected" | "truncated" | "millis" | "columns">): string {
   const time = `${r.millis} ms`;
-  if (r.affected !== undefined && !r.rows) return `${r.affected} ${r.affected === 1 ? "row" : "rows"} affected · ${time}`;
+  if (r.affected !== undefined && !r.rows) {
+    return t(r.affected === 1 ? "{n} row affected · {time}" : "{n} rows affected · {time}", { n: r.affected, time });
+  }
   const n = r.rows?.length ?? 0;
-  return `${n} ${n === 1 ? "row" : "rows"}${r.truncated ? " (cut)" : ""} · ${time}`;
+  const cut = r.truncated ? t(" (cut)") : "";
+  return t(n === 1 ? "{n} row{cut} · {time}" : "{n} rows{cut} · {time}", { n, cut, time });
 }
 
 // isRunKey: Ctrl or Command with Enter runs the statement.
@@ -118,7 +123,7 @@ export async function runStatements(
       if (signal.aborted || (e instanceof Error && e.name === "AbortError")) {
         return { items: done, stopped: true };
       }
-      done.push({ sql: st, error: (e as Error).message });
+      done.push({ sql: st, error: errorText(e) });
       onProgress?.([...done]);
       return { items: done, stopped: false };
     }

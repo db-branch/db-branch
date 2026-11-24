@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { api, Base, BaseRefresh, canBase } from "../api";
-import { Dialog, ErrorLine, Field } from "../components/ui";
+import { Dialog, ErrorLine, ErrorText, Field } from "../components/ui";
+import { serverError } from "../lib/errors";
 import { relative } from "../lib/format";
 import { useLive, useNow } from "../lib/live";
 import { t } from "../lib/i18n";
@@ -11,10 +12,10 @@ export function RefreshCard({ base }: { base: Base }) {
   const { data: refresh, error: loadError, reload } = useLive(() => api.baseRefresh(base.name), ["base", "operation"]);
   const [editing, setEditing] = useState(false);
   const [confirmingOff, setConfirmingOff] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const now = useNow();
   const manage = canBase(base, "base.refresh");
-  const act = (p: Promise<unknown>) => p.then(() => (setError(null), reload()), (e: Error) => setError(e.message));
+  const act = (p: Promise<unknown>) => p.then(() => (setError(null), reload()), (e: unknown) => setError(e));
   const refreshing = base.operation?.kind === "base.refresh";
   const idle = base.status === "ready" && !base.operation;
 
@@ -51,7 +52,7 @@ export function RefreshCard({ base }: { base: Base }) {
                   <span className="muted" title={new Date(refresh.last_run.finished_at).toLocaleString()}>
                     {relative(refresh.last_run.finished_at, now)}
                   </span>
-                  {refresh.last_run.error && <p className="reason">{refresh.last_run.error}</p>}
+                  {refresh.last_run.error && <p className="reason"><ErrorText error={serverError(refresh.last_run.error)} /></p>}
                 </>
               ) : (
                 <span className="muted">{t("Not yet")}</span>
@@ -102,7 +103,7 @@ function EditRefresh({ base, current, onClose, onSaved }: { base: Base; current:
   const [password, setPassword] = useState("");
   const [databases, setDatabases] = useState(current?.source.databases.join(", ") ?? "");
   const [every, setEvery] = useState(current?.every.replace(/h0m0s$/, "h").replace(/m0s$/, "m") ?? "24h");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const dbs = databases.split(",").map((d) => d.trim()).filter(Boolean);
   const ok = host.trim() !== "" && Number(port) > 0 && user.trim() !== "" && dbs.length > 0 && every.trim() !== "";
@@ -114,7 +115,7 @@ function EditRefresh({ base, current, onClose, onSaved }: { base: Base; current:
       await api.setBaseRefresh(base.name, { source: { host: host.trim(), port: Number(port), user: user.trim(), password, databases: dbs }, every: every.trim() });
       onSaved();
     } catch (err) {
-      setError((err as Error).message);
+      setError(err);
       setBusy(false);
     }
   };
