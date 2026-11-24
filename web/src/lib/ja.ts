@@ -125,12 +125,14 @@ export const ja: Record<string, string> = {
   "For an app's .env: frameworks read DATABASE_URL; the DB_* lines suit the rest.": "アプリの .env 用です。多くのフレームワークは DATABASE_URL を読み、ほかは DB_* の行を使います。",
   "For tools that ask for each field separately.": "項目ごとに入力するツール向けです。",
   "Copies include the password: do not paste them into chats or tickets.": "コピーにはパスワードが含まれます。チャットやチケットに貼らないでください。",
-  "Place in your DBeaver workspace (.dbeaver/data-sources*.json) or import via Project.":
-    "DBeaver のワークスペース（.dbeaver/data-sources*.json）に配置するか、Project からインポートしてください。",
+  "Import via File → Import → DBeaver → Project in DBeaver (also supported by Chat2DB DBeaver import).":
+    "DBeaver の「File → Import → DBeaver → Project」からインポートしてください（Chat2DB の DBeaver インポートでも読み込めます）。",
+  "Import via Import Connections → Chat2DB in Chat2DB and select this .json file.":
+    "Chat2DB の「Import Connections → Chat2DB」でこの .json ファイルを選択してください。",
   "Save or merge into .idea/dataSources.xml in your project, or copy the JDBC URL for Data Source from URL.":
     "プロジェクトの .idea/dataSources.xml に保存または追記するか、JDBC URL をコピーして「Data Source from URL」に貼り付けてください。",
-  "Choose File → Import Connections in Navicat (also supported by DBeaver and Chat2DB).":
-    "Navicat の「File → Import Connections」から読み込めます（DBeaver や Chat2DB でも読み込めます）。",
+  "Choose File → Import Connections in Navicat (also supported by DBeaver and Chat2DB Navicat import).":
+    "Navicat の「File → Import Connections」から読み込めます（DBeaver や Chat2DB の Navicat インポートでも読み込めます）。",
   "Open Tools → Import/Export Servers in pgAdmin and select this file.":
     "pgAdmin の「Tools → Import/Export Servers」を開いて、このファイルを選択してください。",
   "Rename to connections.xml in your MySQL Workbench config folder (merge the Connection block if one already exists).":

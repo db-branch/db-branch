@@ -29,19 +29,21 @@ describe("connectionForProxy", () => {
 describe("clientSpecsFor", () => {
   it("lists MySQL-compatible clients (excluding pgAdmin)", () => {
     const ids = clientSpecsFor("mysql").map((c) => c.id);
-    expect(ids).toEqual(["dbeaver", "datagrip", "navicat", "workbench", "tableplus"]);
+    expect(ids).toEqual(["dbeaver", "chat2db", "datagrip", "navicat", "workbench", "tableplus"]);
   });
 
   it("lists PostgreSQL-compatible clients (excluding MySQL Workbench)", () => {
     const ids = clientSpecsFor("postgres").map((c) => c.id);
-    expect(ids).toEqual(["dbeaver", "datagrip", "navicat", "pgadmin", "tableplus"]);
+    expect(ids).toEqual(["dbeaver", "chat2db", "datagrip", "navicat", "pgadmin", "tableplus"]);
   });
 
-  it("lists generic URL clients for unknown external runtimes without crashing", () => {
+  it("lists generic URL clients (and Chat2DB for ClickHouse) for unknown external runtimes without crashing", () => {
     const ids = clientSpecsFor("clickhouse").map((c) => c.id);
-    expect(ids).toEqual(["datagrip", "tableplus"]);
+    expect(ids).toEqual(["chat2db", "datagrip", "tableplus"]);
     expect(generateClientOutput("datagrip", custom, "alice-ch").file).toBeUndefined();
     expect(generateClientOutput("datagrip", custom, "alice-ch").clipboard?.text).toBe("jdbc:clickhouse://192.0.2.13:9000/default?user=alice-feat");
+    const chChat2db = JSON.parse(generateClientOutput("chat2db", custom, "alice-ch").file!.content);
+    expect(chChat2db[0].type).toBe("CLICKHOUSE");
   });
 });
 
@@ -59,9 +61,11 @@ describe("generateClientOutput", () => {
     }
   });
 
-  it("generates valid DBeaver data-sources.json for MySQL, PostgreSQL, MariaDB, and ProxySQL", () => {
+  it("generates valid DBeaver .dbp project archive and data-sources.json preview for MySQL, PostgreSQL, MariaDB, and ProxySQL", () => {
     const myOut = generateClientOutput("dbeaver", mysql, "alice/feat");
-    expect(myOut.file?.filename).toBe("data-sources-alice-feat.json");
+    expect(myOut.file?.filename).toBe("alice-feat.dbp");
+    expect(myOut.file?.bytes).toBeInstanceOf(Uint8Array);
+    expect(myOut.file?.bytes?.subarray(0, 2)).toEqual(new Uint8Array([0x50, 0x4b]));
     const myJson = JSON.parse(myOut.file!.content);
     const myEntry = Object.values(myJson.connections)[0] as any;
     expect(myEntry.provider).toBe("mysql");
@@ -77,11 +81,17 @@ describe("generateClientOutput", () => {
     });
     expect(myEntry.configuration.password).toBeUndefined();
 
-    const myWithPw = JSON.parse(generateClientOutput("dbeaver", mysql, "alice-feat", { includePassword: true, viaProxy: true }).file!.content);
+    const myWithPwOut = generateClientOutput("dbeaver", mysql, "alice-feat", { includePassword: true, viaProxy: true });
+    expect(myWithPwOut.file?.filename).toBe("alice-feat-proxysql.dbp");
+    const myWithPw = JSON.parse(myWithPwOut.file!.content);
     const myPwEntry = Object.values(myWithPw.connections)[0] as any;
     expect(myPwEntry.name).toBe("alice-feat (ProxySQL)");
     expect(myPwEntry["save-password"]).toBe(true);
     expect(myPwEntry.configuration.password).toBe("p@ss&w<0>rd");
+    // Verify the embedded data-sources.json inside .dbp sets save-password: true without inline plaintext password.
+    const dsText = new TextDecoder().decode(myWithPwOut.file!.bytes!);
+    expect(dsText).toContain('"save-password": true');
+    expect(dsText).not.toContain("p@ss&w<0>rd");
 
     const pgJson = JSON.parse(generateClientOutput("dbeaver", pg, "alice-feat").file!.content);
     const pgEntry = Object.values(pgJson.connections)[0] as any;
@@ -94,6 +104,28 @@ describe("generateClientOutput", () => {
     const maEntry = Object.values(maJson.connections)[0] as any;
     expect(maEntry.provider).toBe("mysql");
     expect(maEntry.driver).toBe("mariaDB");
+  });
+
+  it("generates valid Chat2DB JSON array without password", () => {
+    const out = generateClientOutput("chat2db", mysql, "aaa1", { includePassword: true });
+    expect(out.file?.filename).toBe("aaa1-chat2db.json");
+    const arr = JSON.parse(out.file!.content);
+    expect(arr).toEqual([
+      {
+        alias: "aaa1",
+        type: "MYSQL",
+        host: "192.0.2.10",
+        port: "40001",
+        url: "jdbc:mysql://192.0.2.10:40001/",
+        user: "alice-feat",
+        ssh: { use: false },
+      },
+    ]);
+
+    const pgArr = JSON.parse(generateClientOutput("chat2db", pg, "pg1", { viaProxy: true }).file!.content);
+    expect(pgArr[0].alias).toBe("pg1 (ProxySQL)");
+    expect(pgArr[0].type).toBe("POSTGRESQL");
+    expect(pgArr[0].url).toBe("jdbc:postgresql://192.0.2.11:40002/postgres");
   });
 
   it("generates valid DataGrip dataSources.xml and JDBC URL", () => {
@@ -119,6 +151,7 @@ describe("generateClientOutput", () => {
     expect(out.file?.content).toContain('<Connections Ver="1.5">');
     expect(out.file?.content).toContain('ConnectionName="a&amp;b&lt;&quot;c&quot;&gt;"');
     expect(out.file?.content).toContain('ConnType="MYSQL"');
+    expect(out.file?.content).toContain('SSH="false"');
     expect(out.file?.content).toContain('SavePassword="false"');
     expect(out.file?.content).not.toContain(" Password=");
 
