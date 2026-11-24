@@ -36,18 +36,18 @@ function tables(now: number): Record<string, Table> {
 
 const CSS =
   ":root{color-scheme:light dark}body{margin:0;padding:24px 28px;font:14px/1.45 system-ui,sans-serif;background:Canvas;color:CanvasText}" +
-  "h1{margin:0 0 4px;font-size:18px;font-weight:500}p{margin:0 0 16px;opacity:.65;font-size:13px}table{border-collapse:collapse;width:100%}" +
-  "th,td{text-align:left;padding:9px 12px;border-bottom:1px solid color-mix(in srgb,CanvasText 16%,transparent)}th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;opacity:.65;font-weight:500}" +
-  "td:first-child{font-family:ui-monospace,monospace;font-size:13px}";
+  "h1{margin:0 0 4px;font-size:18px;font-weight:500}p{margin:0 0 16px;opacity:.65;font-size:13px}.table-wrap{overflow-x:auto;max-width:100%}table{border-collapse:collapse;width:100%}" +
+  "th,td{text-align:left;padding:9px 12px;border-bottom:1px solid color-mix(in srgb,CanvasText 16%,transparent);white-space:nowrap}th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;opacity:.65;font-weight:500}" +
+  "td:first-child{font-family:ui-monospace,monospace;font-size:13px}@media(max-width:640px){body{padding:16px}th,td{padding:8px}}";
 
 /** modulePage is the HTML shown for a module's page, or a short notice for a page the demo does not have. */
 export function modulePage(module: string, path: string, now = Date.now()): string {
   const table = tables(now)[module + "/" + path.replace(/^\//, "")];
   const body = table
     ? `<h1>${esc(t(table.title))}</h1><p>${esc(t("This page is served by the {module} module on a real cluster. Here it shows sample data.", { module }))}</p>` +
-      `<table><thead><tr>${table.head.map((h) => `<th>${esc(t(h))}</th>`).join("")}</tr></thead><tbody>` +
+      `<div class="table-wrap"><table><thead><tr>${table.head.map((h) => `<th>${esc(t(h))}</th>`).join("")}</tr></thead><tbody>` +
       table.rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("") +
-      "</tbody></table>"
+      "</tbody></table></div>"
     : `<h1>${esc(module)}</h1><p>${esc(t("The demo has no sample for this page."))}</p>`;
   return `<!doctype html><meta charset="utf-8"><style>${CSS}</style>${body}`;
 }

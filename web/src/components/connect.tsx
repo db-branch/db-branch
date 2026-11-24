@@ -35,13 +35,14 @@ export function ConnectPanel({ branch, proxy }: { branch: string; proxy?: Proxy 
   const s = snippets(conn, reveal);
   const copy = (v: string) => () => Promise.resolve(v);
   const snip = (tab === "proxy" || tab === "values" ? "url" : tab) as "url" | "command" | "env";
-  const px = proxy ? proxyWays(proxy, branch, conn.engine) : null;
+  const showProxy = !!proxy && conn.engine !== "postgres";
+  const px = showProxy ? proxyWays(proxy, branch, conn.engine) : null;
 
   return (
     <div className="connect">
       <div className="connect-bar">
         <div className="segmented small" role="tablist" aria-label={t("Connection format")}>
-          {(proxy ? [...tabs, proxyTab] : tabs).map(([id, l]) => (
+          {(showProxy ? [...tabs, proxyTab] : tabs).map(([id, l]) => (
             <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
               {t(l)}
             </button>

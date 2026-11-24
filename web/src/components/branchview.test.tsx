@@ -54,11 +54,16 @@ describe("BranchView", () => {
     expect(h).toContain("Back to Branches");
     expect(h).toMatch(/<h1/);
   });
-  it("shows the node only in a cluster, and the proxy URL action only when there is a proxy", () => {
+  it("shows the node only in a cluster, and the proxy URL action only for MySQL branches with a proxy", () => {
     expect(view(branch())).not.toContain("node1");
     expect(renderToStaticMarkup(<BranchView b={branch()} clustered max={2048} {...actions} />)).toContain("10.0.0.1");
     expect(view(branch())).not.toContain("Copy proxy URL");
     expect(view(branch({ proxy: { host: "h", port: 6033, user: "u" } }))).toContain("Copy proxy URL");
+    expect(view(branch({ runtime: "postgres@18.6", proxy: { host: "h", port: 6432, user: "u" } }))).not.toContain("Copy proxy URL");
+  });
+  it("groups title, status, and badges in page-head-main so status stays beside the branch name", () => {
+    const h = view(branch({ record: true }));
+    expect(h).toContain('class="page-head-main"');
   });
   it("offers extend, reset and delete for a ready branch, and recreate only for a lost one", () => {
     const h = view(branch());

@@ -21,8 +21,8 @@ const ENGLISH_ONLY_EXTRA = new Set([
   "Largest dump upload (MB)",
   "Check for updates daily",
   "Scheduled refresh of {name}",
-  "Paid · needs licence",
-  "Renew the licence automatically",
+  "Paid · needs license",
+  "Renew the license automatically",
   "Anonymous creations per IP per hour",
   "Refuse changes that cannot be audited",
 ]);
@@ -104,6 +104,7 @@ const JAPANESE_SHORT = new Set([
   "Subscription not active",
   "Failed",
   "Unknown",
+  "Clear filters",
 ]);
 
 function isShort(text: string): boolean {

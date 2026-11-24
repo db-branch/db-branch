@@ -82,11 +82,16 @@ export function AnonymousCard({ base, branches }: { base: Base; branches: Branch
       {!anyPublic && <p className="muted small">{t("No snapshot is public, so nobody can branch from this Base without signing in yet.")}</p>}
       {cluster && (
         <p className="muted small">
-          {t("Cluster-wide limits apply too: {count} branches in all, {ttl} at most, {rate} creations per IP per hour (0: no limit).", {
-            count: cluster.max_branches,
-            ttl: cluster.max_ttl,
-            rate: cluster.rate_per_hour ?? "",
-          })}{" "}
+          {cluster.rate_per_hour != null
+            ? t("Cluster-wide limits apply too: {count} branches in all, {ttl} at most, {rate} creations per IP per hour (0: no limit).", {
+                count: cluster.max_branches,
+                ttl: cluster.max_ttl,
+                rate: cluster.rate_per_hour,
+              })
+            : t("Cluster-wide limits apply too: {count} branches in all, {ttl} at most.", {
+                count: cluster.max_branches,
+                ttl: cluster.max_ttl,
+              })}{" "}
           <a href="/admin/settings">Settings</a>
         </p>
       )}

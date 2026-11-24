@@ -39,7 +39,7 @@ export const TIMING = { branchCreate: 2000, branchReset: 1300, branchPause: 1200
 
 const MAX_NAME = 32;
 const NAME = /^[a-z]([a-z0-9]|-[a-z0-9])*$/;
-const ANON = { max_ttl: "4h0m0s", max_branches: 2 };
+const ANON = { max_ttl: "4h0m0s", max_branches: 2, rate_per_hour: 5 };
 const ANON_TTL = 4 * 3600e3;
 const DAY = 24 * 3600e3;
 const CHECKPOINT_NAME = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
@@ -833,7 +833,7 @@ export class DemoBackend {
       reset_at: null,
       storage: null,
       connection: { host: DEMO_HOST, port: 41100 + (n % 800), user: pg ? name : "branch" },
-      proxy: { host: DEMO_HOST, port: pg ? 6432 : 6033, user: name },
+      proxy: pg ? null : { host: DEMO_HOST, port: 6033, user: name },
       operation: { id: op.id, kind: op.kind },
       owner: owner,
       owner_name: owner,
@@ -906,7 +906,7 @@ export class DemoBackend {
       reset_at: null,
       storage: null,
       connection: { host: DEMO_HOST, port: 41100 + (n % 800), user: pg ? name : "branch" },
-      proxy: { host: DEMO_HOST, port: pg ? 6432 : 6033, user: name },
+      proxy: pg ? null : { host: DEMO_HOST, port: 6033, user: name },
       operation: { id: op.id, kind: op.kind },
       owner,
       owner_name: owner,
@@ -1245,9 +1245,9 @@ export class DemoBackend {
         },
       }),
     );
-    const licence = (c: Ctx) => (String(c.body.key ?? "").trim() ? fail(422, "invalid_license", "licence keys cannot be checked in the demo") : fail(400, "invalid_request", "key is empty"));
-    a("POST", "/v1/license/verify", "admin", licence);
-    a("PUT", "/v1/license", "admin", licence);
+    const license = (c: Ctx) => (String(c.body.key ?? "").trim() ? fail(422, "invalid_license", "license keys cannot be checked in the demo") : fail(400, "invalid_request", "key is empty"));
+    a("POST", "/v1/license/verify", "admin", license);
+    a("PUT", "/v1/license", "admin", license);
 
     a("GET", "/v1/updates", "admin", (c) => ok(this.updates(c.who!.id)));
     a("POST", "/v1/updates/check", "admin", (c) => {

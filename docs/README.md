@@ -24,6 +24,6 @@ The documents in this directory are written in **Japanese**. English user docume
 | [notifications.md](notifications.md) | Slack and webhook notifications and the events that trigger them |
 | [updates.md](updates.md) | Minor-version cluster updates from the console or CLI |
 | [distribution.md](distribution.md) | The apt repository: user steps, contents, release pipeline and signing key handling |
-| [license-renewal.md](license-renewal.md) | Monthly and yearly licence keys and how automatic renewal works |
+| [license-renewal.md](license-renewal.md) | Monthly and yearly license keys and how automatic renewal works |
 | [roadmap.md](roadmap.md) | Public roadmap toward 1.0 GA and post-1.0 plans |
 | [seo-indexing-report.md](seo-indexing-report.md) | Historical investigation report on `db-branch.com` search indexing |

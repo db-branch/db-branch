@@ -164,22 +164,22 @@ export type Panel = ReturnType<typeof usePanel>;
 // one or delete it. A restore saves nothing by itself, and the panel says so before it
 // asks to confirm. allow tells which actions the signed-in person may do. The
 // graph has an Expand button that opens the whole panel in a modal.
-export function CheckpointPanel(props: { branch: Branch; ready: boolean; allow: (action: string) => boolean; onChange?: () => void; onFork?: (checkpoint: string) => void }) {
+export function CheckpointPanel(props: { branch: Branch; ready: boolean; allow: (action: string) => boolean; hideTitle?: boolean; onChange?: () => void; onFork?: (checkpoint: string) => void }) {
   const p = usePanel(props);
   const [open, setOpen] = useState(false);
   const opener = useRef<HTMLButtonElement>(null);
-  return <PanelView p={p} open={open} onOpen={() => setOpen(true)} onClose={() => setOpen(false)} expandRef={opener} onFork={props.onFork} />;
+  return <PanelView p={p} open={open} hideTitle={props.hideTitle} onOpen={() => setOpen(true)} onClose={() => setOpen(false)} expandRef={opener} onFork={props.onFork} />;
 }
 
 // PanelView draws the panel on the page and, while open, the same panel
 // enlarged in a modal. The one on the page is inert meanwhile: out of reach of
 // the keyboard and of screen readers, so there is one of each control to find.
-export function PanelView({ p, open, onOpen, onClose, expandRef, onFork }: { p: Panel; open: boolean; onOpen: () => void; onClose: () => void; expandRef?: RefObject<HTMLButtonElement | null>; onFork?: (checkpoint: string) => void }) {
+export function PanelView({ p, open, hideTitle, onOpen, onClose, expandRef, onFork }: { p: Panel; open: boolean; hideTitle?: boolean; onOpen: () => void; onClose: () => void; expandRef?: RefObject<HTMLButtonElement | null>; onFork?: (checkpoint: string) => void }) {
   const [mergeTarget, setMergeTarget] = useState<{ checkpoint: string; line: number } | null>(null);
   return (
     <>
       <section className="cps" aria-label="Checkpoints" inert={open}>
-        <PanelBody p={p} onExpand={onOpen} expandRef={expandRef} onFork={onFork} onMerge={(checkpoint, line) => setMergeTarget({ checkpoint, line })} />
+        <PanelBody p={p} hideTitle={hideTitle} onExpand={onOpen} expandRef={expandRef} onFork={onFork} onMerge={(checkpoint, line) => setMergeTarget({ checkpoint, line })} />
       </section>
       {open && (
         <Modal title={t("Checkpoints of {name}", { name: p.branch.name })} onClose={onClose} returnFocus={expandRef}>
@@ -202,14 +202,14 @@ export function PanelView({ p, open, onOpen, onClose, expandRef, onFork }: { p: 
 
 // PanelBody is the panel itself: save, the graph with the selected node and its
 // actions, and the list. modal draws it enlarged for the modal.
-export function PanelBody({ p, modal, onExpand, expandRef, onFork, onMerge }: { p: Panel; modal?: boolean; onExpand?: () => void; expandRef?: RefObject<HTMLButtonElement | null>; onFork?: (checkpoint: string) => void; onMerge?: (checkpoint: string, line: number) => void }): ReactNode {
+export function PanelBody({ p, modal, hideTitle, onExpand, expandRef, onFork, onMerge }: { p: Panel; modal?: boolean; hideTitle?: boolean; onExpand?: () => void; expandRef?: RefObject<HTMLButtonElement | null>; onFork?: (checkpoint: string) => void; onMerge?: (checkpoint: string, line: number) => void }): ReactNode {
   const { branch: b, graph, rows, selected, asking, working } = p;
   const [localMerge, setLocalMerge] = useState<{ checkpoint: string; line: number } | null>(null);
   const openMerge = onMerge ?? ((checkpoint: string, line: number) => setLocalMerge({ checkpoint, line }));
   const dots = !!p.events && Object.values(p.events).some((l) => l.length > 0);
   return (
     <>
-      {!modal && <h3 className="cps-title">Checkpoints</h3>}
+      {!modal && !hideTitle && <h3 className="cps-title">Checkpoints</h3>}
       <p className="muted small">{t("Save the state of this Branch before risky work. A restore replaces the current state and saves nothing.")}</p>
       <form className="cps-save" onSubmit={p.save}>
         <input

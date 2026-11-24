@@ -1,5 +1,30 @@
-import { describe, expect, it } from "vitest";
-import { bytes, relative, ttlState, statusShape, engineLabel, storageShare } from "./format";
+import { afterEach, describe, expect, it } from "vitest";
+import { bytes, formatDate, formatDateTime, formatTime, relative, ttlState, statusShape, engineLabel, storageShare } from "./format";
+import { setLanguage } from "./i18n";
+
+afterEach(() => setLanguage("en"));
+
+describe("locale date formatting", () => {
+  it("formats dates and times in ja-JP when language is ja", () => {
+    setLanguage("ja");
+    const iso = "2026-11-24T10:15:30Z";
+    expect(formatDate(iso)).toMatch(/^2026\/11\/2[45]$/);
+    expect(formatDateTime(iso)).toMatch(/^2026\/11\/2[45] \d{2}:\d{2}:\d{2}$/);
+    expect(formatTime(iso)).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+  });
+
+  it("does not throw on invalid or empty timestamps", () => {
+    for (const lang of ["ja", "en"] as const) {
+      setLanguage(lang);
+      expect(formatDate("")).toBe("—");
+      expect(formatDateTime("")).toBe("—");
+      expect(formatTime("")).toBe("—");
+      expect(formatDate("not-a-date")).toBe("not-a-date");
+      expect(formatDateTime("not-a-date")).toBe("not-a-date");
+      expect(formatTime("not-a-date")).toBe("not-a-date");
+    }
+  });
+});
 
 const now = Date.parse("2026-11-09T12:00:00Z");
 

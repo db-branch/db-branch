@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { api, Branch, ownerLabel } from "../api";
 import { extendTtl } from "../lib/branches";
-import { relative } from "../lib/format";
+import { engineLabel, formatDateTime, relative } from "../lib/format";
 import { serverError } from "../lib/errors";
 import { t } from "../lib/i18n";
 import { BranchName } from "./branchname";
@@ -55,16 +55,18 @@ export function BranchView({
         ← {t("Back to Branches")}
       </button>
       <header className="page-head">
-        <h1>
-          <BranchName name={b.name} owner={ownerLabel(b)} />
-        </h1>
-        <Status status={b.status} reason={b.status_reason} />
-        {b.access === "open" && (
-          <span className="badge" title={t("Anyone may connect, with the shared password")}>
-            open
-          </span>
-        )}
-        <RecordingBadge record={b.record} />
+        <span className="page-head-main">
+          <h1>
+            <BranchName name={b.name} owner={ownerLabel(b)} />
+          </h1>
+          <Status status={b.status} reason={b.status_reason} />
+          {b.access === "open" && (
+            <span className="badge" title={t("Anyone may connect, with the shared password")}>
+              open
+            </span>
+          )}
+          <RecordingBadge record={b.record} />
+        </span>
       </header>
       {b.status_reason && <p className="reason"><ErrorText error={serverError(b.status_reason)} /></p>}
       <dl className="branch-facts">
@@ -106,7 +108,7 @@ export function BranchView({
         <dt>{t("Owner")}</dt>
         <dd className="mono" title={b.owner ?? undefined}>{ownerLabel(b) ?? "—"}</dd>
         <dt>{t("Created")}</dt>
-        <dd title={new Date(b.created_at).toLocaleString()}>{relative(b.created_at)}</dd>
+        <dd title={formatDateTime(b.created_at)}>{relative(b.created_at)}</dd>
         <dt>{t("TTL")}</dt>
         <dd>
           <TtlBar created={b.created_at} expires={b.expires_at} />
@@ -118,7 +120,7 @@ export function BranchView({
       </dl>
       <div className="branch-actions" role="group" aria-label={t("Actions")}>
         {b.status === "lost" && !b.parent_branch && may("branch.recreate") && <button onClick={onRecreate}>{t("Recreate")}</button>}
-        {b.proxy && may("branch.connect") && <button onClick={onCopyProxy}>{t("Copy proxy URL")}</button>}
+        {b.proxy && engineLabel(b.runtime).engine !== "postgres" && may("branch.connect") && <button onClick={onCopyProxy}>{t("Copy proxy URL")}</button>}
         {onFork && may("branch.fork") && (b.status === "ready" || b.status === "paused") && b.checkpoints && <button onClick={onFork}>Fork</button>}
         {b.status === "ready" && may("branch.pause", "branch.update") && <button onClick={onPause}>Pause</button>}
         {b.status === "paused" && may("branch.resume", "branch.update") && <button onClick={onResume}>Resume</button>}

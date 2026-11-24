@@ -54,6 +54,8 @@ describe("BranchRow as the page of the branch", () => {
     expect(h).toContain("Delete");
     expect(h).not.toContain("aria-expanded");
     expect(h).not.toContain('href="/branch/alice-feature-x"');
+    // Snapshot precedes Runtime on its own wide row so Runtime never gets an empty grid cell.
+    expect(h).toMatch(/<dt>Snapshot<\/dt><dd class="wide">.*<dt>Runtime<\/dt><dd class="wide">/);
   });
   it("shows the transactions section only when it is given", () => {
     expect(row({ mode: "page" })).not.toContain("Transactions");

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { HistoryTx } from "../api";
+import { formatDateTime, formatTime } from "../lib/format";
 import { filterTxs, firstLine, rowsLabel, tablesOf, TxFilter, txNumber } from "../lib/history";
 import { t } from "../lib/i18n";
 
@@ -59,8 +60,8 @@ export function TxTableView({
               {shown.map((x) => (
                 <tr key={x.gtid}>
                   <td className="mono">#{txNumber(x.gtid)}</td>
-                  <td className="mono muted" title={new Date(x.time).toLocaleString()}>
-                    {new Date(x.time).toLocaleTimeString()}
+                  <td className="mono muted" title={formatDateTime(x.time)}>
+                    {formatTime(x.time)}
                   </td>
                   <td className="mono">{rowsLabel(x)}</td>
                   <td className="mono small">{x.tables.map((y) => y.name).join(", ")}</td>

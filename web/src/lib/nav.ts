@@ -142,3 +142,9 @@ export function saveOpen(open: OpenState, store: Store | undefined = browserStor
 export function expandFor(open: OpenState, ids: string[]): OpenState {
   return ids.every((id) => open[id]) ? open : { ...open, ...Object.fromEntries(ids.map((id) => [id, true])) };
 }
+
+/** Reconciles sidebar open state on route change, collapsing Modules on mobile non-module routes. */
+export function reconcileOpen(open: OpenState, ids: string[], collapseModules: boolean): OpenState {
+  if (ids.length === 0 && collapseModules && open.modules) return { ...open, modules: false };
+  return expandFor(open, ids);
+}

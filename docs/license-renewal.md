@@ -58,7 +58,7 @@
 
 | 設定 | 既定 | 内容 |
 |---|---|---|
-| `license.auto_renew`（core） | `true` | 「Renew the licence automatically」。オフにすると、このクラスタはライセンスサービスに**一切接続しない**。画面の「Check now」も使えない |
+| `license.auto_renew`（core） | `true` | 「Renew the license automatically」。オフにすると、このクラスタはライセンスサービスに**一切接続しない**。画面の「Check now」も使えない |
 
 ## エアギャップのクラスタ
 
