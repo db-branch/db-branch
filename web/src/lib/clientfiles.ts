@@ -1,6 +1,7 @@
 import type { Connection } from "./connect";
+import { buildDBeaverDbp, xmlEscape } from "./dbeaverdbp";
 
-export type ClientId = "dbeaver" | "datagrip" | "navicat" | "pgadmin" | "workbench" | "tableplus";
+export type ClientId = "dbeaver" | "chat2db" | "datagrip" | "navicat" | "pgadmin" | "workbench" | "tableplus";
 export type PasswordMode = "plaintext" | "none";
 
 export type ClientSpec = {
@@ -25,6 +26,7 @@ export type ClientOutput = {
     filename: string;
     mime: string;
     content: string;
+    bytes?: Uint8Array;
     passwordMode: PasswordMode;
   };
   clipboard?: {
@@ -49,15 +51,6 @@ function formatHostPort(host: string, port: number): string {
 export function sanitizeFilename(name: string): string {
   const cleaned = name.replace(/[^A-Za-z0-9._-]/g, "-").replace(/^\.+/, "");
   return cleaned || "branch";
-}
-
-function xmlEscape(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
 }
 
 // Deterministic UUID v4-shaped identifier so generated XML files remain stable across renders/tests.
@@ -130,15 +123,35 @@ const NAVICAT_TYPES: Record<string, string> = {
 
 const WORKBENCH_ENGINES = new Set(["mysql", "mariadb"]);
 
+const CHAT2DB_TYPES: Record<string, string> = {
+  mysql: "MYSQL",
+  postgres: "POSTGRESQL",
+  mariadb: "MARIADB",
+  clickhouse: "CLICKHOUSE",
+  sqlite: "SQLITE",
+  oracle: "ORACLE",
+  sqlserver: "SQLSERVER",
+  mongodb: "MONGODB",
+};
+
 export const CLIENT_SPECS: readonly ClientSpec[] = [
   {
     id: "dbeaver",
-    label: "DBeaver (data-sources.json)",
+    label: "DBeaver (.dbp)",
     supportsFile: (e) => normalizeEngine(e) in DBEAVER_DRIVERS,
     supportsClipboard: () => false,
     filePasswordMode: "plaintext",
     clipboardPasswordMode: null,
-    hintKey: "Place in your DBeaver workspace (.dbeaver/data-sources*.json) or import via Project.",
+    hintKey: "Import via File → Import → DBeaver → Project in DBeaver (also supported by Chat2DB DBeaver import).",
+  },
+  {
+    id: "chat2db",
+    label: "Chat2DB (.json)",
+    supportsFile: (e) => normalizeEngine(e) in CHAT2DB_TYPES,
+    supportsClipboard: () => false,
+    filePasswordMode: "none",
+    clipboardPasswordMode: null,
+    hintKey: "Import via Import Connections → Chat2DB in Chat2DB and select this .json file.",
   },
   {
     id: "datagrip",
@@ -151,12 +164,12 @@ export const CLIENT_SPECS: readonly ClientSpec[] = [
   },
   {
     id: "navicat",
-    label: "Navicat / Chat2DB (.ncx)",
+    label: "Navicat (.ncx)",
     supportsFile: (e) => normalizeEngine(e) in NAVICAT_TYPES,
     supportsClipboard: () => false,
     filePasswordMode: "none",
     clipboardPasswordMode: null,
-    hintKey: "Choose File → Import Connections in Navicat (also supported by DBeaver and Chat2DB).",
+    hintKey: "Choose File → Import Connections in Navicat (also supported by DBeaver and Chat2DB Navicat import).",
   },
   {
     id: "pgadmin",
@@ -191,7 +204,7 @@ export function clientSpecsFor(engine: string): ClientSpec[] {
   return CLIENT_SPECS.filter((s) => s.supportsFile(engine) || s.supportsClipboard(engine));
 }
 
-function buildDBeaverJson(conn: Connection, branch: string, opts: ClientOutputOptions): string {
+function buildDBeaverJson(conn: Connection, branch: string, opts: ClientOutputOptions, inlinePassword = true): string {
   const drv = DBEAVER_DRIVERS[normalizeEngine(conn.engine)];
   const pw = effectivePassword(conn, opts);
   const name = displayName(branch, opts.viaProxy);
@@ -206,7 +219,7 @@ function buildDBeaverJson(conn: Connection, branch: string, opts: ClientOutputOp
     "auth-model": "native",
     user: conn.user,
   };
-  if (pw !== undefined) config.password = pw;
+  if (inlinePassword && pw !== undefined) config.password = pw;
 
   return `${JSON.stringify(
     {
@@ -258,13 +271,32 @@ function buildJdbcUrl(conn: Connection, opts: ClientOutputOptions): string {
   return `${base}?${params.join("&")}`;
 }
 
+function buildChat2DBJson(conn: Connection, branch: string, opts: ClientOutputOptions): string {
+  const type = CHAT2DB_TYPES[normalizeEngine(conn.engine)];
+  return `${JSON.stringify(
+    [
+      {
+        alias: displayName(branch, opts.viaProxy),
+        type,
+        host: conn.host,
+        port: String(conn.port),
+        url: jdbcBaseUrl(conn),
+        user: conn.user,
+        ssh: { use: false },
+      },
+    ],
+    null,
+    2,
+  )}\n`;
+}
+
 function buildNavicatNcx(conn: Connection, branch: string, opts: ClientOutputOptions): string {
   const connType = NAVICAT_TYPES[normalizeEngine(conn.engine)];
   const name = displayName(branch, opts.viaProxy);
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<Connections Ver="1.5">',
-    `  <Connection ConnectionName="${xmlEscape(name)}" ConnType="${connType}" Host="${xmlEscape(conn.host)}" Port="${conn.port}" Database="${xmlEscape(conn.database)}" UserName="${xmlEscape(conn.user)}" SavePassword="false"/>`,
+    `  <Connection ConnectionName="${xmlEscape(name)}" ConnType="${connType}" Host="${xmlEscape(conn.host)}" Port="${conn.port}" Database="${xmlEscape(conn.database)}" UserName="${xmlEscape(conn.user)}" SSH="false" SavePassword="false"/>`,
     "</Connections>",
     "",
   ].join("\n");
@@ -330,11 +362,38 @@ export function generateClientOutput(id: ClientId, conn: Connection, branch: str
   const stem = fileStem(branch, opts.viaProxy);
 
   switch (spec.id) {
-    case "dbeaver":
+    case "dbeaver": {
+      if (!spec.supportsFile(conn.engine)) return { spec };
+      const previewJson = buildDBeaverJson(conn, branch, opts);
+      // .dbp carries credentials-config.json (AES-128-CBC with DBeaver's public local key) and clean data-sources.json
+      // (save-password matches includePassword while keeping configuration.password out of data-sources.json).
+      const archiveJson = buildDBeaverJson(conn, branch, { ...opts, maskPassword: false }, false);
+      const pw = effectivePassword(conn, opts);
+      const bytes = opts.maskPassword
+        ? undefined
+        : buildDBeaverDbp({
+            projectName: `db-branch-${stem}`,
+            connectionId: `db-branch-${stem}`,
+            dataSourcesJson: archiveJson,
+            user: conn.user,
+            password: pw,
+          });
+      return {
+        spec,
+        file: {
+          filename: `${stem}.dbp`,
+          mime: "application/zip",
+          content: previewJson,
+          bytes,
+          passwordMode: "plaintext",
+        },
+      };
+    }
+    case "chat2db":
       return {
         spec,
         file: spec.supportsFile(conn.engine)
-          ? { filename: `data-sources-${stem}.json`, mime: "application/json;charset=utf-8", content: buildDBeaverJson(conn, branch, opts), passwordMode: "plaintext" }
+          ? { filename: `${stem}-chat2db.json`, mime: "application/json;charset=utf-8", content: buildChat2DBJson(conn, branch, opts), passwordMode: "none" }
           : undefined,
       };
     case "datagrip":

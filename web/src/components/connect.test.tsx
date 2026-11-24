@@ -13,9 +13,10 @@ afterEach(() => setLanguage("en"));
 describe("ClientFilePanel", () => {
   it("renders client options, download action, and omits passwords by default", () => {
     const html = renderToStaticMarkup(<ClientFilePanel branch="alice-feat" conn={mysqlConn} proxy={proxy} reveal={false} />);
-    expect(html).toContain("DBeaver (data-sources.json)");
+    expect(html).toContain("DBeaver (.dbp)");
+    expect(html).toContain("Chat2DB (.json)");
     expect(html).toContain("DataGrip / JetBrains (dataSources.xml)");
-    expect(html).toContain("Navicat / Chat2DB (.ncx)");
+    expect(html).toContain("Navicat (.ncx)");
     expect(html).toContain("MySQL Workbench (connections.xml)");
     expect(html).toContain("TablePlus (URL)");
     expect(html).not.toContain("pgAdmin (servers.json)");

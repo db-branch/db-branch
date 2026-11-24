@@ -18,8 +18,8 @@ const tabs: [Tab, string][] = [
 const proxyTab: [Tab, string] = ["proxy", "ProxySQL"];
 const filesTab: [Tab, string] = ["files", "Client file"];
 
-export function downloadTextFile(filename: string, mime: string, content: string): void {
-  const blob = new Blob([content], { type: mime });
+export function downloadTextFile(filename: string, mime: string, content: string | Uint8Array): void {
+  const blob = new Blob([content as BlobPart], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -99,10 +99,10 @@ export function ClientFilePanel({
           </div>
         )}
         <div className="connect-file-actions">
-          {out.file && (
+          {out.file && (out.file.mime !== "application/zip" || !!out.file.bytes) && (
             <button
               type="button"
-              onClick={() => downloadTextFile(out.file!.filename, out.file!.mime, out.file!.content)}
+              onClick={() => downloadTextFile(out.file!.filename, out.file!.mime, out.file!.bytes ?? out.file!.content)}
             >
               {t("Download")}
             </button>
