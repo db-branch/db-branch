@@ -460,6 +460,9 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			return
 		}
 		sess, err := s.Auth.Session(c.Value)
+		if err != nil && r.Method == http.MethodPost && r.URL.Path == "/v1/auth/logout" {
+			sess, err = s.Auth.PendingSession(c.Value)
+		}
 		if err != nil {
 			s.auditAuthFailure(r, Anonymous, "auth.session", http.StatusUnauthorized)
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "session expired; log in again")

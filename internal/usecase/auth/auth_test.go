@@ -645,3 +645,87 @@ func TestLogout_失効の記録は更新済みトークンより長く残す(t *
 		}
 	}
 }
+
+func TestLogout_更新完了時に保留していたクラスタ失効を流せる(t *testing.T) {
+	rev := &memRevocations{failErr: domain.ErrClusterUpgrading}
+	a, c, st := newService(t)
+	a.Revocations = rev
+	b := &auth.Service{Store: st, Hasher: sha{}, Clock: a.Clock, Revocations: rev}
+
+	sess, _ := a.Login("admin", "correct horse battery")
+	if err := a.Logout(sess.Token); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("Logout during upgrade = %v, want ErrClusterUpgrading", err)
+	}
+	if _, err := a.Session(sess.Token); !errors.Is(err, auth.ErrNoSession) {
+		t.Fatalf("nodeA after logout = %v, want ErrNoSession", err)
+	}
+	if _, err := b.Session(sess.Token); err != nil {
+		t.Fatalf("nodeB before upgrade completes = %v, want valid", err)
+	}
+
+	// Still upgrading: FlushRevocations keeps the pending entry.
+	if err := a.FlushRevocations(); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("FlushRevocations while upgrading = %v, want ErrClusterUpgrading", err)
+	}
+
+	// Upgrade finishes: FlushRevocations writes it to shared Revocations, so nodeB rejects it too.
+	rev.failErr = nil
+	if err := a.FlushRevocations(); err != nil {
+		t.Fatalf("FlushRevocations after upgrade = %v", err)
+	}
+	id1 := sessID(t, a, sess.Token)
+	if _, err := b.Session(sess.Token); !errors.Is(err, auth.ErrNoSession) {
+		t.Errorf("nodeB after flush = %v, want ErrNoSession", err)
+	}
+
+	// Expired pending entries are pruned instead of written.
+	sess2, _ := a.Login("admin", "correct horse battery")
+	rev.failErr = domain.ErrClusterUpgrading
+	if err := a.Logout(sess2.Token); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("Logout(sess2) during upgrade = %v, want ErrClusterUpgrading", err)
+	}
+	c.now = c.now.Add(2 * auth.DefaultSessionTTL)
+	rev.failErr = nil
+	if err := a.FlushRevocations(); err != nil {
+		t.Fatalf("FlushRevocations expired = %v", err)
+	}
+	if !rev.Revoked(id1) || len(rev.ids) != 1 {
+		t.Errorf("expired pending entry should not be flushed, id1=%q ids=%v", id1, rev.ids)
+	}
+
+	// PendingSession & direct retry of Logout on the same node after upgrade.
+	sess3, _ := a.Login("admin", "correct horse battery")
+	if _, err := a.PendingSession(sess3.Token); !errors.Is(err, auth.ErrNoSession) {
+		t.Fatalf("PendingSession before logout = %v, want ErrNoSession", err)
+	}
+	rev.failErr = domain.ErrClusterUpgrading
+	if err := a.Logout(sess3.Token); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("Logout(sess3) = %v, want ErrClusterUpgrading", err)
+	}
+	if p, err := a.PendingSession(sess3.Token); err != nil || p.Renewed {
+		t.Fatalf("PendingSession after upgrading logout = (%+v, %v), want valid non-renewed", p, err)
+	}
+	rev.failErr = nil
+	if err := a.Logout(sess3.Token); err != nil {
+		t.Fatalf("retry Logout(sess3) after upgrade = %v", err)
+	}
+	if _, err := a.PendingSession(sess3.Token); !errors.Is(err, auth.ErrNoSession) {
+		t.Errorf("PendingSession after successful retry = %v, want ErrNoSession", err)
+	}
+
+	// Subsequent upgrading Logout prunes expired pendingRevoke entries, and nil Revocations FlushRevocations is a no-op.
+	sess4, _ := a.Login("admin", "correct horse battery")
+	rev.failErr = domain.ErrClusterUpgrading
+	if err := a.Logout(sess4.Token); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("Logout(sess4) = %v", err)
+	}
+	c.now = c.now.Add(2 * auth.DefaultSessionTTL)
+	sess5, _ := a.Login("admin", "correct horse battery")
+	if err := a.Logout(sess5.Token); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("Logout(sess5) = %v", err)
+	}
+	noRev, _, _ := newService(t)
+	if err := noRev.FlushRevocations(); err != nil {
+		t.Errorf("FlushRevocations with nil Revocations = %v", err)
+	}
+}

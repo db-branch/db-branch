@@ -776,20 +776,29 @@ func loginCookie(t *testing.T, h http.Handler, user string) func(*http.Request) 
 	return nil
 }
 
-func TestOwnership_表示名で作られ移行できなかった旧ブランチは本人のセッションだけが管理できる(t *testing.T) {
+func TestOwnership_表示名で作られ移行できなかった旧ブランチは管理者だけが管理できる(t *testing.T) {
 	f := ownedFixture(t)
 	// Created before owners were IDs by a console user shown as "Carol.Smith@Example.com";
 	// migration could not resolve an ID, so OwnerName stays empty.
 	f.branches.branches["carols"] = domain.Branch{Name: name("carols"), Base: name("prod"), Status: domain.BranchReady,
 		Owner: "Carol.Smith@Example.com", Runtime: mysql84, Port: 40009, User: "carols", Password: "secret"}
-	// A service token that is merely named like the old owner must not take it over.
+	// A service token or SSO user that merely shares the display name must not take it over.
 	f.branches.branches["alices-old"] = domain.Branch{Name: name("alices-old"), Base: name("prod"), Status: domain.BranchReady,
 		Owner: "alice", Runtime: mysql84, Port: 40010, User: "alices-old", Password: "secret"}
+	// Unmigrated branch whose Owner already holds an immutable ID still matches that ID.
+	f.branches.branches["alices-id-only"] = domain.Branch{Name: name("alices-id-only"), Base: name("prod"), Status: domain.BranchReady,
+		Owner: "sso:alice", Runtime: mysql84, Port: 40011, User: "alices-id-only", Password: "secret"}
 	h := f.srv.Handler(false)
 
 	carol := loginCookie(t, h, "carol")
-	if r, b := send(t, h, "GET", "/v1/branches/carols/dsn", nil, carol); r.StatusCode != 200 {
-		t.Errorf("carol on her unmigrated branch: %d %v, want 200", r.StatusCode, b)
+	if r, b := send(t, h, "GET", "/v1/branches/carols", nil, carol); r.StatusCode != 403 {
+		t.Errorf("carol reading display-name unmigrated branch: %d %v, want 403", r.StatusCode, b)
+	}
+	if r, b := send(t, h, "GET", "/v1/branches/carols/dsn", nil, carol); r.StatusCode != 403 {
+		t.Errorf("carol connecting to display-name unmigrated branch: %d %v, want 403", r.StatusCode, b)
+	}
+	if r, b := send(t, h, "DELETE", "/v1/branches/carols", nil, carol); r.StatusCode != 403 {
+		t.Errorf("carol deleting display-name unmigrated branch: %d %v, want 403", r.StatusCode, b)
 	}
 	if r, b := send(t, h, "GET", "/v1/branches/carols/dsn", nil, loginCookie(t, h, "bob")); r.StatusCode != 403 {
 		t.Errorf("bob on carol's unmigrated branch: %d %v, want 403", r.StatusCode, b)
@@ -797,7 +806,54 @@ func TestOwnership_表示名で作られ移行できなかった旧ブランチ�
 	if r, b := send(t, h, "GET", "/v1/branches/alices-old/dsn", nil, as("t-alice")); r.StatusCode != 403 {
 		t.Errorf("service token named alice on an unmigrated branch: %d %v, want 403", r.StatusCode, b)
 	}
-	if r, b := send(t, h, "GET", "/v1/branches/alices-old/dsn", nil, loginCookie(t, h, "alice")); r.StatusCode != 200 {
-		t.Errorf("alice's console session on her unmigrated branch: %d %v, want 200", r.StatusCode, b)
+	if r, b := send(t, h, "GET", "/v1/branches/alices-old/dsn", nil, loginCookie(t, h, "alice")); r.StatusCode != 403 {
+		t.Errorf("alice's console session on display-name unmigrated branch: %d %v, want 403", r.StatusCode, b)
 	}
+	if r, b := send(t, h, "GET", "/v1/branches/carols/dsn", nil, as("t-full")); r.StatusCode != 200 {
+		t.Errorf("admin on unmigrated branch: %d %v, want 200", r.StatusCode, b)
+	}
+	if r, b := send(t, h, "GET", "/v1/branches/alices-id-only/dsn", nil, loginCookie(t, h, "alice")); r.StatusCode != 200 {
+		t.Errorf("alice on her immutable-ID unmigrated branch: %d %v, want 200", r.StatusCode, b)
+	}
+}
+
+func TestLeanAuthz_Bug3_LegacyUnmigratedBranchDisplayNameCollision(t *testing.T) {
+	f := newFixture(t)
+	f.srv.TokenAuth = tokenAuthFunc(func(_ context.Context, c ext.Credentials) (ext.Principal, error) {
+		switch c.Token {
+		case "tok-viewer":
+			return ext.Principal{ID: "sso:viewer", Name: "Viewer", Roles: []string{"viewer"}}, nil
+		case "tok-admin":
+			return ext.Principal{ID: "admin", Name: "admin", Roles: []string{"admin"}}, nil
+		}
+		return ext.Principal{}, ext.ErrUnauthenticated
+	})
+	f.branches.branches["legacy-alice"] = domain.Branch{
+		Name: name("legacy-alice"), Base: name("prod"), Status: domain.BranchReady,
+		Owner: "Viewer", OwnerName: "", Runtime: mysql84,
+	}
+	f.branches.branches["migrated-alice"] = domain.Branch{
+		Name: name("migrated-alice"), Base: name("prod"), Status: domain.BranchReady,
+		Owner: "sso:real-viewer", OwnerName: "Viewer", Runtime: mysql84,
+	}
+	h := f.srv.Handler(false)
+
+	if resp, _ := send(t, h, "GET", "/v1/branches/migrated-alice", nil, as("tok-viewer")); resp.StatusCode != 403 {
+		t.Fatalf("migrated branch should reject display name collision, got %d", resp.StatusCode)
+	}
+	if resp, _ := send(t, h, "GET", "/v1/branches/legacy-alice", nil, as("tok-viewer")); resp.StatusCode != 403 {
+		t.Fatalf("legacy unmigrated branch should reject display name collision, got %d", resp.StatusCode)
+	}
+	if resp, _ := send(t, h, "DELETE", "/v1/branches/legacy-alice", nil, as("tok-viewer")); resp.StatusCode != 403 {
+		t.Fatalf("legacy unmigrated branch delete should reject display name collision, got %d", resp.StatusCode)
+	}
+	if resp, _ := send(t, h, "GET", "/v1/branches/legacy-alice", nil, as("tok-admin")); resp.StatusCode != 200 {
+		t.Fatalf("admin should read legacy unmigrated branch, got %d", resp.StatusCode)
+	}
+}
+
+type tokenAuthFunc func(context.Context, ext.Credentials) (ext.Principal, error)
+
+func (fn tokenAuthFunc) Authenticate(ctx context.Context, c ext.Credentials) (ext.Principal, error) {
+	return fn(ctx, c)
 }

@@ -140,9 +140,10 @@ type Service struct {
 	// it a logout only holds on this node, until it restarts.
 	Revocations Revocations
 
-	mu          sync.Mutex
-	revoked     map[string]time.Time // session id -> expiry, after logout
-	clients     map[string]*failure  // by client address
+	mu            sync.Mutex
+	revoked       map[string]time.Time // session id -> expiry, after logout
+	pendingRevoke map[string]time.Time // session id -> expiry, awaiting cluster protocol >= 24
+	clients       map[string]*failure  // by client address
 	hashing     chan struct{}        // semaphore for password hashes
 	hashingOnce sync.Once
 }
@@ -394,54 +395,84 @@ func (s *Service) parse(c Credentials, token string) (payload, error) {
 // Session validates a token. Past half its lifetime it is renewed (same
 // session and CSRF token, later expiry; Renewed is set).
 func (s *Service) Session(token string) (Session, error) {
-	c, err := s.Store.Load()
-	if errors.Is(err, ErrNoCredentials) {
-		return Session{}, ErrNoSession
-	}
+	sess, revokedLocal, pending, err := s.inspect(token)
 	if err != nil {
 		return Session{}, err
+	}
+	if revokedLocal || pending {
+		return Session{}, ErrNoSession
+	}
+	return sess, nil
+}
+
+// PendingSession validates a token that was only revoked in this node's memory
+// during a cluster upgrade (ErrClusterUpgrading), so a retry of Logout on the
+// same node can still record the revocation cluster-wide once nodes upgrade.
+func (s *Service) PendingSession(token string) (Session, error) {
+	sess, _, pending, err := s.inspect(token)
+	if err != nil || !pending {
+		return Session{}, ErrNoSession
+	}
+	sess.Renewed = false
+	return sess, nil
+}
+
+func (s *Service) inspect(token string) (sess Session, revokedLocal, pending bool, err error) {
+	c, err := s.Store.Load()
+	if errors.Is(err, ErrNoCredentials) {
+		return Session{}, false, false, ErrNoSession
+	}
+	if err != nil {
+		return Session{}, false, false, err
 	}
 	p, err := s.parse(c, token)
 	if err != nil {
-		return Session{}, err
+		return Session{}, false, false, err
 	}
 	now := s.Clock()
 	exp := time.Unix(p.Expires, 0)
 	s.mu.Lock()
-	_, revoked := s.revoked[p.ID]
+	_, revokedLocal = s.revoked[p.ID]
+	_, pending = s.pendingRevoke[p.ID]
 	s.mu.Unlock()
-	if !revoked && s.Revocations != nil {
-		revoked = s.Revocations.Revoked(p.ID)
-	}
-	if p.Gen != c.Generation || !now.Before(exp) || revoked {
-		return Session{}, ErrNoSession
+	revokedShared := s.Revocations != nil && s.Revocations.Revoked(p.ID)
+	if p.Gen != c.Generation || !now.Before(exp) || revokedShared {
+		return Session{}, false, false, ErrNoSession
 	}
 	if exp.Sub(now) < s.ttl()/2 {
-		sess := s.issue(c, p)
+		sess = s.issue(c, p)
 		sess.Renewed = true
-		return sess, nil
+		return sess, revokedLocal, pending, nil
 	}
-	return Session{Token: token, CSRF: s.issue(c, p).CSRF, User: p.User, Name: p.Name, Roles: p.Roles, ExpiresAt: exp.UTC(), MustChange: c.MustChange && p.User == AdminUser, id: p.ID}, nil
+	return Session{Token: token, CSRF: s.issue(c, p).CSRF, User: p.User, Name: p.Name, Roles: p.Roles, ExpiresAt: exp.UTC(), MustChange: c.MustChange && p.User == AdminUser, id: p.ID}, revokedLocal, pending, nil
 }
 
 // Logout ends a session. It is recorded in Revocations so that every node
 // refuses the cookie, and the record outlives any renewed copy of the token
 // (a renewal keeps the session id and moves the expiry out by at most one TTL).
 //
-// If the shared record cannot be written the session is left as it was and the
-// error is returned, so the caller can retry: ending it on this node alone
-// would make a retry impossible while other nodes still accept the cookie.
-// The exception is domain.ErrClusterUpgrading (a node below protocol 24): the
-// session then ends on this node only, as it did before the shared list.
+// If the shared record cannot be written the error is returned. On
+// domain.ErrClusterUpgrading (a node below protocol 24), the session is also
+// ended in this node's memory and queued for FlushRevocations once the upgrade
+// finishes, while returning ErrClusterUpgrading so callers do not treat the
+// cluster-wide logout as complete. For any other error the session is left open
+// on this node so the caller can retry.
 func (s *Service) Logout(token string) error {
-	sess, err := s.Session(token)
-	if err != nil {
+	sess, revokedLocal, pending, err := s.inspect(token)
+	if err != nil || (revokedLocal && !pending) {
 		return nil
 	}
 	now := s.Clock()
 	until := sess.ExpiresAt
 	if renewed := now.Add(s.ttl()); renewed.After(until) {
 		until = renewed
+	}
+	if pending {
+		s.mu.Lock()
+		if prev := s.pendingRevoke[sess.id]; prev.After(until) {
+			until = prev
+		}
+		s.mu.Unlock()
 	}
 	var shared error
 	if s.Revocations != nil { // outside the lock: this may wait for the cluster
@@ -460,7 +491,55 @@ func (s *Service) Logout(token string) error {
 		}
 	}
 	s.revoked[sess.id] = until
+	if errors.Is(shared, domain.ErrClusterUpgrading) {
+		if s.pendingRevoke == nil {
+			s.pendingRevoke = map[string]time.Time{}
+		}
+		for id, exp := range s.pendingRevoke {
+			if !now.Before(exp) {
+				delete(s.pendingRevoke, id)
+			}
+		}
+		s.pendingRevoke[sess.id] = until
+	} else if s.pendingRevoke != nil {
+		delete(s.pendingRevoke, sess.id)
+	}
 	return shared
+}
+
+// FlushRevocations retries session logouts that were only kept in memory while
+// the cluster was upgrading (ErrClusterUpgrading). Once every node supports
+// session revocation, calling this replicates them across the cluster.
+func (s *Service) FlushRevocations() error {
+	if s.Revocations == nil {
+		return nil
+	}
+	now := s.Clock()
+	type pending struct {
+		id  string
+		exp time.Time
+	}
+	s.mu.Lock()
+	var list []pending
+	for id, exp := range s.pendingRevoke {
+		if !now.Before(exp) {
+			delete(s.pendingRevoke, id)
+			continue
+		}
+		list = append(list, pending{id: id, exp: exp})
+	}
+	s.mu.Unlock()
+	for _, p := range list {
+		if err := s.Revocations.Revoke(p.id, p.exp, now); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		if s.pendingRevoke[p.id].Equal(p.exp) {
+			delete(s.pendingRevoke, p.id)
+		}
+		s.mu.Unlock()
+	}
+	return nil
 }
 
 // ChangePassword sets a new password, which ends every session; the caller

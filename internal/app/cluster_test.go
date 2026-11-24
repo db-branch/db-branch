@@ -590,3 +590,30 @@ func TestImportSingleNodeState_壊れたstateJSONは退避せずエラーにす�
 		t.Errorf("state.json should remain intact on error: %v", err)
 	}
 }
+
+func TestFlushPendingRevocations_更新中エラーは警告せず他エラーは記録し成功まで試行する(t *testing.T) {
+	var buf strings.Builder
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+
+	c := &clusterRuntime{}
+	c.flushPendingRevocations(log) // nil callback is a no-op
+
+	c.flushRevocations = func() error { return domain.ErrClusterUpgrading }
+	c.flushPendingRevocations(log)
+	if buf.Len() != 0 {
+		t.Errorf("ErrClusterUpgrading should not log warning, got %q", buf.String())
+	}
+
+	c.flushRevocations = func() error { return domain.ErrNoLeader }
+	c.flushPendingRevocations(log)
+	if !strings.Contains(buf.String(), "flushing pending session revocations") {
+		t.Errorf("non-upgrading error should log warning, got %q", buf.String())
+	}
+
+	buf.Reset()
+	c.flushRevocations = func() error { return nil }
+	c.flushPendingRevocations(log)
+	if buf.Len() != 0 {
+		t.Errorf("nil error should not log warning, got %q", buf.String())
+	}
+}
