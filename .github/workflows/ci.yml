@@ -56,3 +56,33 @@ jobs:
         with:
           name: db-branch-${{ matrix.goarch }}
           path: dist/*.deb
+
+  lean:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.1.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/cache@v6.1.0
+        with:
+          path: ~/.elan
+          key: elan-${{ runner.os }}-${{ hashFiles('formal/lean/lean-toolchain') }}
+      - uses: actions/cache@v6.1.0
+        with:
+          path: formal/lean/.lake
+          key: lake-${{ runner.os }}-${{ hashFiles('formal/lean/lean-toolchain', 'formal/lean/lakefile.toml', 'formal/lean/lake-manifest.json', 'formal/lean/**/*.lean') }}
+      - name: Install elan
+        run: |
+          if [ ! -x "$HOME/.elan/bin/elan" ]; then
+            tmpdir="$(mktemp -d)"
+            curl -sSfL -o "$tmpdir/elan.tar.gz" https://github.com/leanprover/elan/releases/download/v4.4.0/elan-x86_64-unknown-linux-gnu.tar.gz
+            echo "0e8250aa2be86c7af929ade68db617af9edc8b9ccf6eaf5ece228250d0d032e2  $tmpdir/elan.tar.gz" | sha256sum -c -
+            tar -xzf "$tmpdir/elan.tar.gz" -C "$tmpdir"
+            "$tmpdir/elan-init" -y --default-toolchain none
+            rm -rf "$tmpdir"
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          "$HOME/.elan/bin/elan" toolchain install "$(cat formal/lean/lean-toolchain)"
+      - run: ./formal/lean/verify.sh
+      - run: git diff --exit-code formal/lean/decision_matrix.json

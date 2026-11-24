@@ -221,6 +221,8 @@ PUT  /v1/auth/password     {"current_password":"...","new_password":"..."} → 2
 | `Authorizer` | 認証済みならすべて許可 | RBAC。拒否時は `403 forbidden` |
 | `AuditSink` | 構造化ログに出すだけ | 永続化・検索・外部転送 |
 
+- **OSS 版の認可設計境界**: 有償 `auth` モジュール（`ext.Authorizer`）を導入しない OSS 版単独では、匿名（`anonymous`）・`branches` スコープのトークン制限・ブランチ所有判定・ローカルソケット限定操作・初期パスワード変更前制限を除き、認証済みの主体はロールを問わず管理者相当の操作（`cluster.remove`、`setting.write`、`base.delete` 等）を実行できる設計です。ロールに基づく RBAC は有償モジュール側の責務です。
+
 - 認可の単位は `action`（例: `branch.create`、`branch.delete`、`runtime.install`）と対象リソース。各エンドポイントの `action` は OpenAPI の `x-dbb-action` に書く
 - **変更系の呼び出しはすべて**監査イベントを出す。成功・失敗（認可拒否を含む）の両方を出す
 - 認証に失敗した要求（無効なトークン `auth.token`、期限切れのセッション `auth.session`、CSRF トークンの欠落 `auth.csrf`）も `denied` として記録する。対象のリソースは、パスが指すもの（ブランチ・ベース名、トークン ID、設定のスコープ、バックアップのファイル名、`<engine>@<version>`）。利用者が打った名前に所有者の接頭辞が付く場合は、付いたあとの名前を記録する
