@@ -408,6 +408,14 @@ a.button { display: inline-flex; align-items: center; justify-content: center; t
 .connect-row dt { color: var(--muted); }
 .connect-row dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connect .small { margin: 0; }
+.connect-files { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.connect-file-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.connect-file-controls select { width: auto; flex: 1 1 220px; min-width: 0; }
+.connect-file-actions { display: inline-flex; align-items: center; gap: 6px; }
+.connect-check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+.connect-warn { color: var(--warn, #b45309); }
+.connect-preview summary { cursor: pointer; user-select: none; }
+.connect-preview .connect-snippet { margin-top: 6px; max-height: 180px; overflow: auto; }
 .ttl-line { display: flex; align-items: center; gap: 10px; }
 .dialog .connect { width: min(520px, calc(100vw - 64px)); }
 /* Account menu and page */

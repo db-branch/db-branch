@@ -74,7 +74,7 @@ export function BranchDetail({ name }: { name: string }) {
   }
   const ready = b.status === "ready";
   const sections: BranchSection[] = [];
-  if (ready && can("branch.connect")) sections.push({ id: "connect", title: t("Connect"), body: <ConnectPanel branch={b.name} /> });
+  if (ready && can("branch.connect")) sections.push({ id: "connect", title: t("Connect"), body: <ConnectPanel branch={b.name} proxy={b.proxy} /> });
   if (["ready", "restoring"].includes(b.status) && showCheckpoints(b, can)) {
     sections.push({
       id: "checkpoints",
