@@ -223,11 +223,21 @@ func (c *clusterRuntime) publish(ctx context.Context, srv *httpapi.Server, bus *
 	}
 }
 
+func (c *clusterRuntime) flushPendingRevocations(log *slog.Logger) {
+	if c.flushRevocations == nil {
+		return
+	}
+	if err := c.flushRevocations(); err != nil && !errors.Is(err, domain.ErrClusterUpgrading) {
+		log.Warn("flushing pending session revocations", "err", err)
+	}
+}
+
 // healthLoop keeps branch status in line with node health: the leader marks
 // branches of silent nodes lost; every node resumes its own lost branches and
 // removes local copies of branches recreated elsewhere.
 func (c *clusterRuntime) healthLoop(ctx context.Context, svc *dbbranch.Service, log *slog.Logger) {
 	for {
+		c.flushPendingRevocations(log)
 		if c.store.IsLeader() {
 			migrateBranchOwners(ctx, svc, log)
 			lost, err := svc.MarkLost(ctx)

@@ -252,21 +252,94 @@ type failingRevocations struct{ err error }
 func (f failingRevocations) Revoke(string, time.Time, time.Time) error { return f.err }
 func (failingRevocations) Revoked(string) bool                         { return false }
 
-func TestConsole_ログアウトが他ノードに記録できなければ503でセッションを残し_クラスタ更新中は従来どおり204(t *testing.T) {
+func TestConsole_ログアウトが他ノードに記録できなければ503を返し_クラスタ更新中も503で案内してローカルは失効する(t *testing.T) {
 	for _, tc := range []struct {
 		err         error
 		want        int
+		wantCode    string
 		stillSignin int
-	}{{errors.New("no leader"), 503, 200}, {domain.ErrClusterUpgrading, 204, 401}} {
+	}{
+		{errors.New("no leader"), 503, "logout_not_recorded", 200},
+		{domain.ErrClusterUpgrading, 503, "cluster_upgrading", 401},
+	} {
 		f := newFixture(t)
 		f.srv.Auth.Revocations = failingRevocations{err: tc.err}
 		cookie, csrf := login(t, f)
-		resp, _ := send(t, f.srv.Handler(false), "POST", "/v1/auth/logout", nil, withSession(cookie, csrf))
+		resp, body := send(t, f.srv.Handler(false), "POST", "/v1/auth/logout", nil, withSession(cookie, csrf))
 		if resp.StatusCode != tc.want {
-			t.Errorf("%v: logout = %d, want %d", tc.err, resp.StatusCode, tc.want)
+			t.Errorf("%v: logout = %d, want %d (%v)", tc.err, resp.StatusCode, tc.want, body)
+		}
+		errObj, _ := body["error"].(map[string]any)
+		if errObj["code"] != tc.wantCode {
+			t.Errorf("%v: error code = %v, want %q", tc.err, errObj["code"], tc.wantCode)
+		}
+		for _, c := range resp.Cookies() {
+			if c.Name == "dbb_session" && c.MaxAge < 0 {
+				t.Errorf("%v: unexpected cookie clear on %d", tc.err, resp.StatusCode)
+			}
 		}
 		if after, _ := send(t, f.srv.Handler(false), "GET", "/v1/auth/session", nil, withSession(cookie, "")); after.StatusCode != tc.stillSignin {
 			t.Errorf("%v: session after logout = %d, want %d", tc.err, after.StatusCode, tc.stillSignin)
 		}
+	}
+}
+
+type switchableRevocations struct {
+	err error
+	ids map[string]bool
+}
+
+func (r *switchableRevocations) Revoke(id string, _, _ time.Time) error {
+	if r.err != nil {
+		return r.err
+	}
+	if r.ids == nil {
+		r.ids = map[string]bool{}
+	}
+	r.ids[id] = true
+	return nil
+}
+func (r *switchableRevocations) Revoked(id string) bool { return r.ids[id] }
+
+func TestConsole_クラスタ更新中の503ログアウト後に同一ノードへ再ログアウトしてクラスタ全体で失効できる(t *testing.T) {
+	rev := &switchableRevocations{err: domain.ErrClusterUpgrading}
+	nodeA := newFixture(t)
+	nodeA.srv.Auth.Revocations = rev
+	nodeB := newFixture(t)
+	nodeB.srv.Auth.Store = nodeA.srv.Auth.Store
+	nodeB.srv.Auth.Hasher = nodeA.srv.Auth.Hasher
+	nodeB.srv.Auth.Clock = nodeA.srv.Auth.Clock
+	nodeB.srv.Auth.Revocations = rev
+	hA := nodeA.srv.Handler(false)
+	hB := nodeB.srv.Handler(false)
+
+	cookie, csrf := login(t, nodeA)
+
+	// 1. Logout while upgrading: 503 cluster_upgrading, cookie kept, nodeA rejects session, nodeB still accepts.
+	resp, body := send(t, hA, "POST", "/v1/auth/logout", nil, withSession(cookie, csrf))
+	if resp.StatusCode != 503 || body["error"].(map[string]any)["code"] != "cluster_upgrading" {
+		t.Fatalf("first logout = %d %v, want 503 cluster_upgrading", resp.StatusCode, body)
+	}
+	if after, _ := send(t, hA, "GET", "/v1/auth/session", nil, withSession(cookie, "")); after.StatusCode != 401 {
+		t.Fatalf("nodeA session after 503 logout = %d, want 401", after.StatusCode)
+	}
+	if after, _ := send(t, hB, "GET", "/v1/auth/session", nil, withSession(cookie, "")); after.StatusCode != 200 {
+		t.Fatalf("nodeB session while upgrading = %d, want 200", after.StatusCode)
+	}
+
+	// 2. Retrying logout on nodeA while still upgrading MUST still return 503 (never 204 or 401).
+	resp2, body2 := send(t, hA, "POST", "/v1/auth/logout", nil, withSession(cookie, csrf))
+	if resp2.StatusCode != 503 || body2["error"].(map[string]any)["code"] != "cluster_upgrading" {
+		t.Fatalf("retry while upgrading = %d %v, want 503 cluster_upgrading", resp2.StatusCode, body2)
+	}
+
+	// 3. Upgrade completes: retrying logout on nodeA succeeds with 204, clears cookie, and revokes on nodeB.
+	rev.err = nil
+	resp3, _ := send(t, hA, "POST", "/v1/auth/logout", nil, withSession(cookie, csrf))
+	if resp3.StatusCode != 204 {
+		t.Fatalf("retry after upgrade = %d, want 204", resp3.StatusCode)
+	}
+	if after, _ := send(t, hB, "GET", "/v1/auth/session", nil, withSession(cookie, "")); after.StatusCode != 401 {
+		t.Errorf("nodeB session after retry logout = %d, want 401", after.StatusCode)
 	}
 }

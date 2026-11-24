@@ -102,16 +102,11 @@ func (s *Server) canManageBranch(ctx context.Context, p ext.Principal, b domain.
 	return s.Ext.BranchPolicy != nil && s.Ext.BranchPolicy.SharesBranches(ctx, p, b.Owner)
 }
 
-// ownsBranch reports whether p is the owner of b. Owners are immutable IDs,
-// except for a legacy branch whose old display-name owner migration could not
-// resolve to an ID (OwnerName == ""): that one is still matched by display
-// name, but never by a service token, so a token named like the old owner
-// cannot take it.
+// ownsBranch reports whether p is the owner of b. Owners are immutable IDs;
+// unmigrated legacy branches whose owner could not be resolved to an ID are
+// never matched by display name (only admins can manage them).
 func ownsBranch(p ext.Principal, b domain.Branch) bool {
-	if b.OwnerName == "" {
-		return !strings.HasPrefix(b.Owner, "token:") && !strings.HasPrefix(p.ID, "token:") && ownerDisplayName(p) == b.Owner
-	}
-	return b.Owner == ownerID(p)
+	return b.Owner != "" && b.Owner == ownerID(p)
 }
 
 // canSeeOperation reports whether p may read op: admins, the principal that

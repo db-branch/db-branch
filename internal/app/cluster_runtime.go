@@ -35,6 +35,8 @@ type clusterRuntime struct {
 	changes chan raftstore.Command
 	// runtimes lists this node's engines for the heartbeat. Optional.
 	runtimes func(ctx context.Context) []string
+	// flushRevocations replicates logouts held in memory while upgrading. Optional.
+	flushRevocations func() error
 	// kick asks for a heartbeat now.
 	kick chan struct{}
 	// replicate asks for a replication pass now.

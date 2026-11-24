@@ -2310,7 +2310,7 @@ paths:
       x-dbb-action: auth.logout
       x-dbb-token-scopes: [full]
       description: |-
-        Ends the console session and clears the cookie.
+        Ends the console session and clears the cookie. If the revocation cannot be recorded cluster-wide (`503 logout_not_recorded` or `503 cluster_upgrading` while nodes are below protocol 24), the cookie is kept so the caller knows the session may still be accepted on other nodes (or after a restart) and can log out again once the cluster is ready.
 
         **Action:** `auth.logout`. Needs a console session of an admin, the local socket, or a `full` token.
       security:

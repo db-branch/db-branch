@@ -173,6 +173,7 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		// One console password for the whole cluster.
 		// A logout on one node holds on all of them.
 		srv.Auth = &auth.Service{Store: raftstore.AdminStore{Store: cl.store}, Hasher: authfile.Argon2{}, Clock: time.Now, Revocations: raftstore.SessionRevocations{Store: cl.store}}
+		cl.flushRevocations = srv.Auth.FlushRevocations
 		srv.OnRuntimesChanged = cl.beatNow
 		cl.runtimes = func(ctx context.Context) []string {
 			refs, _ := a.Runtimes.List(ctx)
