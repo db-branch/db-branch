@@ -42,7 +42,7 @@ func (s *Server) listBackups(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []domain.BackupFile{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"node": s.Node, "items": list})
+	writeJSON(w, http.StatusOK, map[string]any{"node": s.Node, "items": list, "next_cursor": nil})
 }
 
 // takeBackup saves the cluster state on this node (or ?node=) now.

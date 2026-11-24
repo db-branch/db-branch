@@ -510,7 +510,7 @@ func (s *Service) runCloneDiff(
 	var createdWorkDir bool
 	var tempSnaps []string
 	var tempClones []string
-	var reservedPorts []int
+	releasePorts := func() {}
 	var tempServers []struct {
 		srv  domain.DBServer
 		spec domain.Server
@@ -523,13 +523,7 @@ func (s *Service) runCloneDiff(
 			_ = ts.srv.Stop(wctx, ts.spec, domain.StopImmediate)
 			_ = ts.srv.Remove(wctx, ts.spec)
 		}
-		if len(reservedPorts) > 0 {
-			s.mu.Lock()
-			for _, p := range reservedPorts {
-				delete(s.reservedPorts, p)
-			}
-			s.mu.Unlock()
-		}
+		releasePorts()
 		for i := len(tempClones) - 1; i >= 0; i-- {
 			_ = s.destroyIfExists(wctx, tempClones[i])
 		}
@@ -579,21 +573,11 @@ func (s *Service) runCloneDiff(
 	createdWorkDir = true
 
 	// Allocate 3 distinct ports for A, S, T and hold them reserved until cleanup.
-	s.mu.Lock()
-	ports, err := s.allocatePorts(ctx, 3)
-	if err == nil {
-		if s.reservedPorts == nil {
-			s.reservedPorts = map[int]bool{}
-		}
-		for _, p := range ports {
-			s.reservedPorts[p] = true
-		}
-		reservedPorts = ports
-	}
-	s.mu.Unlock()
+	ports, unreserve, err := s.reservePorts(ctx, 3)
 	if err != nil {
 		return domain.MergePlan{}, err
 	}
+	releasePorts = unreserve
 
 	report.report("starting_clones")
 	startClone := func(suffix string, origin domain.Snapshot, rt domain.RuntimeRef, port int) (domain.AdminAccess, error) {

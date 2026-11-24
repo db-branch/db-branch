@@ -34,7 +34,7 @@ type Renewal interface {
 
 func (s *Server) withLicensing(w http.ResponseWriter) bool {
 	if s.Licensing == nil {
-		writeError(w, http.StatusNotImplemented, "not_implemented", "licences are not available on this node")
+		writeError(w, http.StatusNotImplemented, "not_implemented", "licenses are not available on this node")
 		return false
 	}
 	return true

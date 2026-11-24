@@ -762,24 +762,14 @@ func TestInit_モジュールのストレージで初期化する(t *testing.T) 
 	}
 }
 
-func TestBase_maskはルールのファイルを送って待つ(t *testing.T) {
+func TestBase_1_0ではmaskコマンドが非露出(t *testing.T) {
 	api := newFakeAPI()
-	api.answers["POST /v1/bases/dev/mask"] = accepted("op_1", "base.mask")
-	api.opStates = []map[string]any{{"id": "op_1", "state": "succeeded"}}
-	rules := filepath.Join(t.TempDir(), "rules.yaml")
-	writeFile(t, rules, "databases: []\n")
-	if code, _, errOut := runAPI(t, api, "base", "mask", "dev", "--from", "prod", "--snapshot", "s1", "--masker", "greenmask", "--rules", rules); code != 0 {
-		t.Fatalf("exit %d %s", code, errOut)
+	code, out, _ := runAPI(t, api, "base", "--help")
+	if code != 0 || strings.Contains(out, "\n  mask ") {
+		t.Errorf("base --help should hide mask in 1.0: code=%d out:\n%s", code, out)
 	}
-	body := api.bodies["POST /v1/bases/dev/mask"].(map[string]any)
-	if body["source"] != "prod" || body["snapshot"] != "s1" || body["masker"] != "greenmask" || body["rules"] != "databases: []\n" {
-		t.Errorf("body %v", body)
-	}
-	if code, _, _ := runAPI(t, api, "base", "mask", "dev", "--from", "prod", "--masker", "greenmask", "--rules", "/no/such/file"); code == 0 {
-		t.Error("a missing rules file")
-	}
-	if code, _, _ := runAPI(t, api, "base", "mask", "dev", "--masker", "greenmask"); code == 0 {
-		t.Error("no --from")
+	if code, _, _ := runAPI(t, api, "base", "mask", "dev", "--from", "prod", "--masker", "greenmask"); code == 0 {
+		t.Error("base mask must not be exposed in 1.0")
 	}
 }
 

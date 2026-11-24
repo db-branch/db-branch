@@ -102,6 +102,8 @@ func Testユースケースのエラーを決まったコードに対応させ�
 		{domain.ErrAlreadyExists, 409, "already_exists"},
 		{domain.ErrInUse, 409, "in_use"},
 		{domain.ErrUncleanShutdown, 409, "unclean_shutdown"},
+		{domain.ErrFeatureNotSupported, 409, "feature_not_supported"},
+		{domain.ErrUnsupportedEngine, 409, "feature_not_supported"},
 		{domain.ErrConflict, 409, "conflict"},
 		{domain.ErrRuntimeNotInstalled, 404, "runtime_not_installed"},
 		{domain.ErrRuntimeNotFound, 422, "runtime_unavailable"},

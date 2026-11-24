@@ -134,14 +134,17 @@ func (s *Service) mask(ctx context.Context, req MaskRequest, masker domain.Maske
 }
 
 // workServer clones the source snapshot and starts a temporary server on it.
-// cleanup stops it and destroys the clone; it is safe to call twice.
+// cleanup stops it, destroys the clone, and releases its reserved port; it is
+// safe to call twice.
 func (s *Service) workServer(ctx context.Context, srv domain.DBServer, id string, source domain.Base, snapshot string) (domain.Server, func(context.Context) error, error) {
 	ds, done := s.workDataset(id), false
+	releasePort := func() {}
 	cleanup := func(ctx context.Context) error {
 		if done {
 			return nil
 		}
 		done = true
+		defer releasePort()
 		ok, err := s.Storage.Exists(ctx, ds)
 		if err != nil || !ok {
 			return err
@@ -151,11 +154,12 @@ func (s *Service) workServer(ctx context.Context, srv domain.DBServer, id string
 	if err := s.Storage.Clone(ctx, domain.Snapshot{Dataset: s.sourceDataset(source), Name: snapshot}, ds); err != nil {
 		return domain.Server{}, cleanup, err
 	}
-	port, err := s.allocatePort(ctx)
+	ports, unreserve, err := s.reservePorts(ctx, 1)
 	if err != nil {
 		return domain.Server{}, cleanup, err
 	}
-	spec, err := s.spec(ctx, id, ds, source.Runtime, port)
+	releasePort = unreserve
+	spec, err := s.spec(ctx, id, ds, source.Runtime, ports[0])
 	if err == nil {
 		err = srv.PrepareClone(ctx, spec)
 	}

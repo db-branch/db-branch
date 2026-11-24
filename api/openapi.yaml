@@ -3,7 +3,7 @@
 openapi: 3.1.0
 info:
   title: db-branch API
-  version: 0.3.1
+  version: 1.0.0
   summary: 'REST API of the db-branch agent: database branches, bases, checkpoints and cluster administration.'
   description: |
     The REST API of the db-branch agent. The web console, the `db-branch` command and your own scripts all use it. This document describes the core API that every installation serves. Paid modules add their own APIs under `/v1/ext/<module>/`; each module documents its API itself, and those paths are not listed here. A node's `GET /v1/capabilities` names the modules it runs.
@@ -26,7 +26,7 @@ info:
     |---|---|---|
     | API token | `Authorization: Bearer dbb_...` | Scripts, CI, MCP clients |
     | Session | The `dbb_session` cookie from `POST /v1/auth/login`; every request other than GET also needs the `X-CSRF-Token` header (`csrf_token` of the login answer) or it fails with `403 csrf_failed` | The web console |
-    | Local socket | Connect to `/run/db-branch/agent.sock` as root or a member of the `db-branch` group; no session or CSRF token | The `db-branch` command; acts as an admin |
+    | Local socket | Connect to `/run/db-branch/agent.sock` as root or a member of the `db-branch-admin` group; no session or CSRF token | The `db-branch` command; acts as an admin |
 
     Tokens start with `dbb_`, are shown once when created, and only their hash is stored. A service token is made by an admin (`POST /v1/tokens`) and acts as itself; a personal token is made by any signed-in person (`POST /v1/account/tokens`) and acts as that person. A token cannot create another. An invalid, expired or revoked token gets `401 unauthenticated`. The CSRF check does not apply to bearer tokens.
 
@@ -54,6 +54,7 @@ info:
     | 401 | `invalid_credentials` | Wrong user name or password |
     | 403 | `forbidden` | The action is not allowed for this caller or token scope |
     | 403 | `csrf_failed` | Cookie session without a matching `X-CSRF-Token` |
+    | 403 | `password_change_required` | Initial password must be changed before other calls |
     | 403 | `socket_only` | Works only on a node's local socket |
     | 403 | `managed_elsewhere` | A sign-in provider manages this password |
     | 404 | `not_found` | No such resource |
@@ -72,18 +73,19 @@ info:
     | 422 | `upgrade_not_allowed` | The branch upgrade is not one db-branch does |
     | 422 | `query_failed` | The SQL statement failed |
     | 422 | `invalid_license`, `license_unusable`, `restore_failed` | The key or backup cannot be used |
-    | 429 | `rate_limited` | Too many attempts; see `Retry-After` |
+    | 429 | `rate_limited`, `quota_exceeded` | Too many attempts (`Retry-After`), or per-user branch quota reached |
     | 501 | `not_implemented`, `cannot_verify` | Not available on this node or build |
     | 503 | `no_leader` | The cluster has no leader at the moment; retry after `Retry-After` |
     | 503 | `no_capacity` | No node has room for the branch |
     | 503 | `cluster_upgrading` | A cluster update is changing the protocol |
     | 503 | `not_initialized` | The node has not run `db-branch init`, or the feature is not set up on it |
     | 503 | `modules_pending` | This node does not yet run every module the cluster requires |
+    | 503 | `audit_unavailable`, `logout_not_recorded` | Fail-closed audit sink unavailable, or cluster logout could not be recorded |
     | 500 | `internal` | Unexpected error |
 
     # Long-running operations
 
-    Creating a branch, resetting, recreating, upgrading or deleting one, restoring a checkpoint, creating or snapshotting a base, loading a dump, masking or refreshing a base, and installing a runtime take from seconds to minutes. These calls answer `202 Accepted` at once, with a `Location` header and an Operation:
+    Creating a branch, resetting, recreating, upgrading or deleting one, restoring a checkpoint, creating or snapshotting a base, loading a dump, refreshing a base, and installing a runtime take from seconds to minutes. These calls answer `202 Accepted` at once, with a `Location` header and an Operation:
 
     ```json
     { "id": "op_01JC8Z6Q4M7V3X2N9K5R8T1W0B", "kind": "branch.create", "target": { "resource": "branch", "name": "feature-x" },
@@ -113,7 +115,7 @@ servers:
     variables:
       node: {default: node1.example.com, description: Host name of a node.}
   - url: http://unix
-    description: The local socket /run/db-branch/agent.sock (root or the db-branch group; no session).
+    description: The local socket /run/db-branch/agent.sock (root or the db-branch-admin group; no session).
 security:
   - bearerAuth: []
   - session: []
@@ -130,7 +132,7 @@ tags:
     description: Move one branch to a newer runtime of its engine (mainly MySQL 8.0 to 8.4) to test a migration, with a pre-check, an automatic checkpoint and a rollback if it fails. The base and other branches are untouched. The operation's `result` is an UpgradeResult.
   - name: bases
     x-displayName: Bases
-    description: 'A base is the source branches are cloned from: a database server whose data is frozen in snapshots. Bases are created empty or from a dump, can be masked copies of other bases, and keep replicas on other nodes. A snapshot can be made public so that anyone may create a branch from it without logging in, within limits (`anonymous`). Calls for a base held by another node are passed on to that node. Status: `provisioning`, `ready`, `maintenance`, `failed`.'
+    description: 'A base is the source branches are cloned from: a database server whose data is frozen in snapshots. Bases are created empty or from a dump, and keep replicas on other nodes. A snapshot can be made public so that anyone may create a branch from it without logging in, within limits (`anonymous`). Calls for a base held by another node are passed on to that node. Status: `provisioning`, `ready`, `maintenance`, `failed`.'
   - name: refresh
     x-displayName: Scheduled refresh
     description: 'A base can be refreshed from a source database on a schedule: dump the source, load it, take a snapshot. The interval is at least one hour. The source password is stored but never returned.'
@@ -171,8 +173,8 @@ tags:
     x-displayName: Modules
     description: Modules extend db-branch (history, diff, authentication, masking, ...). Turning one on installs its package on every node. The APIs and pages a module adds are served under `/v1/ext/<module>/` and documented by the module.
   - name: license
-    x-displayName: Licence
-    description: Paid modules work for 30 days without a key, then only under a licence key. Keys of a subscription renew online through the cluster leader.
+    x-displayName: License
+    description: Paid modules work for 30 days without a key, then only under a license key. Keys of a subscription renew online through the cluster leader.
   - name: updates
     x-displayName: Cluster updates
     description: Rolling updates of every node to a newer minor or patch version, followers first and the leader last. It stops at the first failed node and does not roll back.
@@ -446,14 +448,14 @@ paths:
       tags: [branches]
       operationId: pauseBranch
       summary: Pause a branch
-      x-dbb-action: branch.update
+      x-dbb-action: branch.pause
       x-dbb-token-scopes: [full, branches]
       description: |-
         Stops the branch's database server cleanly and keeps its data: the dataset, the port and the credentials stay, nothing runs and no memory is held. Connections are refused until the branch is resumed. The expiry keeps running: a paused branch that expires is deleted. Answers `202` with an operation of kind `branch.pause`.
 
         Only a `ready` branch can be paused. The request is refused with `cluster_upgrading` until every node runs the version that knows the `paused` status.
 
-        **Action:** `branch.update`. Allowed for `full` and `branches` tokens. Allowed for the branch's owner and admins.
+        **Action:** `branch.pause` (legacy alias `branch.update`). Allowed for `full` and `branches` tokens. Allowed for the branch's owner and admins.
       parameters:
         - {$ref: '#/components/parameters/BranchName'}
       responses:
@@ -482,12 +484,12 @@ paths:
       tags: [branches]
       operationId: resumeBranch
       summary: Resume a paused branch
-      x-dbb-action: branch.update
+      x-dbb-action: branch.resume
       x-dbb-token-scopes: [full, branches]
       description: |-
         Starts a paused branch's database server again, on the same port and with the same credentials. Answers `202` with an operation of kind `branch.resume`. If the server cannot start, the branch stays `paused` with the reason in `status_reason`, and the request can be repeated.
 
-        **Action:** `branch.update`. Allowed for `full` and `branches` tokens. Allowed for the branch's owner and admins.
+        **Action:** `branch.resume` (legacy alias `branch.update`). Allowed for `full` and `branches` tokens. Allowed for the branch's owner and admins.
       parameters:
         - {$ref: '#/components/parameters/BranchName'}
       responses:
@@ -833,12 +835,12 @@ paths:
       tags: [checkpoints]
       operationId: deleteCheckpoint
       summary: Delete a checkpoint
-      x-dbb-action: branch.checkpoint_delete
+      x-dbb-action: branch.checkpoint.delete
       x-dbb-token-scopes: [full, branches]
       description: |-
         Deletes a checkpoint.
 
-        **Action:** `branch.checkpoint_delete`. Allowed for `full` and `branches` tokens. Allowed for the branch's owner and admins.
+        **Action:** `branch.checkpoint.delete` (legacy alias `branch.checkpoint_delete`). Allowed for `full` and `branches` tokens. Allowed for the branch's owner and admins.
       parameters:
         - {$ref: '#/components/parameters/BranchName'}
         - {$ref: '#/components/parameters/CheckpointName'}
@@ -1340,12 +1342,12 @@ paths:
       tags: [bases]
       operationId: deleteSnapshot
       summary: Delete a snapshot
-      x-dbb-action: base.snapshot_delete
+      x-dbb-action: base.snapshot.delete
       x-dbb-token-scopes: [full]
       description: |-
         Deletes a snapshot. The latest snapshot and snapshots that branches use cannot be deleted. Older unused snapshots are also pruned automatically when `base.prune_snapshots` is on.
 
-        **Action:** `base.snapshot_delete`. Needs a console session of an admin, the local socket, or a `full` token.
+        **Action:** `base.snapshot.delete` (legacy alias `base.snapshot_delete`). Needs a console session of an admin, the local socket, or a `full` token.
       parameters:
         - {$ref: '#/components/parameters/BaseName'}
         - {$ref: '#/components/parameters/SnapshotName'}
@@ -1360,45 +1362,6 @@ paths:
               schema: {$ref: '#/components/schemas/Error'}
         '409':
           description: 'conflict: it is the latest snapshot. in_use: branches use it.'
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/Error'}
-        '503': {$ref: '#/components/responses/Unavailable'}
-  /v1/bases/{name}/mask:
-    post:
-      tags: [bases]
-      operationId: maskBase
-      summary: Write a masked copy of another base
-      x-dbb-action: base.mask
-      x-dbb-token-scopes: [full]
-      description: |-
-        Writes a masked copy of another base into this (empty) base and snapshots it. A masking tool (a module such as Greenmask) does the masking and must be installed. The snapshot records how it was made (`mask`). Answers `202` with an operation of kind `base.mask`.
-
-        **Action:** `base.mask`. Needs a console session of an admin, the local socket, or a `full` token.
-      parameters:
-        - {$ref: '#/components/parameters/BaseName'}
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {$ref: '#/components/schemas/MaskBase'}
-      responses:
-        '202':
-          description: Accepted. Poll the operation or follow the event stream.
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/Operation'}
-          headers:
-            Location: {$ref: '#/components/headers/Location'}
-        '400':
-          description: 'invalid_request: `masker` is missing, or another invalid value.'
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/Error'}
-        '401': {$ref: '#/components/responses/Unauthenticated'}
-        '403': {$ref: '#/components/responses/Forbidden'}
-        '404':
-          description: 'not_found: no such base or source.'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -2307,6 +2270,7 @@ paths:
               schema: {$ref: '#/components/schemas/LoginMethods'}
               example:
                 items: []
+                next_cursor: null
         '500':
           description: 'internal: unexpected error.'
           content:
@@ -2320,9 +2284,9 @@ paths:
       x-dbb-action: auth.session
       x-dbb-token-scopes: [full]
       description: |-
-        Returns the same object as login for the current session. Over the local socket, which has no session, it answers `401`.
+        Returns the same object as login for the current session. Over the local socket or with an API token, which has no session, it answers `401`.
 
-        **Action:** `auth.session`. Needs a console session of an admin, the local socket, or a `full` token.
+        **Action:** `auth.session`. Requires a console session (`dbb_session` cookie).
       security:
         - session: []
       responses:
@@ -2751,7 +2715,7 @@ paths:
       x-dbb-action: setting.read
       x-dbb-token-scopes: [full]
       description: |-
-        Lists every scope with its settings, current values and defaults. Secret settings (the licence key, the open-branch password, webhook secrets) are write-only: their `value` is always empty and `secret_set` says whether one is stored.
+        Lists every scope with its settings, current values and defaults. Secret settings (the license key, the open-branch password, webhook secrets) are write-only: their `value` is always empty and `secret_set` says whether one is stored.
 
         **Action:** `setting.read`. Needs a console session of an admin, the local socket, or a `full` token.
       responses:
@@ -2952,7 +2916,7 @@ paths:
     get:
       tags: [license]
       operationId: getLicense
-      summary: Get the licence state
+      summary: Get the license state
       x-dbb-action: license.read
       x-dbb-token-scopes: [full, branches]
       description: |-
@@ -2968,7 +2932,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '501':
-          description: 'not_implemented: licences are not available on this node.'
+          description: 'not_implemented: licenses are not available on this node.'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -2976,7 +2940,7 @@ paths:
     put:
       tags: [license]
       operationId: applyLicense
-      summary: Save a licence key
+      summary: Save a license key
       x-dbb-action: license.write
       x-dbb-token-scopes: [full]
       description: |-
@@ -3016,7 +2980,7 @@ paths:
     post:
       tags: [license]
       operationId: verifyLicense
-      summary: Check a licence key
+      summary: Check a license key
       x-dbb-action: license.verify
       x-dbb-token-scopes: [full]
       description: |-
@@ -3056,7 +3020,7 @@ paths:
     get:
       tags: [license]
       operationId: getLicenseRenewal
-      summary: Get the licence renewal status
+      summary: Get the license renewal status
       x-dbb-action: license.read
       x-dbb-token-scopes: [full, branches]
       description: |-
@@ -3081,11 +3045,11 @@ paths:
     post:
       tags: [license]
       operationId: renewLicense
-      summary: Renew the licence now
+      summary: Renew the license now
       x-dbb-action: license.write
       x-dbb-token-scopes: [full]
       description: |-
-        Asks the licence service for the renewed key now ("Check now"), through the cluster leader.
+        Asks the license service for the renewed key now ("Check now"), through the cluster leader.
 
         **Action:** `license.write`. Needs a console session of an admin, the local socket, or a `full` token.
       responses:
@@ -3374,7 +3338,7 @@ paths:
       description: |-
         The MCP endpoint (Streamable HTTP, stateless, JSON responses) for LLM agents. It takes the same bearer tokens and runs every tool through the same routes, so authorization and audit are those of the REST calls below. The caller needs the action `mcp.use`. Only POST is supported.
 
-        Tools: `list_bases`, `list_branches`, `create_branch`, `get_branch`, `reset_branch`, `delete_branch`, `extend_branch`, `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, `check_upgrade`, `upgrade_branch`, `query`.
+        Tools: `list_bases`, `list_branches`, `create_branch`, `fork_branch`, `get_branch`, `reset_branch`, `delete_branch`, `extend_branch`, `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, `check_upgrade`, `upgrade_branch`, `merge_line`, `query`.
 
         **Action:** `mcp.use`. Allowed for `full` and `branches` tokens.
       requestBody:
@@ -3415,7 +3379,7 @@ components:
     localSocket:
       type: http
       scheme: peercred
-      description: The UNIX socket `/run/db-branch/agent.sock` (server URL `http://unix/`). The caller is identified by its process credentials and must be root or in the `db-branch` group; it acts as an admin. No session, cookie or CSRF token.
+      description: The UNIX socket `/run/db-branch/agent.sock` (server URL `http://unix/`). The caller is identified by its process credentials and must be root or in the `db-branch-admin` group; it acts as an admin. No session, cookie or CSRF token.
   parameters:
     BranchName:
       name: name
@@ -3509,12 +3473,14 @@ components:
       examples: [feature-x]
     RuntimeRef:
       type: string
-      pattern: ^(mysql|postgres)@[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-z0-9]+(\.[a-z0-9]+)*)?$
+      pattern: ^[a-z][a-z0-9-]{0,30}@[0-9]+(\.[0-9]+)*(-[a-z0-9]+(\.[a-z0-9]+)*)?$
       description: A database engine version, written `engine@version`.
       examples: [mysql@8.4.13, postgres@18.6]
     Engine:
       type: string
-      enum: [mysql, postgres]
+      pattern: ^[a-z][a-z0-9-]{0,30}$
+      description: Database engine identifier (for example `mysql`, `postgres`, or a runtime module's engine).
+      examples: [mysql, postgres]
     Duration:
       type: string
       description: A Go duration such as `72h`, `30m` or `1h30m`.
@@ -3558,23 +3524,8 @@ components:
           examples: [op_01JC8Z6Q4M7V3X2N9K5R8T1W0B]
         kind:
           type: string
-          enum:
-            - branch.create
-            - branch.reset
-            - branch.pause
-            - branch.resume
-            - branch.fork
-            - branch.recreate
-            - branch.delete
-            - branch.restore
-            - branch.upgrade
-            - branch.merge
-            - base.create
-            - base.snapshot
-            - base.mask
-            - base.load
-            - base.refresh
-            - runtime.install
+          description: 'Task kind (for example `branch.create`, `branch.reset`, `branch.pause`, `branch.resume`, `branch.fork`, `branch.recreate`, `branch.delete`, `branch.restore`, `branch.upgrade`, `branch.merge`, `base.create`, `base.snapshot`, `base.load`, `base.refresh`, `runtime.install`). The set of kinds can grow; treat unknown values as strings.'
+          examples: [branch.create, branch.upgrade]
         target:
           type: object
           properties:
@@ -4306,19 +4257,6 @@ components:
       required: [public]
       additionalProperties: false
       example: {public: true}
-    MaskBase:
-      type: object
-      properties:
-        source: {$ref: '#/components/schemas/Name', description: The base to copy from.}
-        snapshot: {type: string, description: 'Snapshot of the source. Default: its latest.'}
-        masker:
-          type: string
-          description: Name of the masking tool module, for example `greenmask`.
-          examples: [greenmask]
-        rules: {type: string, description: 'Masking rules, in the format the masking tool expects.'}
-      required: [source, masker]
-      additionalProperties: false
-      example: {source: prod-raw, masker: greenmask, rules: '...'}
     BaseSql:
       type: object
       properties:
@@ -4477,7 +4415,8 @@ components:
             rate_per_hour: {type: integer}
           required: [max_ttl, max_branches, branches, rate_per_hour]
           description: The cluster-wide limits for callers without a login.
-      required: [items, anonymous]
+        next_cursor: {type: 'null', description: 'Always null: lists are not paginated.'}
+      required: [items, next_cursor, anonymous]
       example:
         items:
           - name: demo
@@ -4845,7 +4784,8 @@ components:
               label: {type: string}
               url: {type: string, description: 'Where the sign-in starts, under `/v1/ext/<module>/`.'}
             required: [module, label, url]
-      required: [items]
+        next_cursor: {type: 'null', description: 'Always null: lists are not paginated.'}
+      required: [items, next_cursor]
     Preferences:
       type: object
       properties:
@@ -5034,7 +4974,7 @@ components:
           type: string
           enum: [apt, local]
           description: For a runtime module, whether the cluster installs its package (`apt`) or the operator puts it on each node (`local`).
-        requires_license: {type: boolean, description: The module works only under a licence key (after the trial).}
+        requires_license: {type: boolean, description: The module works only under a license key (after the trial).}
         nodes:
           type: array
           items:
@@ -5045,7 +4985,7 @@ components:
               current: {type: boolean}
               problem:
                 type: string
-                description: The module's complaint on that node, for example about the licence.
+                description: The module's complaint on that node, for example about the license.
             required: [node, loaded, current]
       required: [name, version, wanted, requires_license, nodes]
     ModuleList:
@@ -5054,11 +4994,12 @@ components:
         items:
           type: array
           items: {$ref: '#/components/schemas/Module'}
+        next_cursor: {type: 'null', description: 'Always null: lists are not paginated.'}
         available:
           type: object
           additionalProperties: {type: string}
           description: Modules the package repositories offer, with descriptions. Empty when offline.
-      required: [items, available]
+      required: [items, next_cursor, available]
     InstallModule:
       type: object
       properties:
@@ -5069,7 +5010,7 @@ components:
       example: {name: history, version: ''}
     License:
       type: object
-      description: What a licence key says. The key itself is never returned.
+      description: What a license key says. The key itself is never returned.
       properties:
         id: {type: string}
         customer: {type: string}
@@ -5138,10 +5079,10 @@ components:
     LicenseKey:
       type: object
       properties:
-        key: {type: string, description: A licence key.}
+        key: {type: string, description: A license key.}
       required: [key]
       additionalProperties: false
-      example: {key: dbbl1.<licence key>}
+      example: {key: dbbl1.<license key>}
     NodeUpdate:
       type: object
       properties:
@@ -5249,7 +5190,8 @@ components:
         items:
           type: array
           items: {$ref: '#/components/schemas/BackupFile'}
-      required: [node, items]
+        next_cursor: {type: 'null', description: 'Always null: lists are not paginated.'}
+      required: [node, items, next_cursor]
     RestoreSummary:
       type: object
       description: What a restore applied, and the records it left out because their data is not in the backup.

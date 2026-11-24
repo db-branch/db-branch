@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -162,7 +163,7 @@ func TestQuery_任意database指定をRESTとMCPの両方からプロバイダ�
 	for _, bad := range []string{"app?allowAllFiles=true", "bad/db", "bad\ndb"} {
 		q.got.Database = "untouched"
 		resp, body := f.do(t, "POST", "/v1/branches/x/query", map[string]any{"sql": "SELECT 1", "database": bad})
-		if resp.StatusCode != 400 || errCode(body) != "bad_request" || q.got.Database != "untouched" {
+		if resp.StatusCode != 400 || errCode(body) != "invalid_request" || q.got.Database != "untouched" {
 			t.Fatalf("bad database %q: status=%d body=%v got=%+v", bad, resp.StatusCode, body, q.got)
 		}
 	}
@@ -271,23 +272,43 @@ func TestMCP_トークンで接続しブランチを作って使える(t *testin
 	if out, isErr := callText(t, s, "list_bases", map[string]any{}); isErr || !strings.Contains(out, "prod") {
 		t.Errorf("bases: %s", out)
 	}
+	if out, isErr := callText(t, s, "get_branch", map[string]any{"branch": "feature-x"}); isErr || !strings.Contains(out, "dsn") {
+		t.Errorf("get with branch: %s", out)
+	}
 	if out, isErr := callText(t, s, "get_branch", map[string]any{"name": "feature-x"}); isErr || !strings.Contains(out, "dsn") {
-		t.Errorf("get: %s", out)
+		t.Errorf("get with deprecated name alias: %s", out)
 	}
 	if out, isErr := callText(t, s, "query", map[string]any{"branch": "feature-x", "sql": "SELECT 42"}); isErr || !strings.Contains(out, "42") {
 		t.Errorf("query: %s", out)
 	}
-	if out, isErr := callText(t, s, "extend_branch", map[string]any{"name": "feature-x", "ttl": "8h"}); isErr || !strings.Contains(out, "feature-x") {
-		t.Errorf("extend: %s", out)
+	if out, isErr := callText(t, s, "extend_branch", map[string]any{"branch": "feature-x", "ttl": "8h"}); isErr || !strings.Contains(out, "feature-x") {
+		t.Errorf("extend with branch: %s", out)
 	}
-	if out, isErr := callText(t, s, "reset_branch", map[string]any{"name": "feature-x"}); isErr || !strings.Contains(out, "reset") {
+	if out, isErr := callText(t, s, "extend_branch", map[string]any{"name": "feature-x", "ttl": "8h"}); isErr || !strings.Contains(out, "feature-x") {
+		t.Errorf("extend with deprecated name alias: %s", out)
+	}
+	if out, isErr := callText(t, s, "reset_branch", map[string]any{"branch": "feature-x"}); isErr || !strings.Contains(out, "reset") {
 		t.Errorf("reset: %s", out)
 	}
-	if out, isErr := callText(t, s, "delete_branch", map[string]any{"name": "feature-x"}); isErr || !strings.Contains(out, "deleted") {
+	if out, isErr := callText(t, s, "reset_branch", map[string]any{"name": "feature-x"}); isErr || !strings.Contains(out, "reset") {
+		t.Errorf("reset with deprecated name alias: %s", out)
+	}
+	if out, isErr := callText(t, s, "delete_branch", map[string]any{"branch": "feature-x"}); isErr || !strings.Contains(out, "deleted") {
 		t.Errorf("delete: %s", out)
 	}
-	if out, isErr := callText(t, s, "get_branch", map[string]any{"name": "nope"}); !isErr || !strings.Contains(out, "not found") {
+	if out, isErr := callText(t, s, "delete_branch", map[string]any{"name": "rec-x"}); isErr || !strings.Contains(out, "deleted") {
+		t.Errorf("delete with deprecated name alias: %s", out)
+	}
+	if out, isErr := callText(t, s, "get_branch", map[string]any{"branch": "nope"}); !isErr || !strings.Contains(out, "not found") {
 		t.Errorf("missing: %v %s", isErr, out)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name == "upgrade_branch" {
+			raw, _ := json.Marshal(tool.InputSchema)
+			if strings.Contains(string(raw), "list_runtimes") || !strings.Contains(string(raw), "db-branch runtime list") {
+				t.Errorf("upgrade_branch schema still has wrong command name: %s", raw)
+			}
+		}
 	}
 	// Every tool call was authorized and audited as the token's principal.
 	got := strings.Join(sink.actions(), " ")

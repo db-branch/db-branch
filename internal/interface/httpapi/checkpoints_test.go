@@ -240,7 +240,7 @@ func TestCheckpoint_アクション名は操作ごとに分かれる(t *testing.
 	send(t, h, "DELETE", "/v1/branches/alices/checkpoints/c1", nil, as("t-alice"))
 	send(t, h, "POST", "/v1/branches/alices/checkpoints", nil, as("t-bob"))
 	got := strings.Join(sink.actions(), " ")
-	for _, want := range []string{"branch.checkpoint:", "branch.restore:", "branch.checkpoint_delete:", "denied"} {
+	for _, want := range []string{"branch.checkpoint:", "branch.restore:", "branch.checkpoint.delete:", "denied"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("audit %q lacks %q", got, want)
 		}

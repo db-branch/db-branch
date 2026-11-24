@@ -81,6 +81,9 @@ func TestModules_有効化と一覧と無効化(t *testing.T) {
 	if item["wanted"] != true || n1["current"] != true || n2["current"] != false || n2["loaded"] != "0.9" || n2["problem"] != "licence expired" || body["available"].(map[string]any)["audit"] != "Audit trail" {
 		t.Errorf("list = %v", body)
 	}
+	if v, ok := body["next_cursor"]; !ok || v != nil {
+		t.Errorf("modules next_cursor = %v (present=%v), want null", v, ok)
+	}
 	mods.availErr = errors.New("offline")
 	if _, body := f.do(t, "GET", "/v1/modules", nil); len(body["available"].(map[string]any)) != 0 {
 		t.Errorf("offline: %v", body["available"])

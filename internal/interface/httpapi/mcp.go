@@ -154,7 +154,7 @@ func operationResult(f finished) *mcp.CallToolResult {
 
 type upgradeIn struct {
 	Branch     string `json:"branch" jsonschema:"the branch to upgrade"`
-	Runtime    string `json:"runtime" jsonschema:"the target, engine@version, e.g. mysql@8.4.13 (see list_runtimes on the CLI; it must be installed)"`
+	Runtime    string `json:"runtime" jsonschema:"the target, engine@version, e.g. mysql@8.4.13 (see db-branch runtime list on the CLI; it must be installed)"`
 	NoRollback bool   `json:"no_rollback,omitempty" jsonschema:"keep a failed upgrade as it is instead of rolling back"`
 	Force      bool   `json:"force,omitempty" jsonschema:"upgrade although the pre-check found errors"`
 }
@@ -176,7 +176,18 @@ func text(v any) *mcp.CallToolResult {
 }
 
 type nameIn struct {
-	Name string `json:"name" jsonschema:"the branch name"`
+	Branch string `json:"branch,omitempty" jsonschema:"the branch name"`
+	Name   string `json:"name,omitempty" jsonschema:"deprecated alias for branch"`
+}
+
+func resolveBranchArg(branch, name string) (string, error) {
+	if branch != "" {
+		return branch, nil
+	}
+	if name != "" {
+		return name, nil
+	}
+	return "", errors.New("branch is required")
 }
 
 type createIn struct {
@@ -202,8 +213,9 @@ type forkIn struct {
 }
 
 type extendIn struct {
-	Name string `json:"name" jsonschema:"the branch name"`
-	TTL  string `json:"ttl" jsonschema:"new time to live from now, e.g. 24h"`
+	Branch string `json:"branch,omitempty" jsonschema:"the branch name"`
+	Name   string `json:"name,omitempty" jsonschema:"deprecated alias for branch"`
+	TTL    string `json:"ttl" jsonschema:"new time to live from now, e.g. 24h"`
 }
 
 type branchIn struct {
@@ -313,7 +325,11 @@ func (s *Server) mcpServer(r *http.Request) *mcp.Server {
 		})
 	mcp.AddTool(srv, &mcp.Tool{Name: "get_branch", Description: "Show a branch and how to connect to it (dsn)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, any, error) {
-			info, err := s.branchInfo(ctx, r, in.Name)
+			name, err := resolveBranchArg(in.Branch, in.Name)
+			if err != nil {
+				return nil, nil, err
+			}
+			info, err := s.branchInfo(ctx, r, name)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -321,17 +337,25 @@ func (s *Server) mcpServer(r *http.Request) *mcp.Server {
 		})
 	action := func(method, suffix, done string) mcp.ToolHandlerFor[nameIn, any] {
 		return func(ctx context.Context, _ *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, any, error) {
-			if err := s.startAndWait(ctx, r, method, "/v1/branches/"+url.PathEscape(in.Name)+suffix, nil); err != nil {
+			name, err := resolveBranchArg(in.Branch, in.Name)
+			if err != nil {
 				return nil, nil, err
 			}
-			return text(map[string]string{"branch": in.Name, "result": done}), nil, nil
+			if err := s.startAndWait(ctx, r, method, "/v1/branches/"+url.PathEscape(name)+suffix, nil); err != nil {
+				return nil, nil, err
+			}
+			return text(map[string]string{"branch": name, "result": done}), nil, nil
 		}
 	}
 	mcp.AddTool(srv, &mcp.Tool{Name: "reset_branch", Description: "Throw away every change in a branch: back to the state right after it was created (and its init SQL ran)."}, action(http.MethodPost, "/reset", "reset"))
 	mcp.AddTool(srv, &mcp.Tool{Name: "delete_branch", Description: "Delete a branch and its data."}, action(http.MethodDelete, "", "deleted"))
 	mcp.AddTool(srv, &mcp.Tool{Name: "extend_branch", Description: "Keep a branch longer: it now expires ttl from now."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in extendIn) (*mcp.CallToolResult, any, error) {
-			status, body := s.call(ctx, r, http.MethodPatch, "/v1/branches/"+url.PathEscape(in.Name), map[string]string{"ttl": in.TTL})
+			name, err := resolveBranchArg(in.Branch, in.Name)
+			if err != nil {
+				return nil, nil, err
+			}
+			status, body := s.call(ctx, r, http.MethodPatch, "/v1/branches/"+url.PathEscape(name), map[string]string{"ttl": in.TTL})
 			if status >= 300 {
 				return nil, nil, apiError(status, body)
 			}
@@ -436,7 +460,7 @@ func (s *Server) mcpHandler() http.Handler {
 		// A JSON-RPC message is small; read it with a cap before the SDK parses it.
 		body, err := io.ReadAll(io.LimitReader(r.Body, MCPMaxBody+1))
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "bad_request", "cannot read the request")
+			writeError(w, http.StatusBadRequest, "invalid_request", "cannot read the request")
 			return
 		}
 		if len(body) > MCPMaxBody {

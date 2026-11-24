@@ -66,7 +66,7 @@ func (a *App) baseAnonymousCommand() *cobra.Command {
 			"(settings branch.anonymous_max and branch.anonymous_ttl). --max 0 allows none from this base; inherit uses the cluster-wide setting alone. " +
 			"Without flags it shows the current limits.",
 		Args: cobra.ExactArgs(1),
-		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
+		RunE: a.exactNamed(func(cmd *cobra.Command, c Client, n domain.Name) error {
 			body := map[string]any{}
 			if cmd.Flags().Changed("max") {
 				v, err := anonymousMax(most)

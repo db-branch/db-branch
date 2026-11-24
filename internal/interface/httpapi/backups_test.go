@@ -52,6 +52,8 @@ func TestBackups_一覧と今すぐ取得とダウンロード(t *testing.T) {
 	}
 	if _, body := f.do(t, "GET", "/v1/backups", nil); len(body["items"].([]any)) != 1 || body["node"] != "node1" {
 		t.Errorf("list: %v", body)
+	} else if v, ok := body["next_cursor"]; !ok || v != nil {
+		t.Errorf("backups next_cursor = %v (present=%v), want null", v, ok)
 	}
 	rec := httptest.NewRecorder()
 	f.srv.Handler(true).ServeHTTP(rec, httptest.NewRequest("GET", "/v1/backups/db-branch-n1-20261110T030000Z.json.gz", nil))

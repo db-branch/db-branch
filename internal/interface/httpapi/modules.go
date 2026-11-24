@@ -123,7 +123,7 @@ func (s *Server) listModules(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		available = map[string]string{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": out, "available": available})
+	writeJSON(w, http.StatusOK, map[string]any{"items": out, "next_cursor": nil, "available": available})
 }
 
 func (s *Server) installModule(w http.ResponseWriter, r *http.Request) {

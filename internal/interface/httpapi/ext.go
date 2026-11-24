@@ -58,7 +58,7 @@ func (s *Server) loginMethods(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, map[string]string{"module": m.Module, "label": m.Label, "url": "/v1/ext/" + m.Module + m.Path})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+	writeJSON(w, http.StatusOK, map[string]any{"items": out, "next_cursor": nil})
 }
 
 // extAPI serves /v1/ext/{name}/{path...}: a module's own API and pages.

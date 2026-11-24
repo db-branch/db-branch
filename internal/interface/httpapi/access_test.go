@@ -567,3 +567,100 @@ func TestLocalPrincipal_転送ヘッダありでPrincipal欠落や不正ならLo
 		})
 	}
 }
+
+type legacyOnlyAuthorizer struct {
+	mu    sync.Mutex
+	allow map[string]bool
+	seen  []string
+}
+
+func (a *legacyOnlyAuthorizer) Authorize(_ context.Context, _ ext.Principal, action string, _ ext.Resource) error {
+	a.mu.Lock()
+	a.seen = append(a.seen, action)
+	a.mu.Unlock()
+	if a.allow[action] {
+		return nil
+	}
+	return ext.ErrForbidden
+}
+
+func TestAccess_ドット区切りとpause_resume分離の新アクション名と旧名別名の互換(t *testing.T) {
+	f := newFixture(t)
+	sink := &recordingSink{}
+	az := &legacyOnlyAuthorizer{allow: map[string]bool{
+		"branch.extend":            true,
+		"branch.update":            true,
+		"branch.checkpoint_delete": true,
+		"base.snapshot_delete":     true,
+		"branch.read":              true,
+		"base.read":                true,
+		"auth.session":             true,
+	}}
+	f.srv.Ext = ext.Module{Authenticator: moduleAuth{}, Authorizer: az, AuditSink: sink}
+	f.branches.mu.Lock()
+	f.branches.branches["x"] = domain.Branch{Name: name("x"), Base: name("prod"), Status: domain.BranchReady, Owner: "sso:alice", OwnerName: "Alice", Runtime: mysql84}
+	b := f.branches.bases["prod"]
+	b.Snapshots = append(b.Snapshots, domain.BaseSnapshot{Name: "s2", CreatedAt: t0})
+	f.branches.bases["prod"] = b
+	f.branches.mu.Unlock()
+
+	h := f.srv.Handler(false)
+	resp, loginBody := send(t, h, "POST", "/v1/auth/login", map[string]any{"username": "alice", "password": "alice-pw"}, nil)
+	cookie, csrf := resp.Cookies()[0], loginBody["csrf_token"].(string)
+
+	// New action names are tried first, then legacy aliases allow an older auth module to authorize.
+	resp, pauseBody := send(t, h, "POST", "/v1/branches/x/pause", nil, withSession(cookie, csrf))
+	if resp.StatusCode != 202 {
+		t.Fatalf("pause with legacy branch.update: %d", resp.StatusCode)
+	}
+	f.waitOp(t, pauseBody["id"].(string))
+	f.branches.mu.Lock()
+	f.branches.branches["x"] = domain.Branch{Name: name("x"), Base: name("prod"), Status: domain.BranchPaused, Owner: "sso:alice", OwnerName: "Alice", Runtime: mysql84}
+	f.branches.mu.Unlock()
+	resp, resumeBody := send(t, h, "POST", "/v1/branches/x/resume", nil, withSession(cookie, csrf))
+	if resp.StatusCode != 202 {
+		t.Fatalf("resume with legacy branch.update: %d", resp.StatusCode)
+	}
+	f.waitOp(t, resumeBody["id"].(string))
+	if resp, _ := send(t, h, "DELETE", "/v1/branches/x/checkpoints/c1", nil, withSession(cookie, csrf)); resp.StatusCode != 204 {
+		t.Fatalf("delete checkpoint with legacy branch.checkpoint_delete: %d", resp.StatusCode)
+	}
+	if resp, _ := send(t, h, "DELETE", "/v1/bases/prod/snapshots/s1", nil, withSession(cookie, csrf)); resp.StatusCode != 204 {
+		t.Fatalf("delete snapshot with legacy base.snapshot_delete: %d", resp.StatusCode)
+	}
+
+	// Audit log must record the canonical new action names.
+	gotAudit := strings.Join(sink.actions(), " ")
+	for _, want := range []string{"branch.pause:", "branch.resume:", "branch.checkpoint.delete:", "base.snapshot.delete:"} {
+		if !strings.Contains(gotAudit, want) {
+			t.Errorf("audit missing new action %q in %s", want, gotAudit)
+		}
+	}
+
+	// Session can & base.can expose the canonical new action names.
+	_, sess := send(t, h, "GET", "/v1/auth/session", nil, withSession(cookie, csrf))
+	can := sess["can"].(map[string]any)
+	for _, a := range []string{"branch.pause", "branch.resume", "branch.checkpoint.delete", "branch.extend"} {
+		if can[a] != true {
+			t.Errorf("session.can[%q] = %v, want true", a, can[a])
+		}
+	}
+	_, baseBody := send(t, h, "GET", "/v1/bases/prod", nil, withSession(cookie, csrf))
+	baseCan := baseBody["can"].(map[string]any)
+	if baseCan["base.snapshot.delete"] != true {
+		t.Errorf("base.can[base.snapshot.delete] = %v, want true", baseCan["base.snapshot.delete"])
+	}
+
+	// Reverse direction: a newer auth module granting only split/dot actions still
+	// keeps legacy UI `can` checks (including branch.update) working during rollout.
+	f.srv.Ext.Authorizer = &legacyOnlyAuthorizer{allow: map[string]bool{
+		"branch.pause":             true,
+		"branch.checkpoint.delete": true,
+		"auth.session":             true,
+	}}
+	_, newSess := send(t, f.srv.Handler(false), "GET", "/v1/auth/session", nil, withSession(cookie, csrf))
+	newCan := newSess["can"].(map[string]any)
+	if newCan["branch.update"] != true || newCan["branch.checkpoint_delete"] != true {
+		t.Errorf("reverse aliases in session.can: %v", newCan)
+	}
+}
