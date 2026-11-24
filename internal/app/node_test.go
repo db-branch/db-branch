@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/app"
 	"github.com/db-branch/db-branch/internal/domain"
@@ -140,5 +141,34 @@ func TestResetPassword_新しいパスワードで初期パスワードのファ
 	}
 	if _, err := os.Stat(n.InitialPasswordFile); !os.IsNotExist(err) {
 		t.Errorf("initial password file should be removed: %v", err)
+	}
+}
+
+func TestInit_カスタムTLS証明書が設定されていれば検証して自己署名を作らない(t *testing.T) {
+	dir := t.TempDir()
+	certFile := filepath.Join(dir, "custom.crt")
+	keyFile := filepath.Join(dir, "custom.key")
+	writeCertPair(t, certFile, keyFile, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour), "custom.example")
+
+	n, _, _, restarts, _ := newNode(t)
+	c := cfg(t)
+	c.Console.TLSCert = certFile
+	c.Console.TLSKey = keyFile
+	if _, err := n.Init(context.Background(), c, "tank"); err != nil {
+		t.Fatal(err)
+	}
+	if *restarts != 1 {
+		t.Errorf("restarts = %d, want 1", *restarts)
+	}
+	if _, err := os.Stat(filepath.Join(c.DataDir, "tls", "cert.pem")); !os.IsNotExist(err) {
+		t.Errorf("self-signed cert should not be created when custom cert is configured")
+	}
+
+	n2, _, _, restarts2, _ := newNode(t)
+	c2 := cfg(t)
+	c2.Console.TLSCert = certFile
+	c2.Console.TLSKey = filepath.Join(dir, "missing.key")
+	if _, err := n2.Init(context.Background(), c2, "tank"); err == nil || *restarts2 != 0 {
+		t.Errorf("invalid custom TLS should fail init before restart: err=%v restarts=%d", err, *restarts2)
 	}
 }

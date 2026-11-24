@@ -155,7 +155,9 @@ type Server struct {
 	// through them (API and MCP). Optional.
 	Providers domain.RuntimeProviders
 	// TLSCertPEM is served at /tls.pem so clients (MCP) can trust the node.
+	// When TLSCert is set, it overrides TLSCertPEM dynamically (for hot reload).
 	TLSCertPEM []byte
+	TLSCert    func() []byte
 	// Settings manages cluster-wide settings. Optional.
 	Settings Settings
 	// DefaultTTL is applied to branches created without one. Optional.
@@ -241,10 +243,12 @@ func (s *Server) Handler(local bool) http.Handler {
 			s.loginMethods(w, r)
 			return
 		}
-		if r.URL.Path == pathTLS && s.TLSCertPEM != nil {
-			w.Header().Set("Content-Type", "application/x-pem-file")
-			_, _ = w.Write(s.TLSCertPEM)
-			return
+		if r.URL.Path == pathTLS {
+			if pem := s.tlsCertPEM(); pem != nil {
+				w.Header().Set("Content-Type", "application/x-pem-file")
+				_, _ = w.Write(pem)
+				return
+			}
 		}
 		if strings.HasPrefix(r.URL.Path, "/v1/") {
 			api.ServeHTTP(w, r)
@@ -268,6 +272,13 @@ const (
 
 // outerPatterns are the routes Handler answers itself, ahead of the mux. The
 // OpenAPI test reads them together with the patterns routes registers.
+func (s *Server) tlsCertPEM() []byte {
+	if s.TLSCert != nil {
+		return s.TLSCert()
+	}
+	return s.TLSCertPEM
+}
+
 var outerPatterns = []string{"GET " + pathHealthz, "GET " + pathReadyz, "GET " + pathTLS, "GET " + pathAuthMethods}
 
 // router is the part of *http.ServeMux that routes needs: registering

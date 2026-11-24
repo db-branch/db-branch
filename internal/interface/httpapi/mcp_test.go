@@ -423,6 +423,20 @@ func TestTLSCert_証明書を配る(t *testing.T) {
 	if rec.Code != 200 || !strings.HasPrefix(rec.Body.String(), "-----BEGIN CERTIFICATE") {
 		t.Errorf("%d %q", rec.Code, rec.Body.String())
 	}
+
+	current := []byte("-----BEGIN CERTIFICATE-----\nFIRST\n")
+	f.srv.TLSCert = func() []byte { return current }
+	rec = httptest.NewRecorder()
+	f.srv.Handler(false).ServeHTTP(rec, httptest.NewRequest("GET", "/tls.pem", nil))
+	if rec.Code != 200 || rec.Body.String() != string(current) {
+		t.Errorf("dynamic first: %d %q", rec.Code, rec.Body.String())
+	}
+	current = []byte("-----BEGIN CERTIFICATE-----\nSECOND\n")
+	rec = httptest.NewRecorder()
+	f.srv.Handler(false).ServeHTTP(rec, httptest.NewRequest("GET", "/tls.pem", nil))
+	if rec.Code != 200 || rec.Body.String() != string(current) {
+		t.Errorf("dynamic second: %d %q", rec.Code, rec.Body.String())
+	}
 }
 
 func TestQuery_エンジンがqueryを宣言していなければ409_feature_not_supported(t *testing.T) {
