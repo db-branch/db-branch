@@ -37,6 +37,11 @@ func (f *fakeTokens) Create(_ context.Context, name, scope string, ttl time.Dura
 	f.created = append(f.created, name+"/"+scope+"/"+ttl.String())
 	return "dbb_x_secret", domain.APIToken{ID: "x", Name: name, Scope: scope, CreatedAt: t0}, f.err
 }
+func (f *fakeTokens) CreateService(ctx context.Context, name, scope string, ttl time.Duration, bases []string, team string) (string, domain.APIToken, error) {
+	sec, rec, err := f.Create(ctx, name, scope, ttl)
+	rec.Bases, rec.Team = bases, team
+	return sec, rec, err
+}
 func (f *fakeTokens) CreatePersonal(_ context.Context, p ext.Principal, name string, ttl time.Duration) (string, domain.APIToken, error) {
 	return f.Create(ctx, name, "branches", ttl)
 }

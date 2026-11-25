@@ -176,7 +176,12 @@ type BranchOwner struct {
 // personal token holds non-admin roles of its owner. Older nodes drop that
 // field, so personal tokens with OwnerRoles wait for protocol 28 everywhere
 // (domain.ProtocolPersonalTokenRoles).
-const Protocol = 28
+//
+// 29: service token restrictions: put_token carries APIToken.Bases / APIToken.Team
+// when a service token is scoped to specific bases or a team. Older nodes drop
+// those fields, so restricted service tokens wait for protocol 29 everywhere
+// (domain.ProtocolServiceTokenRestrictions).
+const Protocol = 29
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a
@@ -223,8 +228,13 @@ func (c Command) Needs() int {
 			return domain.ProtocolBranchFork
 		}
 	}
-	if c.Op == "put_token" && c.Token != nil && len(c.Token.OwnerRoles) > 0 {
-		return domain.ProtocolPersonalTokenRoles
+	if c.Op == "put_token" && c.Token != nil {
+		if len(c.Token.Bases) > 0 || c.Token.Team != "" {
+			return domain.ProtocolServiceTokenRestrictions
+		}
+		if len(c.Token.OwnerRoles) > 0 {
+			return domain.ProtocolPersonalTokenRoles
+		}
 	}
 	return opProtocol[c.Op]
 }
@@ -526,6 +536,7 @@ func (f *FSM) apply(c Command) error {
 		}
 		tok := *c.Token
 		tok.OwnerRoles = append([]string(nil), tok.OwnerRoles...)
+		tok.Bases = append([]string(nil), tok.Bases...)
 		s.Tokens[tok.ID] = tok
 	case "delete_token":
 		delete(s.Tokens, c.Name)
@@ -746,6 +757,7 @@ func (f *FSM) State() State {
 			out.Tokens = map[string]domain.APIToken{}
 		}
 		v.OwnerRoles = append([]string(nil), v.OwnerRoles...)
+		v.Bases = append([]string(nil), v.Bases...)
 		out.Tokens[k] = v
 	}
 	for m, v := range f.state.ModuleData {

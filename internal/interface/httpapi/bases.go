@@ -209,8 +209,12 @@ func (s *Server) listBases(w http.ResponseWriter, r *http.Request, svc Branches)
 		return
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Name.String() < list[j].Name.String() })
+	p := principalOf(r)
 	out := make([]baseJSON, 0, len(list))
 	for _, b := range list {
+		if !allowsTokenBase(p, b.Name.String()) {
+			continue
+		}
 		out = append(out, s.baseViewFor(r, b))
 	}
 	writeJSON(w, http.StatusOK, items(out))
@@ -241,10 +245,10 @@ func (s *Server) publishBase(ctx context.Context, svc Branches, n domain.Name) {
 func (s *Server) publishBaseNow(ctx context.Context, svc Branches, n domain.Name) {
 	b, err := svc.GetBase(ctx, n)
 	if err != nil {
-		s.Bus.PublishTo(operation.Audience{Action: "base.read"}, "base.deleted", map[string]string{"name": n.String()})
+		s.Bus.PublishTo(operation.Audience{Action: "base.read", Base: n.String()}, "base.deleted", map[string]string{"name": n.String()})
 		return
 	}
-	s.Bus.PublishTo(operation.Audience{Action: "base.read"}, "base.updated", s.baseView(ctx, b))
+	s.Bus.PublishTo(operation.Audience{Action: "base.read", Base: n.String()}, "base.updated", s.baseView(ctx, b))
 }
 
 func (s *Server) createBase(w http.ResponseWriter, r *http.Request, svc Branches) {

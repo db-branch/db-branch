@@ -13,6 +13,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -51,6 +54,38 @@ type Authenticator interface {
 // (e.g. through SSO): the console offers it no password change.
 const NoPasswordRole = "password:none"
 
+// BaseRolePrefix and TeamRolePrefix carry optional service-token restrictions
+// in Principal.Roles across authenticators, RPC modules, and cluster forwarding.
+const (
+	BaseRolePrefix = "base:"
+	TeamRolePrefix = "team:"
+)
+
+// TokenBases returns the sorted, deduplicated base names a restricted token is
+// limited to (nil means no base restriction).
+func TokenBases(p Principal) []string {
+	var out []string
+	for _, r := range p.Roles {
+		b, ok := strings.CutPrefix(r, BaseRolePrefix)
+		if !ok || b == "" || slices.Contains(out, b) {
+			continue
+		}
+		out = append(out, b)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TokenTeam returns the team name a restricted token is linked to ("" if none).
+func TokenTeam(p Principal) string {
+	for _, r := range p.Roles {
+		if t, ok := strings.CutPrefix(r, TeamRolePrefix); ok && t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
 // PasswordChanger is implemented by Authenticators whose users have a
 // password they may change themselves (from the console's account page).
 type PasswordChanger interface {
@@ -84,9 +119,10 @@ func (rs Resolvers) ResolvePrincipal(ctx context.Context, p Principal) (Principa
 
 // BranchInfo is an existing branch, as a BranchPolicy sees it.
 type BranchInfo struct {
-	Name  string `json:"name"`
-	Owner string `json:"owner"`
-	Base  string `json:"base"`
+	Name      string `json:"name"`
+	Owner     string `json:"owner"`
+	Base      string `json:"base"`
+	OwnerTeam string `json:"owner_team,omitempty"`
 }
 
 // BranchRequest is a branch someone (not an admin) is about to create.

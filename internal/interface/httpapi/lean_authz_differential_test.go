@@ -144,6 +144,9 @@ func newLeanMemTokens() leanMemTokens {
 func (m leanMemTokens) Create(ctx context.Context, name, scope string, ttl time.Duration) (string, domain.APIToken, error) {
 	return m.svc.Create(ctx, name, scope, ttl)
 }
+func (m leanMemTokens) CreateService(ctx context.Context, name, scope string, ttl time.Duration, bases []string, team string) (string, domain.APIToken, error) {
+	return m.svc.CreateService(ctx, name, scope, ttl, bases, team)
+}
 func (m leanMemTokens) ListService(ctx context.Context) ([]domain.APIToken, error) {
 	return m.svc.ListService(ctx)
 }

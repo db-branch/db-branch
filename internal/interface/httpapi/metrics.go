@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/pkg/ext"
 )
 
 // requestCounter counts API requests by action and outcome on this node.
@@ -109,6 +110,23 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request, svc Branches) {
 	if err != nil {
 		fail(w, err)
 		return
+	}
+	caller := principalOf(r)
+	if len(ext.TokenBases(caller)) > 0 {
+		allowedBranches := make([]domain.Branch, 0, len(branches))
+		for _, b := range branches {
+			if allowsTokenBase(caller, b.Base.String()) {
+				allowedBranches = append(allowedBranches, b)
+			}
+		}
+		branches = allowedBranches
+		allowedBases := make([]domain.Base, 0, len(bases))
+		for _, b := range bases {
+			if allowsTokenBase(caller, b.Name.String()) {
+				allowedBases = append(allowedBases, b)
+			}
+		}
+		bases = allowedBases
 	}
 	var p promWriter
 	p.family("dbbranch_build_info", "gauge", "The serving node and its version.")

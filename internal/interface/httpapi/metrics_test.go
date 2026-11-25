@@ -5,11 +5,15 @@ import (
 	"errors"
 	"io"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/infrastructure/filestore"
 	"github.com/db-branch/db-branch/internal/interface/httpapi"
+	"github.com/db-branch/db-branch/internal/usecase/token"
 )
 
 func scrape(t *testing.T, f *fixture) (int, string) {
@@ -224,5 +228,41 @@ func TestReadyz_modules_pending時に503汎用メッセージを返し内部エ�
 	sf.srv.Node = ""
 	if code, body := sget("/readyz"); code != 503 || strings.TrimSpace(body) != "not ready" {
 		t.Errorf("single-node empty node readyz: %d %q", code, body)
+	}
+}
+
+func TestMetrics_Base制限サービスTokenは許可Base以外のBase名と件数を見ない(t *testing.T) {
+	f := newFixture(t)
+	toks := &token.Service{Store: &filestore.Store{Path: filepath.Join(t.TempDir(), "t.json")}, Clock: func() time.Time { return t0 }}
+	f.srv.Tokens, f.srv.TokenAuth = toks, toks
+	f.branches.bases["prod"] = domain.Base{Name: name("prod"), Status: domain.BaseReady, Runtime: mysql84, Snapshots: []domain.BaseSnapshot{{Name: "s1"}}}
+	f.branches.bases["secretbase"] = domain.Base{Name: name("secretbase"), Status: domain.BaseReady, Runtime: mysql84, Snapshots: []domain.BaseSnapshot{{Name: "s1"}}}
+	f.branches.branches["b-prod"] = domain.Branch{Name: name("b-prod"), Base: name("prod"), Node: "node1", Status: domain.BranchReady, Runtime: mysql84}
+	f.branches.branches["b-secret"] = domain.Branch{Name: name("b-secret"), Base: name("secretbase"), Node: "node1", Status: domain.BranchReady, Runtime: mysql84}
+
+	secret, _, err := toks.CreateService(context.Background(), "ci-prod", domain.ScopeBranches, 0, []string{"prod"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", "/v1/metrics", nil)
+	as(secret)(req)
+	rec := httptest.NewRecorder()
+	f.srv.Handler(false).ServeHTTP(rec, req)
+	out := rec.Body.String()
+	if rec.Code != 200 {
+		t.Fatalf("metrics as restricted token: %d %s", rec.Code, out)
+	}
+	if strings.Contains(out, "secretbase") {
+		t.Fatalf("metrics leaked disallowed base name:\n%s", out)
+	}
+	for _, want := range []string{
+		`dbbranch_bases{status="ready"} 1`,
+		`dbbranch_base_snapshots{base="prod"} 1`,
+		`dbbranch_base_replicas_missing{base="prod"} 0`,
+		`dbbranch_branches{node="node1",status="ready"} 1`,
+	} {
+		if !strings.Contains(out, want+"\n") {
+			t.Errorf("missing expected metric %q in:\n%s", want, out)
+		}
 	}
 }

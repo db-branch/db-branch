@@ -369,10 +369,10 @@ func (s *Server) publishBranchNow(ctx context.Context, svc Branches, n domain.Na
 		s.Bus.PublishTo(aud, "branch.deleted", map[string]string{"name": n.String()})
 		return
 	}
-	aud := operation.Audience{Owner: b.Owner, Open: b.Open()}
+	aud := operation.Audience{Owner: b.Owner, Open: b.Open(), Base: b.Base.String()}
 	if prev, ok := s.branchAudiences.Swap(n.String(), aud); ok && prev.(operation.Audience).Open && !aud.Open {
 		// Made private: tell the people who saw it open to drop it.
-		s.Bus.PublishTo(operation.Audience{Open: true}, "branch.deleted", map[string]string{"name": n.String()})
+		s.Bus.PublishTo(operation.Audience{Open: true, Base: b.Base.String()}, "branch.deleted", map[string]string{"name": n.String()})
 	}
 	s.Bus.PublishTo(aud, "branch.updated", s.branchView(ctx, svc, b))
 }
@@ -395,7 +395,7 @@ func (s *Server) seedBranchAudiences(ctx context.Context) {
 	}
 	s.seeded = true
 	for _, b := range list {
-		s.branchAudiences.LoadOrStore(b.Name.String(), operation.Audience{Owner: b.Owner, Open: b.Open()})
+		s.branchAudiences.LoadOrStore(b.Name.String(), operation.Audience{Owner: b.Owner, Open: b.Open(), Base: b.Base.String()})
 	}
 }
 

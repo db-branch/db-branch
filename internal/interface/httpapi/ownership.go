@@ -87,6 +87,60 @@ func (o ownership) branch(ctx context.Context, name string) (domain.Branch, bool
 	return b, err == nil
 }
 
+// allowsTokenBase reports whether p (if a base-restricted service token) may
+// access base. Unrestricted tokens, users, and admins always pass.
+func allowsTokenBase(p ext.Principal, base string) bool {
+	if isAdmin(p) {
+		return true
+	}
+	bases := ext.TokenBases(p)
+	return len(bases) == 0 || slices.Contains(bases, base)
+}
+
+func (s *Server) serviceTokenTeams(ctx context.Context) (map[string]string, error) {
+	if s.Tokens == nil {
+		return nil, nil
+	}
+	list, err := s.Tokens.ListService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, t := range list {
+		if t.Team != "" {
+			out["token:"+t.ID] = t.Team
+		}
+	}
+	return out, nil
+}
+
+func (s *Server) sharesBranchesWithOwner(ctx context.Context, p ext.Principal, owner string) bool {
+	if s.Ext.BranchPolicy == nil || owner == "" || strings.HasPrefix(owner, ext.TeamRolePrefix) {
+		return false
+	}
+	if s.Ext.BranchPolicy.SharesBranches(ctx, p, owner) {
+		return true
+	}
+	if _, ok := strings.CutPrefix(owner, "token:"); ok {
+		teams, err := s.serviceTokenTeams(ctx)
+		if err != nil {
+			return false
+		}
+		if team := teams[owner]; team != "" {
+			tp := ext.Principal{ID: owner, Roles: []string{"scope:" + domain.ScopeBranches, ext.TeamRolePrefix + team}}
+			if s.Ext.BranchPolicy.SharesBranches(ctx, tp, p.ID) {
+				return true
+			}
+			// Two service tokens linked to the same team share branches through the
+			// synthetic team: owner key so policy modules can verify the team exists.
+			if strings.HasPrefix(p.ID, "token:") && ext.TokenTeam(p) == team {
+				return s.Ext.BranchPolicy.SharesBranches(ctx, p, ext.TeamRolePrefix+team)
+			}
+		}
+	}
+	return false
+}
+
 // canManageBranch reports whether p owns b or shares branches with b's owner
 // (or is an admin). Legacy branches without an owner are admin-only.
 func (s *Server) canManageBranch(ctx context.Context, p ext.Principal, b domain.Branch) bool {
@@ -96,10 +150,13 @@ func (s *Server) canManageBranch(ctx context.Context, p ext.Principal, b domain.
 	if p.ID == Anonymous.ID || b.Owner == "" {
 		return false
 	}
+	if !allowsTokenBase(p, b.Base.String()) {
+		return false
+	}
 	if ownsBranch(p, b) {
 		return true
 	}
-	return s.Ext.BranchPolicy != nil && s.Ext.BranchPolicy.SharesBranches(ctx, p, b.Owner)
+	return s.sharesBranchesWithOwner(ctx, p, b.Owner)
 }
 
 // ownsBranch reports whether p is the owner of b. Owners are immutable IDs;
@@ -109,14 +166,37 @@ func ownsBranch(p ext.Principal, b domain.Branch) bool {
 	return b.Owner != "" && b.Owner == ownerID(p)
 }
 
+func (s *Server) allowsOperationBase(ctx context.Context, p ext.Principal, op operation.Operation) bool {
+	if len(ext.TokenBases(p)) == 0 {
+		return true
+	}
+	switch op.Target.Resource {
+	case "base":
+		return op.Target.Name != "" && allowsTokenBase(p, op.Target.Name)
+	case "branch":
+		if b, ok := (ownership{s}).branch(ctx, op.Target.Name); ok {
+			return allowsTokenBase(p, b.Base.String())
+		}
+		// Once a branch is deleted, its base is no longer resolvable; keep the
+		// token's own operations visible and fail closed for teammate branches.
+		return op.Owner == p.ID
+	default:
+		return true
+	}
+}
+
 // canSeeOperation reports whether p may read op: admins, the principal that
 // started it and whoever shares that principal's branches. Operations nobody
 // owns (started by the system) are admin-only. Anonymous callers see only
 // operations anonymous callers started.
 func (s *Server) canSeeOperation(ctx context.Context, p ext.Principal, op operation.Operation) bool {
-	switch {
-	case isAdmin(p):
+	if isAdmin(p) {
 		return true
+	}
+	if !s.allowsOperationBase(ctx, p, op) {
+		return false
+	}
+	switch {
 	case op.Owner == "":
 		return false
 	case op.Owner == p.ID:
@@ -124,20 +204,25 @@ func (s *Server) canSeeOperation(ctx context.Context, p ext.Principal, op operat
 	case p.ID == Anonymous.ID || op.Owner == Anonymous.ID:
 		return false
 	}
-	return s.Ext.BranchPolicy != nil && s.Ext.BranchPolicy.SharesBranches(ctx, p, op.Owner)
+	return s.sharesBranchesWithOwner(ctx, p, op.Owner)
 }
 
 // canReceive reports whether p may receive an event meant for aud. Admins
 // receive everything; an event with no audience is for them alone.
 func (s *Server) canReceive(ctx context.Context, p ext.Principal, aud operation.Audience) bool {
-	switch {
-	case isAdmin(p):
+	if isAdmin(p) {
 		return true
-	case p.ID == Anonymous.ID:
+	}
+	if p.ID == Anonymous.ID {
 		return false
+	}
+	if aud.Base != "" && !allowsTokenBase(p, aud.Base) {
+		return false
+	}
+	switch {
 	case aud.Open:
 		return true
-	case aud.Owner != "" && (aud.Owner == p.ID || (aud.Owner != Anonymous.ID && s.Ext.BranchPolicy != nil && s.Ext.BranchPolicy.SharesBranches(ctx, p, aud.Owner))):
+	case aud.Owner != "" && (aud.Owner == p.ID || (aud.Owner != Anonymous.ID && s.sharesBranchesWithOwner(ctx, p, aud.Owner))):
 		return true
 	case aud.Action != "":
 		kind, _, _ := strings.Cut(aud.Action, ".")
@@ -147,9 +232,9 @@ func (s *Server) canReceive(ctx context.Context, p ext.Principal, aud operation.
 }
 
 // canReadBranch reports whether p may read, connect to, or query b: managers
-// of b plus anyone for open branches.
+// of b plus anyone for open branches (subject to token base restrictions).
 func (s *Server) canReadBranch(ctx context.Context, p ext.Principal, b domain.Branch) bool {
-	return b.Open() || s.canManageBranch(ctx, p, b)
+	return allowsTokenBase(p, b.Base.String()) && (b.Open() || s.canManageBranch(ctx, p, b))
 }
 
 func (o ownership) Authorize(ctx context.Context, p ext.Principal, action string, r ext.Resource) error {
@@ -164,12 +249,21 @@ func (o ownership) Authorize(ctx context.Context, p ext.Principal, action string
 		}
 		return fmt.Errorf("%w: log in for %s (without a login: branches from public snapshots, and open branches)", ext.ErrForbidden, action)
 	}
-	if isAdmin(p) || r.Kind != "branch" || r.Name == "" || action == "branch.create" {
+	if isAdmin(p) {
+		return nil
+	}
+	if r.Kind == "base" && r.Name != "" && !allowsTokenBase(p, r.Name) {
+		return fmt.Errorf("%w: token is not allowed to access base %s", ext.ErrForbidden, r.Name)
+	}
+	if r.Kind != "branch" || r.Name == "" || action == "branch.create" {
 		return nil
 	}
 	b, ok := o.branch(ctx, r.Name)
 	if !ok {
 		return nil // unknown branches answer 404 in the handler
+	}
+	if !allowsTokenBase(p, b.Base.String()) {
+		return fmt.Errorf("%w: token is not allowed to access branches from base %s", ext.ErrForbidden, b.Base)
 	}
 	switch action {
 	case "branch.read", "branch.connect", "branch.query":
@@ -482,6 +576,9 @@ func (s *Server) clampBranchTTL(ctx context.Context, p ext.Principal, base strin
 // reserveBranchPolicy checks BranchPolicy under policyMu and reserves the branch
 // name until async creation makes it visible in ListBranches (or fails).
 func (s *Server) reserveBranchPolicy(ctx context.Context, svc Branches, p ext.Principal, in createBranchJSON, ttl time.Duration) (func(), error) {
+	if !allowsTokenBase(p, in.Base) {
+		return func() {}, fmt.Errorf("%w: token is not allowed to branch from base %s", ext.ErrForbidden, in.Base)
+	}
 	pol := s.Ext.BranchPolicy
 	if pol == nil {
 		return func() {}, nil // every policy decides whom it limits (the team limits skip admins)
@@ -503,16 +600,20 @@ func (s *Server) reserveBranchPolicy(ctx context.Context, svc Branches, p ext.Pr
 			}
 		}
 	}
+	tokenTeams, err := s.serviceTokenTeams(ctx)
+	if err != nil {
+		return func() {}, err
+	}
 	listed := map[string]bool{}
 	for _, b := range list {
 		listed[b.Name.String()] = true
-		req.Existing = append(req.Existing, ext.BranchInfo{Name: b.Name.String(), Owner: b.Owner, Base: b.Base.String()})
+		req.Existing = append(req.Existing, ext.BranchInfo{Name: b.Name.String(), Owner: b.Owner, Base: b.Base.String(), OwnerTeam: tokenTeams[b.Owner]})
 	}
 	for name, res := range s.policyPending {
 		if listed[name] {
 			continue
 		}
-		req.Existing = append(req.Existing, ext.BranchInfo{Name: name, Owner: res.owner, Base: res.base})
+		req.Existing = append(req.Existing, ext.BranchInfo{Name: name, Owner: res.owner, Base: res.base, OwnerTeam: tokenTeams[res.owner]})
 	}
 	if err := pol.CheckBranch(ctx, p, req); err != nil {
 		return func() {}, err

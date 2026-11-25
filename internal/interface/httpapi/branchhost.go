@@ -272,7 +272,7 @@ func (h *branchHost) SharesBranches(ctx context.Context, p ext.Principal, owner 
 	if owner == "" || owner == Anonymous.ID || h.s.Ext.BranchPolicy == nil {
 		return false
 	}
-	return h.s.Ext.BranchPolicy.SharesBranches(ctx, p, owner)
+	return h.s.sharesBranchesWithOwner(ctx, p, owner)
 }
 
 func domainName(s string) domain.Name {

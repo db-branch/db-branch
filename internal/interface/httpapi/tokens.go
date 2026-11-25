@@ -14,6 +14,7 @@ import (
 // Tokens is the API token use case the API needs.
 type Tokens interface {
 	Create(ctx context.Context, name, scope string, ttl time.Duration) (string, domain.APIToken, error)
+	CreateService(ctx context.Context, name, scope string, ttl time.Duration, bases []string, team string) (string, domain.APIToken, error)
 	// ListService lists the service tokens (not tied to a person).
 	ListService(ctx context.Context) ([]domain.APIToken, error)
 	Revoke(ctx context.Context, id string) error
@@ -25,17 +26,19 @@ type Tokens interface {
 }
 
 type tokenJSON struct {
-	ID        string  `json:"id"`
-	Name      string  `json:"name"`
-	Scope     string  `json:"scope"`
-	CreatedAt string  `json:"created_at"`
-	ExpiresAt *string `json:"expires_at"`
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Scope     string   `json:"scope"`
+	Bases     []string `json:"bases,omitempty"`
+	Team      string   `json:"team,omitempty"`
+	CreatedAt string   `json:"created_at"`
+	ExpiresAt *string  `json:"expires_at"`
 	// Token is the secret, only in the answer to its creation.
 	Token string `json:"token,omitempty"`
 }
 
 func tokenView(t domain.APIToken) tokenJSON {
-	return tokenJSON{ID: t.ID, Name: t.Name, Scope: t.Scope, CreatedAt: ts(t.CreatedAt), ExpiresAt: optTS(t.ExpiresAt)}
+	return tokenJSON{ID: t.ID, Name: t.Name, Scope: t.Scope, Bases: t.Bases, Team: t.Team, CreatedAt: ts(t.CreatedAt), ExpiresAt: optTS(t.ExpiresAt)}
 }
 
 func (s *Server) withTokens(w http.ResponseWriter) bool {
@@ -67,9 +70,11 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name  string `json:"name"`
-		Scope string `json:"scope"`
-		TTL   string `json:"ttl"`
+		Name  string   `json:"name"`
+		Scope string   `json:"scope"`
+		TTL   string   `json:"ttl"`
+		Bases []string `json:"bases"`
+		Team  string   `json:"team"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -82,7 +87,7 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 	if in.Scope == "" {
 		in.Scope = domain.ScopeBranches
 	}
-	secret, t, err := s.Tokens.Create(r.Context(), in.Name, in.Scope, ttl)
+	secret, t, err := s.Tokens.CreateService(r.Context(), in.Name, in.Scope, ttl, in.Bases, in.Team)
 	if err != nil {
 		fail(w, err)
 		return

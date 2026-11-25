@@ -10,6 +10,9 @@ type Audience struct {
 	Action string
 	// Owner: the principal with this ID and whoever shares its branches.
 	Owner string
+	// Base: when non-empty, base-restricted service tokens receive the event
+	// only when their allowed bases include this base.
+	Base string
 	// Open: every signed-in principal.
 	Open bool
 }
