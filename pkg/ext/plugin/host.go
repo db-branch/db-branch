@@ -59,6 +59,8 @@ type HostCall struct {
 	Op                                          string
 	Name, Checkpoint, Note, Kind, Dir, ID, Text string
 	Line                                        int
+	Principal                                   ext.Principal
+	Owner                                       string
 }
 
 // HostReply is its result.
@@ -69,6 +71,7 @@ type HostReply struct {
 	Checkpoint ext.CheckpointInfo
 	DB         ext.DBAccess
 	Text       string
+	Allowed    bool
 	Err        RPCError
 }
 
@@ -102,6 +105,10 @@ func (s *BranchHostServer) Call(c HostCall, out *HostReply) error {
 		err = h.ReportOperation(ctx, c.ID, c.Text)
 	case "end-op":
 		err = h.EndOperation(ctx, c.ID, c.Text)
+	case "shares-branches":
+		if sh, ok := h.(ext.BranchSharer); ok {
+			out.Allowed = sh.SharesBranches(ctx, c.Principal, c.Owner)
+		}
 	default:
 		err = fmt.Errorf("unknown branch host operation %q", c.Op)
 	}
@@ -173,4 +180,10 @@ func (h *hostRemote) ReportOperation(_ context.Context, id, phase string) error 
 func (h *hostRemote) EndOperation(_ context.Context, id, failure string) error {
 	_, err := h.call(HostCall{Op: "end-op", ID: id, Text: failure})
 	return err
+}
+
+// SharesBranches implements ext.BranchSharer over RPC.
+func (h *hostRemote) SharesBranches(_ context.Context, p ext.Principal, owner string) bool {
+	out, err := h.call(HostCall{Op: "shares-branches", Principal: p, Owner: owner})
+	return err == nil && out.Allowed
 }

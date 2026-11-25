@@ -37,6 +37,19 @@ func forwardedFromNode(r *http.Request) bool {
 	return v
 }
 
+// deactivatedLogoutKey marks a valid cookie session whose user has been
+// disabled or removed externally, so POST /v1/auth/logout can still clear it.
+type deactivatedLogoutKey struct{}
+
+func withDeactivatedLogout(ctx context.Context) context.Context {
+	return context.WithValue(ctx, deactivatedLogoutKey{}, true)
+}
+
+func isDeactivatedLogout(ctx context.Context) bool {
+	v, _ := ctx.Value(deactivatedLogoutKey{}).(bool)
+	return v
+}
+
 // allowSocketOnly reports whether r arrived directly on the local UNIX socket
 // (not over HTTPS and not forwarded from another node). Otherwise it answers
 // 403 socket_only with hint.
@@ -240,11 +253,13 @@ func (s *Server) guard(action string, h http.HandlerFunc) http.HandlerFunc {
 				"this node does not run every module the cluster requires yet ("+strings.Join(pending, ", ")+"); use another node or wait")
 			return
 		}
-		if err := s.authorizer().Authorize(r.Context(), p, action, res); err != nil {
-			audit(ext.OutcomeDenied, http.StatusForbidden)
-			s.requests.add(action, ext.OutcomeDenied)
-			fail(w, err)
-			return
+		if !(action == "auth.logout" && isDeactivatedLogout(r.Context())) {
+			if err := s.authorizer().Authorize(r.Context(), p, action, res); err != nil {
+				audit(ext.OutcomeDenied, http.StatusForbidden)
+				s.requests.add(action, ext.OutcomeDenied)
+				fail(w, err)
+				return
+			}
 		}
 		if changes(r, action) && !forwardedIn && p.ID != LocalPrincipal.ID && s.auditFailClosed() {
 			// Fail closed: the intent is on record before the change runs.

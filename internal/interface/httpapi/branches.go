@@ -405,6 +405,10 @@ func (s *Server) patchBranch(w http.ResponseWriter, r *http.Request, svc Branche
 		fail(w, fmt.Errorf("%w: %v", domain.ErrInvalidTTL, err))
 		return
 	}
+	if err := s.checkExtendPolicy(r.Context(), svc, principalOf(r), n, ttl); err != nil {
+		fail(w, err)
+		return
+	}
 	b, err := svc.ExtendBranch(r.Context(), n, ttl)
 	if err != nil {
 		fail(w, err)

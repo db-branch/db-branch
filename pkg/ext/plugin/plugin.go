@@ -50,12 +50,14 @@ type Info struct {
 	Authenticator, Authorizer, Sink, Router, Configurable bool
 	Handler, Starter                                      bool
 	// PasswordChanger: the Authenticator's users may change their password.
-	PasswordChanger bool
+	PasswordChanger   bool
+	PrincipalResolver bool
 	// RequiresLicense: the module needs a licence key.
-	RequiresLicense bool
-	PublicPaths     []string
-	LoginMethods    []ext.LoginMethod
-	BranchPolicy    bool
+	RequiresLicense    bool
+	PublicPaths        []string
+	LoginMethods       []ext.LoginMethod
+	BranchPolicy       bool
+	BranchExtendPolicy bool
 	// Storage: the module provides storage; SharedStorage: seen by every node.
 	Storage, SharedStorage bool
 	Masker, MaskPolicy     bool
@@ -133,7 +135,9 @@ type AuthorizeArgs struct {
 func (s *rpcServer) Info(_ struct{}, out *Info) error {
 	*out = Info{Name: s.m.Name, Version: s.m.Version,
 		Authenticator: s.m.Authenticator != nil, Authorizer: s.m.Authorizer != nil, Sink: s.m.AuditSink != nil,
-		PasswordChanger: s.passwordChanger() != nil, RequiresLicense: s.m.RequiresLicense, PublicPaths: s.m.PublicPaths, LoginMethods: s.m.LoginMethods, BranchPolicy: s.m.BranchPolicy != nil,
+		PasswordChanger: s.passwordChanger() != nil, PrincipalResolver: s.m.PrincipalResolver != nil,
+		RequiresLicense: s.m.RequiresLicense, PublicPaths: s.m.PublicPaths, LoginMethods: s.m.LoginMethods,
+		BranchPolicy: s.m.BranchPolicy != nil, BranchExtendPolicy: s.branchExtendPolicy() != nil,
 		Router: s.m.Router != nil, Ports: s.m.Ports, Configurable: s.m.Configurable != nil, Settings: s.m.Settings,
 		Handler: s.m.Handler != nil, Pages: s.m.Pages, Starter: s.m.Starter != nil,
 		Storage: s.m.Storage != nil, SharedStorage: s.m.SharedStorage,
@@ -272,6 +276,22 @@ func (s *rpcServer) passwordChanger() ext.PasswordChanger {
 	return pc
 }
 
+func (s *rpcServer) branchExtendPolicy() ext.BranchExtendPolicy {
+	ep, _ := s.m.BranchPolicy.(ext.BranchExtendPolicy)
+	return ep
+}
+
+// ResolvePrincipal resolves a Principal via the module's PrincipalResolver.
+func (s *rpcServer) ResolvePrincipal(p ext.Principal, out *AuthenticateReply) error {
+	if s.m.PrincipalResolver == nil {
+		out.Principal = p
+		return nil
+	}
+	next, err := s.m.PrincipalResolver.ResolvePrincipal(context.Background(), p)
+	out.Principal, out.Err = next, toRPC(err)
+	return nil
+}
+
 // ChangePasswordArgs are the RPC arguments of ChangePassword.
 type ChangePasswordArgs struct {
 	Principal     ext.Principal
@@ -304,6 +324,14 @@ func (s *rpcServer) CheckBranch(a BranchArgs, out *RPCError) error {
 
 func (s *rpcServer) SharesBranches(a BranchArgs, out *bool) error {
 	*out = s.m.BranchPolicy != nil && s.m.BranchPolicy.SharesBranches(context.Background(), a.Principal, a.Owner)
+	return nil
+}
+
+// CheckExtend runs CheckExtend when the module's BranchPolicy implements BranchExtendPolicy.
+func (s *rpcServer) CheckExtend(a BranchArgs, out *RPCError) error {
+	if ep := s.branchExtendPolicy(); ep != nil {
+		*out = toRPC(ep.CheckExtend(context.Background(), a.Principal, a.Request))
+	}
 	return nil
 }
 
@@ -598,6 +626,15 @@ func (r passwordRemote) ChangePassword(_ context.Context, p ext.Principal, curre
 	return out.err()
 }
 
+// ResolvePrincipal implements ext.PrincipalResolver over RPC.
+func (r *Remote) ResolvePrincipal(_ context.Context, p ext.Principal) (ext.Principal, error) {
+	var out AuthenticateReply
+	if err := r.c.Call("Plugin.ResolvePrincipal", p, &out); err != nil {
+		return ext.Principal{}, err
+	}
+	return out.Principal, out.Err.err()
+}
+
 // CheckBranch implements ext.BranchPolicy for a module that has one.
 func (r *Remote) CheckBranch(_ context.Context, p ext.Principal, req ext.BranchRequest) error {
 	var out RPCError
@@ -611,6 +648,16 @@ func (r *Remote) CheckBranch(_ context.Context, p ext.Principal, req ext.BranchR
 func (r *Remote) SharesBranches(_ context.Context, p ext.Principal, owner string) bool {
 	var out bool
 	return r.c.Call("Plugin.SharesBranches", BranchArgs{Principal: p, Owner: owner}, &out) == nil && out
+}
+
+type extendPolicyRemote struct{ *Remote }
+
+func (r extendPolicyRemote) CheckExtend(_ context.Context, p ext.Principal, req ext.BranchRequest) error {
+	var out RPCError
+	if err := r.c.Call("Plugin.CheckExtend", BranchArgs{Principal: p, Request: req}, &out); err != nil {
+		return err
+	}
+	return out.err()
 }
 
 func (r *Remote) Authorize(_ context.Context, p ext.Principal, action string, res ext.Resource) error {
@@ -905,6 +952,9 @@ func start(path string) (*Loaded, error) {
 			m.Authenticator = passwordRemote{remote}
 		}
 	}
+	if info.PrincipalResolver {
+		m.PrincipalResolver = remote
+	}
 	if info.Authorizer {
 		m.Authorizer = remote
 	}
@@ -918,6 +968,9 @@ func start(path string) (*Loaded, error) {
 	m.PublicPaths, m.LoginMethods = info.PublicPaths, info.LoginMethods
 	if info.BranchPolicy {
 		m.BranchPolicy = remote
+		if info.BranchExtendPolicy {
+			m.BranchPolicy = extendPolicyRemote{remote}
+		}
 	}
 	if info.Configurable {
 		m.Configurable = remote

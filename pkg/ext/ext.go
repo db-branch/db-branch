@@ -57,6 +57,31 @@ type PasswordChanger interface {
 	ChangePassword(ctx context.Context, p Principal, current, next string) error
 }
 
+// PrincipalResolver re-checks a session or token principal against a module's
+// current user directory so role changes and disabled or removed users take
+// effect immediately. Resolvers return ErrUnauthenticated when the principal
+// belongs to the module and is no longer active, or return p unchanged for
+// principals owned by other authenticators.
+type PrincipalResolver interface {
+	ResolvePrincipal(ctx context.Context, p Principal) (Principal, error)
+}
+
+// Resolvers chains PrincipalResolvers in order: each resolver updates or
+// rejects principals it owns and passes others through.
+type Resolvers []PrincipalResolver
+
+// ResolvePrincipal runs every resolver in order, stopping on the first error.
+func (rs Resolvers) ResolvePrincipal(ctx context.Context, p Principal) (Principal, error) {
+	for _, r := range rs {
+		next, err := r.ResolvePrincipal(ctx, p)
+		if err != nil {
+			return Principal{}, err
+		}
+		p = next
+	}
+	return p, nil
+}
+
 // BranchInfo is an existing branch, as a BranchPolicy sees it.
 type BranchInfo struct {
 	Name  string `json:"name"`
@@ -86,6 +111,19 @@ type BranchPolicy interface {
 	SharesBranches(ctx context.Context, p Principal, owner string) bool
 }
 
+// BranchExtendPolicy may be implemented by a BranchPolicy to check TTL
+// extensions (PATCH /v1/branches/{name}). Without it, extension only relies
+// on branch ownership and the branch's own TTL rules.
+type BranchExtendPolicy interface {
+	CheckExtend(ctx context.Context, p Principal, r BranchRequest) error
+}
+
+// BranchSharer may be implemented by a BranchHost so modules can ask whether a
+// caller shares branch access with a branch's owner through BranchPolicy.
+type BranchSharer interface {
+	SharesBranches(ctx context.Context, p Principal, owner string) bool
+}
+
 // Policies combines branch policies: every one must allow a branch, and
 // any one may share.
 type Policies []BranchPolicy
@@ -94,6 +132,18 @@ func (ps Policies) CheckBranch(ctx context.Context, p Principal, r BranchRequest
 	for _, x := range ps {
 		if err := x.CheckBranch(ctx, p, r); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// CheckExtend runs CheckExtend on every policy that implements BranchExtendPolicy.
+func (ps Policies) CheckExtend(ctx context.Context, p Principal, r BranchRequest) error {
+	for _, x := range ps {
+		if ep, ok := x.(BranchExtendPolicy); ok {
+			if err := ep.CheckExtend(ctx, p, r); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -516,10 +566,11 @@ type Starter interface {
 
 // Module bundles the ports a module provides; unset ports keep the defaults.
 type Module struct {
-	Name          string
-	Version       string
-	Authenticator Authenticator
-	Authorizer    Authorizer
+	Name              string
+	Version           string
+	Authenticator     Authenticator
+	PrincipalResolver PrincipalResolver
+	Authorizer        Authorizer
 	AuditSink     AuditSink
 	Router        Router
 	// Ports are the Router's client ports by engine ("mysql", "postgres").
@@ -763,6 +814,7 @@ func (a AllOf) Authorize(ctx context.Context, p Principal, action string, r Reso
 // provides stay nil (the agent's defaults).
 func Combine(mods []Module) Module {
 	var auths Chain
+	var resolvers Resolvers
 	var authz AllOf
 	var sinks Sinks
 	var policies Policies
@@ -784,6 +836,9 @@ func Combine(mods []Module) Module {
 		}
 		if m.Authenticator != nil {
 			auths = append(auths, m.Authenticator)
+		}
+		if m.PrincipalResolver != nil {
+			resolvers = append(resolvers, m.PrincipalResolver)
 		}
 		if m.Authorizer != nil {
 			authz = append(authz, m.Authorizer)
@@ -810,6 +865,9 @@ func Combine(mods []Module) Module {
 		if pw := auths.changers(); len(pw) > 0 {
 			out.Authenticator = changingChain{auths, pw}
 		}
+	}
+	if len(resolvers) > 0 {
+		out.PrincipalResolver = resolvers
 	}
 	if len(authz) > 0 {
 		out.Authorizer = authz

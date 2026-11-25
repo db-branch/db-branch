@@ -268,6 +268,13 @@ func (h *branchHost) EndOperation(ctx context.Context, id, failure string) error
 	return nil
 }
 
+func (h *branchHost) SharesBranches(ctx context.Context, p ext.Principal, owner string) bool {
+	if owner == "" || owner == Anonymous.ID || h.s.Ext.BranchPolicy == nil {
+		return false
+	}
+	return h.s.Ext.BranchPolicy.SharesBranches(ctx, p, owner)
+}
+
 func domainName(s string) domain.Name {
 	n, _ := domain.ParseName(s)
 	return n

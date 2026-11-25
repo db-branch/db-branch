@@ -117,6 +117,10 @@ func (f *fakeHost) ReportOperation(_ context.Context, id, p string) error {
 func (f *fakeHost) EndOperation(_ context.Context, id, fail string) error {
 	return f.rec("end " + id + " " + fail)
 }
+func (f *fakeHost) SharesBranches(_ context.Context, p ext.Principal, owner string) bool {
+	_ = f.rec("shares " + p.ID + " " + owner)
+	return p.ID == "user:bob" && owner == "user:alice"
+}
 
 func Test_モジュールはエージェントのブランチ操作を呼べる(t *testing.T) {
 	fh := &fakeHost{}
@@ -163,8 +167,15 @@ func Test_モジュールはエージェントのブランチ操作を呼べる(
 	if err := h.EndOperation(ctx, id, ""); err != nil {
 		t.Error(err)
 	}
+	if !h.(ext.BranchSharer).SharesBranches(ctx, ext.Principal{ID: "user:bob"}, "user:alice") {
+		t.Error("SharesBranches true: want true")
+	}
+	if h.(ext.BranchSharer).SharesBranches(ctx, ext.Principal{ID: "user:carol"}, "user:alice") {
+		t.Error("SharesBranches false: want false")
+	}
 	want := []string{"branch x", "branches", "graph x", "checkpoint x c9", "restore x c1 note", "db x", "open x c1", "close /mnt/x",
-		"start history.restore x", "report op_1 replaying", "end op_1 "}
+		"start history.restore x", "report op_1 replaying", "end op_1 ",
+		"shares user:bob user:alice", "shares user:carol user:alice"}
 	if len(fh.calls) != len(want) {
 		t.Fatalf("calls = %q", fh.calls)
 	}

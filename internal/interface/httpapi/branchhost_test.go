@@ -219,3 +219,22 @@ func TestBranchHost_終わらない操作は時間切れで失敗にする(t *te
 		t.Errorf("op = %+v", op)
 	}
 }
+
+func TestBranchHost_チームによるブランチ共有の可否を仲介する(t *testing.T) {
+	f, h := hostFixture(t)
+	sh, ok := h.(ext.BranchSharer)
+	if !ok {
+		t.Fatal("BranchHost should implement ext.BranchSharer")
+	}
+	bob := ext.Principal{ID: "token:b", Roles: []string{"developer"}}
+	if sh.SharesBranches(ctx, bob, "token:a") {
+		t.Error("without policy: want false")
+	}
+	f.srv.Ext = ext.Module{BranchPolicy: &teamPolicy{}}
+	if !sh.SharesBranches(ctx, bob, "token:a") {
+		t.Error("teammate should share")
+	}
+	if sh.SharesBranches(ctx, bob, "anonymous") || sh.SharesBranches(ctx, bob, "") || sh.SharesBranches(ctx, bob, "token:c") {
+		t.Error("must not share anonymous, empty, or outsider")
+	}
+}

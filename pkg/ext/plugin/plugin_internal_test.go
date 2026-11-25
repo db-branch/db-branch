@@ -579,19 +579,51 @@ func (fakePolicy) SharesBranches(_ context.Context, _ ext.Principal, owner strin
 	return owner == "team:a"
 }
 
+type fakeExtendPolicy struct{ fakePolicy }
+
+func (fakeExtendPolicy) CheckExtend(_ context.Context, _ ext.Principal, req ext.BranchRequest) error {
+	if req.TTL > time.Hour {
+		return ext.ErrForbidden
+	}
+	return nil
+}
+
+type fakeResolver struct{}
+
+func (fakeResolver) ResolvePrincipal(_ context.Context, p ext.Principal) (ext.Principal, error) {
+	if p.ID == "user:disabled" {
+		return ext.Principal{}, ext.ErrUnauthenticated
+	}
+	if p.ID == "user:alice" {
+		p.Roles = []string{"viewer"}
+	}
+	return p, nil
+}
+
 func Test認証と認可と監査とブランチ方針をRPC越しに運ぶ(t *testing.T) {
 	sink := &fakeSink{}
 	r := remoteFor(t, ext.Module{
-		Name:          "sec",
-		Authenticator: fakeAuth{},
-		Authorizer:    fakeAuthz{},
-		AuditSink:     sink,
-		BranchPolicy:  fakePolicy{},
+		Name:              "sec",
+		Authenticator:     fakeAuth{},
+		Authorizer:        fakeAuthz{},
+		AuditSink:         sink,
+		BranchPolicy:      fakeExtendPolicy{},
+		PrincipalResolver: fakeResolver{},
 	})
+	info, err := r.Info()
+	if err != nil || !info.PrincipalResolver || !info.BranchExtendPolicy {
+		t.Fatalf("info = %+v %v", info, err)
+	}
 	ctx := context.Background()
 	p, err := r.Authenticate(ctx, ext.Credentials{Token: "ok"})
 	if err != nil || p.ID != "u1" {
 		t.Fatalf("Authenticate = %+v %v", p, err)
+	}
+	if resolved, err := r.ResolvePrincipal(ctx, ext.Principal{ID: "user:alice", Roles: []string{"admin"}}); err != nil || len(resolved.Roles) != 1 || resolved.Roles[0] != "viewer" {
+		t.Errorf("ResolvePrincipal = %+v %v", resolved, err)
+	}
+	if _, err := r.ResolvePrincipal(ctx, ext.Principal{ID: "user:disabled"}); !errors.Is(err, ext.ErrUnauthenticated) {
+		t.Errorf("ResolvePrincipal disabled: %v", err)
 	}
 	if _, err := r.Authenticate(ctx, ext.Credentials{Token: "no"}); !errors.Is(err, ext.ErrUnauthenticated) {
 		t.Errorf("bad token: %v", err)
@@ -621,11 +653,24 @@ func Test認証と認可と監査とブランチ方針をRPC越しに運ぶ(t *t
 	if !r.SharesBranches(ctx, p, "team:a") || r.SharesBranches(ctx, p, "solo") {
 		t.Error("SharesBranches mismatch")
 	}
+	ep := extendPolicyRemote{r}
+	if err := ep.CheckExtend(ctx, p, ext.BranchRequest{TTL: 30 * time.Minute}); err != nil {
+		t.Errorf("CheckExtend ok: %v", err)
+	}
+	if err := ep.CheckExtend(ctx, p, ext.BranchRequest{TTL: 2 * time.Hour}); !errors.Is(err, ext.ErrForbidden) {
+		t.Errorf("CheckExtend deny: %v", err)
+	}
 	_ = r.c.Close()
 	if err := pc.ChangePassword(ctx, p, "old", "new"); err == nil {
 		t.Error("closed ChangePassword: want error")
 	}
+	if _, err := r.ResolvePrincipal(ctx, ext.Principal{ID: "user:alice"}); err == nil {
+		t.Error("closed ResolvePrincipal: want error")
+	}
 	if err := r.CheckBranch(ctx, p, ext.BranchRequest{Base: "prod"}); err == nil {
 		t.Error("closed CheckBranch: want error")
+	}
+	if err := ep.CheckExtend(ctx, p, ext.BranchRequest{TTL: 30 * time.Minute}); err == nil {
+		t.Error("closed CheckExtend: want error")
 	}
 }
