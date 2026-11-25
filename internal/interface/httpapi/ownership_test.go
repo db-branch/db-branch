@@ -15,6 +15,7 @@ import (
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/filestore"
 	"github.com/db-branch/db-branch/internal/interface/httpapi"
+	"github.com/db-branch/db-branch/internal/usecase/operation"
 	"github.com/db-branch/db-branch/internal/usecase/token"
 	"github.com/db-branch/db-branch/pkg/ext"
 )
@@ -1086,4 +1087,212 @@ func TestBranchPolicy_TTL省略時はチームのMaxTTLに丸め並行作成の�
 	if accepted != 1 || refused != 1 {
 		t.Errorf("concurrent MaxBranches race: codes = %v (want one 202 and one 409)", codes)
 	}
+}
+
+func TestServiceToken_BaseとTeam制限をAPI作成から認可と方針チェックまで強制する(t *testing.T) {
+	f := newFixture(t)
+	toks := &token.Service{Store: &filestore.Store{Path: filepath.Join(t.TempDir(), "t.json")}, Clock: func() time.Time { return t0 }}
+	f.srv.Tokens, f.srv.TokenAuth = toks, toks
+	f.srv.DefaultTTL = func() time.Duration { return 24 * time.Hour }
+	pol := &ttlCapTeamPolicy{cap: 3 * time.Hour}
+	f.srv.Ext = ext.Module{BranchPolicy: pol}
+	f.branches.bases["prod"] = domain.Base{Name: name("prod"), Status: domain.BaseReady, Runtime: mysql84, Snapshots: []domain.BaseSnapshot{{Name: "s1"}}}
+	f.branches.bases["analytics"] = domain.Base{Name: name("analytics"), Status: domain.BaseReady, Runtime: mysql84, Snapshots: []domain.BaseSnapshot{{Name: "s1"}}}
+	adminH := f.srv.Handler(true)
+	h := f.srv.Handler(false)
+
+	// Validation on POST /v1/tokens.
+	if resp, _ := send(t, adminH, "POST", "/v1/tokens", map[string]any{"name": "bad", "scope": "full", "bases": []string{"prod"}}, nil); resp.StatusCode != 400 {
+		t.Errorf("full + bases: %d, want 400", resp.StatusCode)
+	}
+	if resp, _ := send(t, adminH, "POST", "/v1/tokens", map[string]any{"name": "bad2", "scope": "branches", "team": "BAD TEAM"}, nil); resp.StatusCode != 400 {
+		t.Errorf("bad team name: %d, want 400", resp.StatusCode)
+	}
+
+	// Issue restricted token: bases=["prod"], team="payments".
+	resp, body := send(t, adminH, "POST", "/v1/tokens", map[string]any{
+		"name": "ci-prod", "scope": "branches", "bases": []string{"prod"}, "team": "payments",
+	}, nil)
+	if resp.StatusCode != 201 {
+		t.Fatalf("create restricted token: %d %v", resp.StatusCode, body)
+	}
+	secret := body["token"].(string)
+	tokID := body["id"].(string)
+
+	// GET /v1/tokens exposes bases & team.
+	resp, listBody := send(t, adminH, "GET", "/v1/tokens", nil, nil)
+	if resp.StatusCode != 200 || len(listBody["items"].([]any)) != 1 {
+		t.Fatalf("list tokens: %d %v", resp.StatusCode, listBody)
+	}
+	row := listBody["items"].([]any)[0].(map[string]any)
+	if row["team"] != "payments" || len(row["bases"].([]any)) != 1 || row["bases"].([]any)[0] != "prod" {
+		t.Errorf("token list row = %v", row)
+	}
+
+	// Create branches under prod (owned by token) and analytics (owned by admin and open).
+	f.branches.branches["prod-own"] = domain.Branch{Name: name("prod-own"), Base: name("prod"), Status: domain.BranchReady, Owner: "token:" + tokID, Runtime: mysql84, Port: 40010, User: "u1", Password: "p1"}
+	f.branches.branches["ana-open"] = domain.Branch{Name: name("ana-open"), Base: name("analytics"), Status: domain.BranchReady, Owner: "token:" + tokID, Access: domain.AccessOpen, Runtime: mysql84, Port: 40011, User: "u2", Password: "p2"}
+
+	// Base listing & get filtered to "prod" only.
+	resp, basesBody := send(t, h, "GET", "/v1/bases", nil, as(secret))
+	if resp.StatusCode != 200 || len(basesBody["items"].([]any)) != 1 || basesBody["items"].([]any)[0].(map[string]any)["name"] != "prod" {
+		t.Errorf("restricted GET /v1/bases = %d %v", resp.StatusCode, basesBody)
+	}
+	if resp, _ := send(t, h, "GET", "/v1/bases/prod", nil, as(secret)); resp.StatusCode != 200 {
+		t.Errorf("GET /v1/bases/prod: %d", resp.StatusCode)
+	}
+	if resp, _ := send(t, h, "GET", "/v1/bases/analytics", nil, as(secret)); resp.StatusCode != 403 {
+		t.Errorf("GET /v1/bases/analytics: %d, want 403", resp.StatusCode)
+	}
+
+	// Branch listing hides ana-open; direct operations on ana-open return 403 even if own+open.
+	resp, brBody := send(t, h, "GET", "/v1/branches", nil, as(secret))
+	if resp.StatusCode != 200 || len(brBody["items"].([]any)) != 1 || brBody["items"].([]any)[0].(map[string]any)["name"] != "prod-own" {
+		t.Errorf("restricted GET /v1/branches = %d %v", resp.StatusCode, brBody)
+	}
+	for _, tc := range []struct{ method, path string }{
+		{"GET", "/v1/branches/ana-open"},
+		{"GET", "/v1/branches/ana-open/dsn"},
+		{"DELETE", "/v1/branches/ana-open"},
+		{"POST", "/v1/branches/ana-open/fork"},
+	} {
+		var b any
+		if tc.method == "POST" {
+			b = map[string]any{"name": "f1"}
+		}
+		if r, _ := send(t, h, tc.method, tc.path, b, as(secret)); r.StatusCode != 403 {
+			t.Errorf("%s %s on disallowed base branch: %d, want 403", tc.method, tc.path, r.StatusCode)
+		}
+	}
+	if r, _ := send(t, h, "GET", "/v1/branches/prod-own", nil, as(secret)); r.StatusCode != 200 {
+		t.Errorf("GET allowed base branch: %d", r.StatusCode)
+	}
+
+	// POST /v1/branches disallowed base -> 403; allowed base -> 202 and BranchPolicy receives team:payments + OwnerTeam.
+	if r, _ := send(t, h, "POST", "/v1/branches", map[string]any{"name": "bad-b", "base": "analytics"}, as(secret)); r.StatusCode != 403 {
+		t.Errorf("create branch from analytics: %d, want 403", r.StatusCode)
+	}
+	if r, b := send(t, h, "POST", "/v1/branches", map[string]any{"name": "ok-b", "base": "prod"}, as(secret)); r.StatusCode != 202 {
+		t.Fatalf("create branch from prod: %d %v", r.StatusCode, b)
+	}
+	waitFor(t, func() bool { _, ok := f.branches.get("ok-b"); return ok })
+	lastReq := pol.got[len(pol.got)-1]
+	if lastReq.TTL != 3*time.Hour {
+		t.Errorf("clamped TTL = %s, want 3h", lastReq.TTL)
+	}
+	sawOwnerTeam := false
+	for _, ex := range lastReq.Existing {
+		if ex.Name == "prod-own" && ex.OwnerTeam == "payments" {
+			sawOwnerTeam = true
+		}
+	}
+	if !sawOwnerTeam {
+		t.Errorf("Existing missing OwnerTeam=payments on prod-own: %+v", lastReq.Existing)
+	}
+
+	// Human teammate sharing with a team-linked service token's branch (via sharesBranchesWithOwner).
+	aliceSec, _, err := toks.CreatePersonal(ctx, ext.Principal{ID: "user:alice@example.com", Name: "alice@example.com", Roles: []string{"developer"}}, "mcp", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.srv.Ext = ext.Module{BranchPolicy: &shareForTeamPolicy{team: "payments", userID: "user:alice@example.com"}}
+	if r, _ := send(t, h, "GET", "/v1/branches/prod-own", nil, as(aliceSec)); r.StatusCode != 200 {
+		t.Errorf("teammate reading token-owned branch via SharesBranches: %d, want 200", r.StatusCode)
+	}
+	f.srv.Ext = ext.Module{BranchPolicy: &shareForTeamPolicy{team: "other-team", userID: "user:alice@example.com"}}
+	if r, _ := send(t, h, "GET", "/v1/branches/prod-own", nil, as(aliceSec)); r.StatusCode != 403 {
+		t.Errorf("non-teammate reading token-owned branch: %d, want 403", r.StatusCode)
+	}
+
+	// Two service tokens on the same team share branches; different team or spoofed team: owner do not.
+	secretSameTeam, _, err := toks.CreateService(ctx, "ci-prod-2", domain.ScopeBranches, 0, []string{"prod"}, "payments")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretOtherTeam, _, err := toks.CreateService(ctx, "ci-prod-ops", domain.ScopeBranches, 0, []string{"prod"}, "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.srv.Ext = ext.Module{BranchPolicy: &shareForTeamPolicy{team: "payments", userID: "user:alice@example.com"}}
+	if r, _ := send(t, h, "GET", "/v1/branches/prod-own", nil, as(secretSameTeam)); r.StatusCode != 200 {
+		t.Errorf("same-team service token reading prod-own: %d, want 200", r.StatusCode)
+	}
+	if r, _ := send(t, h, "GET", "/v1/branches/prod-own", nil, as(secretOtherTeam)); r.StatusCode != 403 {
+		t.Errorf("other-team service token reading prod-own: %d, want 403", r.StatusCode)
+	}
+	f.branches.mu.Lock()
+	f.branches.branches["prod-spoof"] = domain.Branch{Name: name("prod-spoof"), Base: name("prod"), Status: domain.BranchReady, Owner: "team:payments", Runtime: mysql84}
+	f.branches.mu.Unlock()
+	if r, _ := send(t, h, "GET", "/v1/branches/prod-spoof", nil, as(secretSameTeam)); r.StatusCode != 403 {
+		t.Errorf("spoofed team:payments owner branch: %d, want 403", r.StatusCode)
+	}
+
+	// Operations list & get respect TokenBases (teammate's ops on disallowed base are hidden).
+	f.srv.Ops.Store = &operation.MemoryStore{}
+	opProd, err := f.srv.Ops.Start("base.refresh", operation.Target{Resource: "base", Name: "prod"}, func(context.Context, func(string)) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = opProd // system-owned is never visible to non-admin anyway
+	if err := f.srv.Ops.Store.PutOperation(ctx, operation.Operation{
+		ID: "op-alice-prod", Kind: "branch.create", Owner: "user:alice@example.com",
+		Target: operation.Target{Resource: "branch", Name: "prod-own"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.srv.Ops.Store.PutOperation(ctx, operation.Operation{
+		ID: "op-alice-ana-br", Kind: "branch.create", Owner: "user:alice@example.com",
+		Target: operation.Target{Resource: "branch", Name: "ana-open"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.srv.Ops.Store.PutOperation(ctx, operation.Operation{
+		ID: "op-alice-ana-base", Kind: "base.refresh", Owner: "user:alice@example.com",
+		Target: operation.Target{Resource: "base", Name: "analytics"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.srv.Ops.Store.PutOperation(ctx, operation.Operation{
+		ID: "op-alice-deleted-br", Kind: "branch.delete", Owner: "user:alice@example.com",
+		Target: operation.Target{Resource: "branch", Name: "no-longer-exists"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := send(t, h, "GET", "/v1/operations/op-alice-prod", nil, as(secret)); r.StatusCode != 200 {
+		t.Errorf("GET allowed base operation: %d, want 200", r.StatusCode)
+	}
+	for _, hiddenID := range []string{"op-alice-ana-br", "op-alice-ana-base", "op-alice-deleted-br"} {
+		if r, _ := send(t, h, "GET", "/v1/operations/"+hiddenID, nil, as(secret)); r.StatusCode != 404 {
+			t.Errorf("GET disallowed base operation %s: %d, want 404", hiddenID, r.StatusCode)
+		}
+	}
+	if r, listOps := send(t, h, "GET", "/v1/operations", nil, as(secret)); r.StatusCode != 200 {
+		t.Errorf("GET /v1/operations: %d", r.StatusCode)
+	} else if items := listOps["items"].([]any); len(items) != 1 || items[0].(map[string]any)["id"] != "op-alice-prod" {
+		t.Errorf("restricted GET /v1/operations leaked items: %v", items)
+	}
+
+	// reserveBranchPolicy must fail closed when Tokens.ListService returns an error.
+	f.srv.Tokens = failingListTokens{toks}
+	if r, b := send(t, h, "POST", "/v1/branches", map[string]any{"name": "fail-b", "base": "prod"}, as(secret)); r.StatusCode != 500 {
+		t.Errorf("ListService failure should fail closed with 500, got %d %v", r.StatusCode, b)
+	}
+}
+
+type failingListTokens struct{ *token.Service }
+
+func (failingListTokens) ListService(context.Context) ([]domain.APIToken, error) {
+	return nil, errors.New("raft read error")
+}
+
+type shareForTeamPolicy struct {
+	team, userID string
+}
+
+func (*shareForTeamPolicy) CheckBranch(context.Context, ext.Principal, ext.BranchRequest) error {
+	return nil
+}
+
+func (s *shareForTeamPolicy) SharesBranches(_ context.Context, p ext.Principal, owner string) bool {
+	return ext.TokenTeam(p) == s.team && (owner == s.userID || owner == ext.TeamRolePrefix+s.team)
 }

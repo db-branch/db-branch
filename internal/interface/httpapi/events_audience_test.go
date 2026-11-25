@@ -6,14 +6,17 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/infrastructure/filestore"
 	"github.com/db-branch/db-branch/internal/interface/httpapi"
 	"github.com/db-branch/db-branch/internal/usecase/operation"
+	"github.com/db-branch/db-branch/internal/usecase/token"
 	"github.com/db-branch/db-branch/pkg/ext"
 )
 
@@ -253,6 +256,108 @@ func TestHTTPAPI_SSE中に無効化された利用者のストリームは閉じ
 		}
 		if rerr != nil {
 			break // stream closed cleanly
+		}
+	}
+}
+
+func TestHTTPAPI_SSEはBase制限サービスTokenへ許可Base以外のイベントを流さない(t *testing.T) {
+	f := ownedFixture(t)
+	toks := &token.Service{Store: &filestore.Store{Path: filepath.Join(t.TempDir(), "t.json")}, Clock: func() time.Time { return t0 }}
+	f.srv.Tokens, f.srv.TokenAuth = toks, toks
+	f.srv.Ext = ext.Module{BranchPolicy: &shareForTeamPolicy{team: "payments", userID: "user:alice@x.io"}}
+
+	f.branches.mu.Lock()
+	f.branches.bases["prod"] = domain.Base{Name: name("prod"), Runtime: mysql84, Status: domain.BaseReady}
+	f.branches.bases["analytics"] = domain.Base{Name: name("analytics"), Runtime: mysql84, Status: domain.BaseReady}
+	f.branches.branches["prod-open"] = domain.Branch{Name: name("prod-open"), Base: name("prod"), Status: domain.BranchReady, Owner: "user:bob@x.io", Access: domain.AccessOpen, Runtime: mysql84}
+	f.branches.branches["ana-open"] = domain.Branch{Name: name("ana-open"), Base: name("analytics"), Status: domain.BranchReady, Owner: "user:bob@x.io", Access: domain.AccessOpen, Runtime: mysql84}
+	f.branches.branches["prod-alice"] = domain.Branch{Name: name("prod-alice"), Base: name("prod"), Status: domain.BranchReady, Owner: "user:alice@x.io", Runtime: mysql84}
+	f.branches.branches["ana-alice"] = domain.Branch{Name: name("ana-alice"), Base: name("analytics"), Status: domain.BranchReady, Owner: "user:alice@x.io", Runtime: mysql84}
+	f.branches.mu.Unlock()
+
+	ctx := context.Background()
+	tokProd, _, err := toks.CreateService(ctx, "ci-prod", domain.ScopeBranches, 0, []string{"prod"}, "payments")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(f.srv.Handler(false))
+	defer srv.Close()
+
+	// Connect SSE client BEFORE events happen so seedBranchAudiences also records ana-open / ana-alice.
+	sCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(sCtx, "GET", srv.URL+"/v1/events", nil)
+	as(tokProd)(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("events: %v %d", err, resp.StatusCode)
+	}
+	defer resp.Body.Close()
+
+	// Emit base, branch (open/teammate/open->private/deleted), and teammate operation events on prod & analytics.
+	f.srv.PublishBase(ctx, name("prod"))
+	f.srv.PublishBase(ctx, name("analytics"))
+	f.srv.PublishBranch(ctx, name("prod-open"))
+	f.srv.PublishBranch(ctx, name("ana-open"))
+	f.srv.PublishBranch(ctx, name("prod-alice"))
+	f.srv.PublishBranch(ctx, name("ana-alice"))
+
+	f.branches.mu.Lock()
+	ao := f.branches.branches["ana-open"]
+	ao.Access = domain.AccessPrivate
+	f.branches.branches["ana-open"] = ao
+	delete(f.branches.branches, "ana-alice")
+	f.branches.mu.Unlock()
+	f.srv.PublishBranch(ctx, name("ana-open"))
+	f.srv.PublishBranch(ctx, name("ana-alice"))
+
+	if _, err := f.srv.Ops.Start("base.refresh", operation.Target{Resource: "base", Name: "analytics"}, func(context.Context, func(string)) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	// Teammate-owned operation targeting disallowed base "analytics" via Bus:
+	f.srv.Bus.PublishTo(operation.Audience{Owner: "user:alice@x.io"}, "operation.updated", operation.Operation{
+		ID:     "op_ana",
+		Kind:   "base.refresh",
+		Owner:  "user:alice@x.io",
+		Target: operation.Target{Resource: "base", Name: "analytics"},
+	})
+	f.srv.Bus.PublishTo(operation.Audience{Owner: "user:alice@x.io"}, "operation.updated", operation.Operation{
+		ID:     "op_prod",
+		Kind:   "base.refresh",
+		Owner:  "user:alice@x.io",
+		Target: operation.Target{Resource: "base", Name: "prod"},
+	})
+	f.srv.Bus.PublishTo(operation.Audience{Open: true}, "stop", nil)
+
+	rd := bufio.NewReader(resp.Body)
+	var lines []string
+	var curTyp, curData string
+	for {
+		line, err := rd.ReadString('\n')
+		if err != nil {
+			t.Fatalf("stream ended early (got %v): %v", lines, err)
+		}
+		line = strings.TrimSpace(line)
+		if tName, ok := strings.CutPrefix(line, "event: "); ok {
+			curTyp = tName
+		} else if d, ok := strings.CutPrefix(line, "data: "); ok {
+			curData = d
+		} else if line == "" && curTyp != "" {
+			if curTyp == "stop" {
+				break
+			}
+			lines = append(lines, curTyp+":"+curData)
+			curTyp, curData = "", ""
+		}
+	}
+	joined := strings.Join(lines, "\n")
+	if strings.Contains(joined, "analytics") || strings.Contains(joined, "ana-open") || strings.Contains(joined, "ana-alice") || strings.Contains(joined, "op_ana") {
+		t.Fatalf("restricted token leaked disallowed base events:\n%s", joined)
+	}
+	for _, want := range []string{`"name":"prod"`, `"name":"prod-open"`, `"name":"prod-alice"`, `"id":"op_prod"`} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing expected prod event %s in:\n%s", want, joined)
 		}
 	}
 }

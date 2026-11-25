@@ -662,7 +662,10 @@ func TestCLI_module_forgetは記録を消して出力しエラーに応じた終
 func TestTokenコマンド(t *testing.T) {
 	api := newFakeAPI()
 	api.answers["POST /v1/tokens"] = map[string]any{"token": "dbb_x_s", "scope": "branches"}
-	api.answers["GET /v1/tokens"] = map[string]any{"items": []any{map[string]any{"id": "x", "name": "claude", "scope": "branches", "created_at": "2026-11-10T00:00:00Z"}}}
+	api.answers["GET /v1/tokens"] = map[string]any{"items": []any{
+		map[string]any{"id": "x", "name": "claude", "scope": "branches", "created_at": "2026-11-10T00:00:00Z"},
+		map[string]any{"id": "y", "name": "ci-pay", "scope": "branches", "bases": []string{"analytics", "shop"}, "team": "payments", "created_at": "2026-11-10T00:00:00Z"},
+	}}
 	api.answers["DELETE /v1/tokens/x"] = nil
 	if code, out, errOut := runAPI(t, api, "token", "create", "claude", "--ttl", "720h"); code != 0 || strings.TrimSpace(out) != "dbb_x_s" || !strings.Contains(errOut, "shown only now") {
 		t.Errorf("create: %d %q %q", code, out, errOut)
@@ -670,7 +673,13 @@ func TestTokenコマンド(t *testing.T) {
 	if b := api.bodies["POST /v1/tokens"].(map[string]any); b["scope"] != "branches" || b["ttl"] != "720h" {
 		t.Errorf("body = %v", b)
 	}
-	if _, out, _ := runAPI(t, api, "token", "list"); !strings.Contains(out, "claude") {
+	if code, _, _ := runAPI(t, api, "token", "create", "ci-pay", "--bases", "shop,analytics", "--team", "payments"); code != 0 {
+		t.Errorf("restricted create failed: %d", code)
+	}
+	if b := api.bodies["POST /v1/tokens"].(map[string]any); b["team"] != "payments" || len(b["bases"].([]string)) != 2 {
+		t.Errorf("restricted body = %v", b)
+	}
+	if _, out, _ := runAPI(t, api, "token", "list"); !strings.Contains(out, "claude") || !strings.Contains(out, "analytics,shop") || !strings.Contains(out, "payments") {
 		t.Errorf("list: %q", out)
 	}
 	if code, _, _ := runAPI(t, api, "token", "revoke", "x"); code != 0 {

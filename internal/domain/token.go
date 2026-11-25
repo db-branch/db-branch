@@ -30,11 +30,19 @@ type APIToken struct {
 	Owner      string   `json:"owner,omitempty"`
 	OwnerName  string   `json:"owner_name,omitempty"`
 	OwnerRoles []string `json:"owner_roles,omitempty"`
+	// Bases and Team optionally restrict a service token with ScopeBranches
+	// to specific bases and/or a linked team's limits and branch sharing.
+	Bases []string `json:"bases,omitempty"`
+	Team  string   `json:"team,omitempty"`
 }
 
 // ProtocolPersonalTokenRoles is the cluster protocol from which personal API
 // tokens persist OwnerRoles so older nodes cannot drop them during upgrade.
 const ProtocolPersonalTokenRoles = 28
+
+// ProtocolServiceTokenRestrictions is the cluster protocol from which service
+// tokens persist Bases and Team restrictions so older nodes cannot drop them.
+const ProtocolServiceTokenRestrictions = 29
 
 // TokenStore keeps API tokens.
 type TokenStore interface {

@@ -410,3 +410,28 @@ func TestDBAccess_JSONでは空のEndpointsとenvを出さない(t *testing.T) {
 		t.Errorf("json = %s", b)
 	}
 }
+
+func TestTokenRestrictions_ロールから許可BaseとTeamを取り出す(t *testing.T) {
+	if got := ext.TokenBases(ext.Principal{Roles: []string{"scope:full"}}); len(got) != 0 {
+		t.Errorf("unrestricted bases = %v, want empty", got)
+	}
+	if got := ext.TokenTeam(ext.Principal{Roles: []string{"scope:branches"}}); got != "" {
+		t.Errorf("unrestricted team = %q, want empty", got)
+	}
+	p := ext.Principal{Roles: []string{
+		"scope:branches",
+		ext.BaseRolePrefix + "shop",
+		ext.BaseRolePrefix + "analytics",
+		ext.BaseRolePrefix + "shop",
+		ext.BaseRolePrefix,
+		ext.TeamRolePrefix + "payments",
+		ext.TeamRolePrefix,
+	}}
+	bases := ext.TokenBases(p)
+	if len(bases) != 2 || bases[0] != "analytics" || bases[1] != "shop" {
+		t.Errorf("TokenBases = %v, want [analytics shop]", bases)
+	}
+	if team := ext.TokenTeam(p); team != "payments" {
+		t.Errorf("TokenTeam = %q, want payments", team)
+	}
+}

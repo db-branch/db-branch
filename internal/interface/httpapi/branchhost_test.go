@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/infrastructure/filestore"
 	"github.com/db-branch/db-branch/internal/interface/httpapi"
 	"github.com/db-branch/db-branch/internal/usecase/dbbranch"
 	"github.com/db-branch/db-branch/internal/usecase/operation"
+	"github.com/db-branch/db-branch/internal/usecase/token"
 	"github.com/db-branch/db-branch/pkg/ext"
 )
 
@@ -236,5 +239,19 @@ func TestBranchHost_チームによるブランチ共有の可否を仲介する
 	}
 	if sh.SharesBranches(ctx, bob, "anonymous") || sh.SharesBranches(ctx, bob, "") || sh.SharesBranches(ctx, bob, "token:c") {
 		t.Error("must not share anonymous, empty, or outsider")
+	}
+	// Team-linked service token owner resolution also works through BranchHost.SharesBranches.
+	toks := &token.Service{Store: &filestore.Store{Path: filepath.Join(t.TempDir(), "t.json")}, Clock: func() time.Time { return t0 }}
+	f.srv.Tokens = toks
+	_, rec, err := toks.CreateService(ctx, "ci-pay", domain.ScopeBranches, 0, nil, "payments")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.srv.Ext = ext.Module{BranchPolicy: &shareForTeamPolicy{team: "payments", userID: "user:alice@x.io"}}
+	if !sh.SharesBranches(ctx, ext.Principal{ID: "user:alice@x.io"}, "token:"+rec.ID) {
+		t.Error("BranchHost should resolve teammate sharing with service token owner")
+	}
+	if !sh.SharesBranches(ctx, ext.Principal{ID: "token:other", Roles: []string{"scope:branches", ext.TeamRolePrefix + "payments"}}, "token:"+rec.ID) {
+		t.Error("BranchHost should share between same-team service tokens")
 	}
 }

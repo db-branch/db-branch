@@ -247,6 +247,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			if !s.canReceive(r.Context(), cur, ev.Audience) {
 				continue
 			}
+			if op, ok := ev.Data.(operation.Operation); ok && !s.canSeeOperation(r.Context(), cur, op) {
+				continue
+			}
 			data, _ := json.Marshal(ev.Data)
 			fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.ID, ev.Type, data)
 			flusher.Flush()

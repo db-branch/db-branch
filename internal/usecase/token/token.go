@@ -10,7 +10,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -52,10 +54,51 @@ func hash(secret string) string {
 	return hex.EncodeToString(h[:])
 }
 
+var teamNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
+
 // Create issues a token and returns its secret form (shown once) and record.
 // ttl 0 never expires.
 func (s *Service) Create(ctx context.Context, name, scope string, ttl time.Duration) (string, domain.APIToken, error) {
-	return s.issue(ctx, domain.APIToken{Name: name, Scope: scope}, ttl)
+	return s.CreateService(ctx, name, scope, ttl, nil, "")
+}
+
+// CreateService issues a service token with optional base and team restrictions.
+// Restricted tokens require ScopeBranches; omitting both keeps full backward compatibility.
+func (s *Service) CreateService(ctx context.Context, name, scope string, ttl time.Duration, bases []string, team string) (string, domain.APIToken, error) {
+	cleanBases, err := normalizeTokenBases(bases)
+	if err != nil {
+		return "", domain.APIToken{}, err
+	}
+	cleanTeam := strings.TrimSpace(team)
+	if cleanTeam != "" && !teamNamePattern.MatchString(cleanTeam) {
+		return "", domain.APIToken{}, fmt.Errorf("%w: team name %q: lowercase letters, digits and -", ErrInvalid, cleanTeam)
+	}
+	if (len(cleanBases) > 0 || cleanTeam != "") && scope != domain.ScopeBranches {
+		return "", domain.APIToken{}, fmt.Errorf("%w: bases and team restrictions require scope %q", ErrInvalid, domain.ScopeBranches)
+	}
+	return s.issue(ctx, domain.APIToken{Name: name, Scope: scope, Bases: cleanBases, Team: cleanTeam}, ttl)
+}
+
+func normalizeTokenBases(bases []string) ([]string, error) {
+	var out []string
+	for _, raw := range bases {
+		b := strings.TrimSpace(raw)
+		if b == "" {
+			continue
+		}
+		n, err := domain.ParseName(b)
+		if err != nil {
+			return nil, fmt.Errorf("%w: base %q: %v", ErrInvalid, b, err)
+		}
+		if !slices.Contains(out, n.String()) {
+			out = append(out, n.String())
+		}
+	}
+	if len(bases) > 0 && len(out) == 0 {
+		return nil, fmt.Errorf("%w: bases cannot contain only empty names", ErrInvalid)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // CreatePersonal issues a token that acts as p (e.g. for an MCP client):
@@ -77,7 +120,7 @@ func (s *Service) CreatePersonal(ctx context.Context, p ext.Principal, name stri
 func personalRoles(roles []string) []string {
 	var out []string
 	for _, r := range roles {
-		if r == "" || r == "admin" || strings.HasPrefix(r, "scope:") {
+		if r == "" || r == "admin" || strings.HasPrefix(r, "scope:") || strings.HasPrefix(r, ext.BaseRolePrefix) || strings.HasPrefix(r, ext.TeamRolePrefix) {
 			continue
 		}
 		if !slices.Contains(out, r) {
@@ -234,7 +277,16 @@ func (s *Service) Authenticate(ctx context.Context, c ext.Credentials) (ext.Prin
 			roles := append([]string{"scope:" + t.Scope}, personalRoles(t.OwnerRoles)...)
 			return ext.Principal{ID: t.Owner, Name: t.OwnerName, Roles: roles}, nil
 		}
-		return ext.Principal{ID: "token:" + t.ID, Name: t.Name, Roles: []string{"scope:" + t.Scope}}, nil
+		roles := []string{"scope:" + t.Scope}
+		if t.Scope == domain.ScopeBranches {
+			for _, b := range t.Bases {
+				roles = append(roles, ext.BaseRolePrefix+b)
+			}
+			if t.Team != "" {
+				roles = append(roles, ext.TeamRolePrefix+t.Team)
+			}
+		}
+		return ext.Principal{ID: "token:" + t.ID, Name: t.Name, Roles: roles}, nil
 	}
 	return ext.Principal{}, fmt.Errorf("%w: unknown token", ext.ErrUnauthenticated)
 }

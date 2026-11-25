@@ -861,3 +861,42 @@ func TestFSM_個人トークンのOwnerRolesはプロトコル28を要求しス�
 		t.Fatalf("after restore OwnerRoles = %v, want [viewer]", got.OwnerRoles)
 	}
 }
+
+func TestFSM_サービストークンの制限はプロトコル29を要求しスナップショットに残る(t *testing.T) {
+	if domain.ProtocolServiceTokenRestrictions != 29 {
+		t.Fatalf("ProtocolServiceTokenRestrictions = %d, want 29", domain.ProtocolServiceTokenRestrictions)
+	}
+	baseTok := domain.APIToken{ID: "svc_b", Name: "ci-base", Scope: domain.ScopeBranches, Bases: []string{"shop"}}
+	if got := raftstore.PutToken(baseTok).Needs(); got != domain.ProtocolServiceTokenRestrictions {
+		t.Fatalf("PutToken(service with bases).Needs() = %d, want %d", got, domain.ProtocolServiceTokenRestrictions)
+	}
+	teamTok := domain.APIToken{ID: "svc_t", Name: "ci-team", Scope: domain.ScopeBranches, Team: "payments"}
+	if got := raftstore.PutToken(teamTok).Needs(); got != domain.ProtocolServiceTokenRestrictions {
+		t.Fatalf("PutToken(service with team).Needs() = %d, want %d", got, domain.ProtocolServiceTokenRestrictions)
+	}
+
+	f := raftstore.NewFSM()
+	apply(t, f, raftstore.PutToken(domain.APIToken{
+		ID: "svc1", Name: "ci", Scope: domain.ScopeBranches, Bases: []string{"shop"}, Team: "payments",
+	}))
+	st := f.State()
+	st.Tokens["svc1"].Bases[0] = "tampered"
+
+	snap, err := f.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := snap.Persist(&sink{Buffer: &buf}); err != nil {
+		t.Fatal(err)
+	}
+	snap.Release()
+	g := raftstore.NewFSM()
+	if err := g.Restore(io.NopCloser(&buf)); err != nil {
+		t.Fatal(err)
+	}
+	got := g.State().Tokens["svc1"]
+	if len(got.Bases) != 1 || got.Bases[0] != "shop" || got.Team != "payments" {
+		t.Fatalf("after restore = %+v, want Bases:[shop] Team:payments", got)
+	}
+}

@@ -1012,3 +1012,37 @@ func TestPersonalTokenRoles_プロトコル28未満の混在クラスタではEr
 		t.Fatalf("stored OwnerRoles = %v, want [viewer]", found.OwnerRoles)
 	}
 }
+
+func TestServiceTokenRestrictions_プロトコル29未満の混在クラスタではErrClusterUpgrading(t *testing.T) {
+	if raftstore.Protocol < domain.ProtocolServiceTokenRestrictions {
+		t.Fatalf("Protocol = %d, below domain.ProtocolServiceTokenRestrictions (%d)", raftstore.Protocol, domain.ProtocolServiceTokenRestrictions)
+	}
+	cl := newCluster(t, 1)
+	l := cl.leader(t)
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: domain.ProtocolServiceTokenRestrictions - 1})
+
+	// Unrestricted service token keeps working during rolling upgrade.
+	if err := l.PutToken(ctx, domain.APIToken{ID: "svc_plain", Name: "ci", Scope: domain.ScopeBranches}); err != nil {
+		t.Fatalf("plain service token while upgrading: %v", err)
+	}
+	// Service tokens carrying Bases or Team require Protocol 29 so older nodes cannot drop restrictions.
+	tok := domain.APIToken{ID: "svc_res", Name: "ci-pay", Scope: domain.ScopeBranches, Bases: []string{"shop"}, Team: "payments"}
+	if err := l.PutToken(ctx, tok); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Fatalf("restricted service token while upgrading: %v, want ErrClusterUpgrading", err)
+	}
+
+	_ = l.PutNode(ctx, domain.Node{Name: "old", Protocol: domain.ProtocolServiceTokenRestrictions})
+	if err := l.PutToken(ctx, tok); err != nil {
+		t.Fatalf("restricted service token after upgrade to 29: %v", err)
+	}
+	list, _ := l.ListTokens(ctx)
+	var found domain.APIToken
+	for _, x := range list {
+		if x.ID == "svc_res" {
+			found = x
+		}
+	}
+	if len(found.Bases) != 1 || found.Bases[0] != "shop" || found.Team != "payments" {
+		t.Fatalf("stored restricted token = %+v", found)
+	}
+}

@@ -439,3 +439,54 @@ func TestPersonal_個人トークンは所有者の非adminロールを保持し
 		t.Errorf("sanitized principal = %+v, err = %v", vp2, err)
 	}
 }
+
+func TestCreateService_BaseとTeam制限を検証しPrincipalへ引き継ぐ(t *testing.T) {
+	s, _ := newService(t)
+	sec, rec, err := s.CreateService(ctx, "ci-pay", domain.ScopeBranches, time.Hour, []string{"shop", " analytics ", "shop", ""}, " payments ")
+	if err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	if len(rec.Bases) != 2 || rec.Bases[0] != "analytics" || rec.Bases[1] != "shop" || rec.Team != "payments" {
+		t.Fatalf("rec = %+v", rec)
+	}
+	p, err := s.Authenticate(ctx, ext.Credentials{Token: sec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bases := ext.TokenBases(p); len(bases) != 2 || bases[0] != "analytics" || bases[1] != "shop" || ext.TokenTeam(p) != "payments" {
+		t.Errorf("authenticated roles = %v", p.Roles)
+	}
+	// Backward compatible: omitted bases/team keeps Roles = ["scope:branches"].
+	unSec, _, err := s.CreateService(ctx, "ci-plain", domain.ScopeBranches, 0, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unP, err := s.Authenticate(ctx, ext.Credentials{Token: unSec})
+	if err != nil || len(unP.Roles) != 1 || unP.Roles[0] != "scope:branches" {
+		t.Errorf("plain service token = %+v %v", unP, err)
+	}
+	// Reject invalid combinations.
+	for _, tc := range []struct {
+		scope string
+		bases []string
+		team  string
+	}{
+		{domain.ScopeFull, []string{"shop"}, ""},
+		{domain.ScopeFull, nil, "payments"},
+		{domain.ScopeBranches, []string{"Bad Base!"}, ""},
+		{domain.ScopeBranches, []string{""}, ""},
+		{domain.ScopeBranches, []string{"  "}, ""},
+		{domain.ScopeBranches, nil, "BAD_TEAM"},
+	} {
+		if _, _, err := s.CreateService(ctx, "bad", tc.scope, 0, tc.bases, tc.team); !errors.Is(err, token.ErrInvalid) {
+			t.Errorf("%+v: %v, want ErrInvalid", tc, err)
+		}
+	}
+	// Personal tokens strip any injected base: or team: roles.
+	_, perRec, err := s.CreatePersonal(ctx, ext.Principal{
+		ID: "user:a@x.io", Name: "Alice", Roles: []string{"developer", "base:shop", "team:payments"},
+	}, "mcp", 0)
+	if err != nil || len(perRec.OwnerRoles) != 1 || perRec.OwnerRoles[0] != "developer" {
+		t.Errorf("personal token OwnerRoles = %v %v", perRec.OwnerRoles, err)
+	}
+}
