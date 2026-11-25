@@ -118,6 +118,13 @@ type BranchExtendPolicy interface {
 	CheckExtend(ctx context.Context, p Principal, r BranchRequest) error
 }
 
+// BranchTTLCap may be implemented by a BranchPolicy to report the maximum
+// branch TTL allowed for p on base when a caller omits ttl, so the agent can
+// clamp its default TTL instead of refusing with ErrForbidden.
+type BranchTTLCap interface {
+	MaxBranchTTL(ctx context.Context, p Principal, base string) (time.Duration, bool)
+}
+
 // BranchSharer may be implemented by a BranchHost so modules can ask whether a
 // caller shares branch access with a branch's owner through BranchPolicy.
 type BranchSharer interface {
@@ -147,6 +154,26 @@ func (ps Policies) CheckExtend(ctx context.Context, p Principal, r BranchRequest
 		}
 	}
 	return nil
+}
+
+// MaxBranchTTL returns the tightest maximum TTL enforced across policies that
+// implement BranchTTLCap.
+func (ps Policies) MaxBranchTTL(ctx context.Context, p Principal, base string) (time.Duration, bool) {
+	var minTTL time.Duration
+	capped := false
+	for _, x := range ps {
+		tc, ok := x.(BranchTTLCap)
+		if !ok {
+			continue
+		}
+		if d, ok := tc.MaxBranchTTL(ctx, p, base); ok && d > 0 {
+			if !capped || d < minTTL {
+				minTTL = d
+				capped = true
+			}
+		}
+	}
+	return minTTL, capped
 }
 
 func (ps Policies) SharesBranches(ctx context.Context, p Principal, owner string) bool {

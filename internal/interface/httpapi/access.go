@@ -317,6 +317,9 @@ func pathResource(r *http.Request) string {
 	if e := r.PathValue("engine"); e != "" {
 		return e + "@" + r.PathValue("version")
 	}
+	if r.URL.Path == "/v1/uploads" || r.URL.Path == "/v1/uploads/room" {
+		return r.URL.Query().Get("base")
+	}
 	return ""
 }
 

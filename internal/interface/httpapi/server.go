@@ -109,6 +109,11 @@ type Server struct {
 	anonMu      sync.Mutex
 	anonPending map[string]*anonReservation
 
+	// policyPending tracks branches currently being created/forked after
+	// passing BranchPolicy, preventing concurrent MaxBranches limit bypasses.
+	policyMu      sync.Mutex
+	policyPending map[string]*policyReservation
+
 	// Branches returns the service, or an error before `db-branch init`.
 	Branches func() (Branches, error)
 	Runtimes Runtimes

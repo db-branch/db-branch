@@ -121,10 +121,11 @@ export type Upload = { id: string; name: string; size: number; node: string };
 
 // uploadDump streams a dump file to the node that will use it, reporting
 // progress (0..1). fetch() cannot report upload progress, hence XHR.
-export function uploadDump(file: File, node: string | undefined, onProgress: (f: number) => void, signal?: AbortSignal): Promise<Upload> {
+export function uploadDump(file: File, node: string | undefined, onProgress: (f: number) => void, signal?: AbortSignal, base?: string): Promise<Upload> {
   return new Promise((resolve, reject) => {
     const q = new URLSearchParams({ name: file.name });
     if (node) q.set("node", node);
+    if (base) q.set("base", base);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `/v1/uploads?${q}`);
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
@@ -494,8 +495,13 @@ export const api = {
   snapshotBase: (name: string) => call<Operation>("POST", `/v1/bases/${name}/snapshots`),
   describeBase: (name: string, description: string) => call<Base>("PATCH", `/v1/bases/${name}`, { description }),
   loadBase: (name: string, dump: string, snapshot: boolean) => call<Operation>("POST", `/v1/bases/${name}/load`, { dump, snapshot }),
-  uploadRoom: (node?: string) =>
-    call<{ node: string; max_bytes: number; reason: "limit" | "pool" }>("GET", `/v1/uploads/room${node ? `?node=${encodeURIComponent(node)}` : ""}`),
+  uploadRoom: (node?: string, base?: string) => {
+    const q = new URLSearchParams();
+    if (node) q.set("node", node);
+    if (base) q.set("base", base);
+    const qs = q.toString();
+    return call<{ node: string; max_bytes: number; reason: "limit" | "pool" }>("GET", `/v1/uploads/room${qs ? `?${qs}` : ""}`);
+  },
   baseSQL: (name: string, sql: string) => call<void>("POST", `/v1/bases/${name}/sql`, { sql }),
   // setBaseAnonymous changes only the keys given; null inherits the cluster-wide setting.
   setBaseAnonymous: (name: string, b: { max_branches?: number | null; max_ttl?: string | null }) => call<Base>("PATCH", `/v1/bases/${name}/anonymous`, b),

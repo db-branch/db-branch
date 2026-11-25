@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/db-branch/db-branch/pkg/ext"
 )
@@ -177,10 +178,18 @@ func (p pol) SharesBranches(context.Context, ext.Principal, string) bool        
 type extendPol struct {
 	pol
 	extendDeny error
+	maxTTL     int
 }
 
 func (p extendPol) CheckExtend(context.Context, ext.Principal, ext.BranchRequest) error {
 	return p.extendDeny
+}
+
+func (p extendPol) MaxBranchTTL(context.Context, ext.Principal, string) (time.Duration, bool) {
+	if p.maxTTL <= 0 {
+		return 0, false
+	}
+	return time.Duration(p.maxTTL), true
 }
 
 type roleResolver struct {
@@ -227,6 +236,13 @@ func TestCombine_ブランチの方針は全員が許せば作れどれかが許
 	extDeny := ext.Combine([]ext.Module{{BranchPolicy: pol{}}, {BranchPolicy: extendPol{extendDeny: no}}})
 	if err := extDeny.BranchPolicy.(ext.BranchExtendPolicy).CheckExtend(ctx, ext.Principal{}, ext.BranchRequest{}); !errors.Is(err, no) {
 		t.Errorf("extend denied: %v", err)
+	}
+	capped := ext.Combine([]ext.Module{{BranchPolicy: extendPol{maxTTL: 3600}}, {BranchPolicy: extendPol{maxTTL: 600}}})
+	if got, ok := capped.BranchPolicy.(ext.BranchTTLCap).MaxBranchTTL(ctx, ext.Principal{}, "shop"); !ok || got != 600 {
+		t.Errorf("MaxBranchTTL = %v %v, want 600 true", got, ok)
+	}
+	if _, ok := ext.Combine([]ext.Module{{BranchPolicy: pol{}}}).BranchPolicy.(ext.BranchTTLCap).MaxBranchTTL(ctx, ext.Principal{}, "shop"); ok {
+		t.Error("no cap: want false")
 	}
 	if ext.Combine(nil).BranchPolicy != nil {
 		t.Error("no policy")

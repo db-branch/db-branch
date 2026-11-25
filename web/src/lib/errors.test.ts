@@ -41,6 +41,15 @@ describe("formatError", () => {
     });
   });
 
+  it("includes reason detail for forbidden, quota_exceeded, conflict, and invalid_request in ja mode", () => {
+    setLanguage("ja");
+    const err = new ApiError(403, "forbidden", "team pay has 2 branches, its limit; delete one first");
+    expect(formatError(err)).toEqual({
+      text: ja[ERROR_CODES.forbidden],
+      detail: "team pay has 2 branches, its limit; delete one first",
+    });
+  });
+
   it("shows generic Japanese message plus small original text for unknown error codes", () => {
     setLanguage("ja");
     const err = new ApiError(500, "future_unknown_code", "something went sideways");

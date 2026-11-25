@@ -96,6 +96,8 @@ export type FormattedError = { text: string; detail?: string };
  * codes and generic errors fall back to a generic Japanese sentence with the
  * original message in small text.
  */
+const DETAIL_IN_JA = new Set(["query_failed", "forbidden", "quota_exceeded", "conflict", "invalid_request"]);
+
 export function formatError(err: unknown): FormattedError | null {
   if (err === null || err === undefined || err === "") return null;
   if (typeof err === "string") {
@@ -112,7 +114,7 @@ export function formatError(err: unknown): FormattedError | null {
     const canonical = ERROR_CODES[err.code];
     if (canonical) {
       const text = t(canonical);
-      return err.code === "query_failed" && err.message ? { text, detail: err.message } : { text };
+      return DETAIL_IN_JA.has(err.code) && err.message && err.message !== canonical ? { text, detail: err.message } : { text };
     }
     if (err.message && err.message in ja) return { text: ja[err.message] };
     return { text: t(UNKNOWN_ERROR_TEXT), detail: err.message || undefined };

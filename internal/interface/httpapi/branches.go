@@ -239,7 +239,7 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 		}
 		ttl, err := parseTTL(in.TTL)
 		if in.TTL == "" && s.DefaultTTL != nil {
-			ttl = s.DefaultTTL()
+			ttl = s.clampBranchTTL(r.Context(), principalOf(r), base.String(), s.DefaultTTL())
 		}
 		if err != nil {
 			return dbbranch.CreateBranchRequest{}, err
@@ -255,8 +255,14 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, svc Branch
 		if err != nil {
 			return dbbranch.CreateBranchRequest{}, err
 		}
-		if err := s.checkBranchPolicy(r.Context(), svc, principalOf(r), in, ttl); err != nil {
+		unreservePol, err := s.reserveBranchPolicy(r.Context(), svc, principalOf(r), in, ttl)
+		if err != nil {
 			return dbbranch.CreateBranchRequest{}, err
+		}
+		prev := unreserve
+		unreserve = func() {
+			unreservePol()
+			prev()
 		}
 		if in.Record {
 			if err := s.checkRecord(r.Context(), svc, principalOf(r), in); err != nil {
@@ -537,7 +543,7 @@ func (s *Server) forkBranch(w http.ResponseWriter, r *http.Request, svc Branches
 	}
 	ttl, err := parseTTL(in.TTL)
 	if in.TTL == "" && s.DefaultTTL != nil {
-		ttl = s.DefaultTTL()
+		ttl = s.clampBranchTTL(r.Context(), principalOf(r), parent.Base.String(), s.DefaultTTL())
 	}
 	if err != nil {
 		fail(w, err)
@@ -571,10 +577,19 @@ func (s *Server) forkBranch(w http.ResponseWriter, r *http.Request, svc Branches
 		}
 	}
 	snap := parent.Snapshot
-	if err := s.checkBranchPolicy(r.Context(), svc, p, createBranchJSON{
+	unreserve, forwarded := func() {}, false
+	w, sw := track(w)
+	defer func() {
+		if sw.status != http.StatusAccepted || forwarded {
+			unreserve()
+		}
+	}()
+	var polErr error
+	unreserve, polErr = s.reserveBranchPolicy(r.Context(), svc, p, createBranchJSON{
 		Name: in.Name, Base: parent.Base.String(), Snapshot: &snap, Owner: in.Owner, OwnerName: in.OwnerName, Access: in.Access,
-	}, ttl); err != nil {
-		fail(w, err)
+	}, ttl)
+	if polErr != nil {
+		fail(w, polErr)
 		return
 	}
 	if _, err := svc.GetBranch(r.Context(), childName); err == nil {
@@ -598,7 +613,11 @@ func (s *Server) forkBranch(w http.ResponseWriter, r *http.Request, svc Branches
 		}
 		body, _ := json.Marshal(in)
 		r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(body)), int64(len(body))
-		s.forward(w, r, parent.Node)
+		forwarded = true
+		if _, status := s.forwardStatus(w, r, parent.Node); status == http.StatusAccepted {
+			time.AfterFunc(anonForwardHold, unreserve)
+			forwarded = false
+		}
 		return
 	}
 	req := dbbranch.ForkBranchRequest{
@@ -612,6 +631,7 @@ func (s *Server) forkBranch(w http.ResponseWriter, r *http.Request, svc Branches
 	}
 	s.accepted(w, r, "branch.fork", operation.Target{Resource: "branch", Name: req.Name.String()},
 		func(ctx context.Context, report func(string)) error {
+			defer unreserve()
 			b, err := svc.ForkBranch(ctx, req, report)
 			if b.Name != (domain.Name{}) {
 				s.publishBranch(ctx, svc, b.Name)

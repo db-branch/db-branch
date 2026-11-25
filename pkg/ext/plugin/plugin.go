@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/hashicorp/go-hclog"
 	goplugin "github.com/hashicorp/go-plugin"
@@ -58,6 +59,7 @@ type Info struct {
 	LoginMethods       []ext.LoginMethod
 	BranchPolicy       bool
 	BranchExtendPolicy bool
+	BranchTTLCap       bool
 	// Storage: the module provides storage; SharedStorage: seen by every node.
 	Storage, SharedStorage bool
 	Masker, MaskPolicy     bool
@@ -138,6 +140,7 @@ func (s *rpcServer) Info(_ struct{}, out *Info) error {
 		PasswordChanger: s.passwordChanger() != nil, PrincipalResolver: s.m.PrincipalResolver != nil,
 		RequiresLicense: s.m.RequiresLicense, PublicPaths: s.m.PublicPaths, LoginMethods: s.m.LoginMethods,
 		BranchPolicy: s.m.BranchPolicy != nil, BranchExtendPolicy: s.branchExtendPolicy() != nil,
+		BranchTTLCap: s.branchTTLCap() != nil,
 		Router: s.m.Router != nil, Ports: s.m.Ports, Configurable: s.m.Configurable != nil, Settings: s.m.Settings,
 		Handler: s.m.Handler != nil, Pages: s.m.Pages, Starter: s.m.Starter != nil,
 		Storage: s.m.Storage != nil, SharedStorage: s.m.SharedStorage,
@@ -281,6 +284,17 @@ func (s *rpcServer) branchExtendPolicy() ext.BranchExtendPolicy {
 	return ep
 }
 
+func (s *rpcServer) branchTTLCap() ext.BranchTTLCap {
+	tc, _ := s.m.BranchPolicy.(ext.BranchTTLCap)
+	return tc
+}
+
+// BranchTTLCapReply is the RPC result of MaxBranchTTL.
+type BranchTTLCapReply struct {
+	TTL    time.Duration
+	Capped bool
+}
+
 // ResolvePrincipal resolves a Principal via the module's PrincipalResolver.
 func (s *rpcServer) ResolvePrincipal(p ext.Principal, out *AuthenticateReply) error {
 	if s.m.PrincipalResolver == nil {
@@ -331,6 +345,14 @@ func (s *rpcServer) SharesBranches(a BranchArgs, out *bool) error {
 func (s *rpcServer) CheckExtend(a BranchArgs, out *RPCError) error {
 	if ep := s.branchExtendPolicy(); ep != nil {
 		*out = toRPC(ep.CheckExtend(context.Background(), a.Principal, a.Request))
+	}
+	return nil
+}
+
+// MaxBranchTTL runs MaxBranchTTL when the module's BranchPolicy implements BranchTTLCap.
+func (s *rpcServer) MaxBranchTTL(a BranchArgs, out *BranchTTLCapReply) error {
+	if tc := s.branchTTLCap(); tc != nil {
+		out.TTL, out.Capped = tc.MaxBranchTTL(context.Background(), a.Principal, a.Request.Base)
 	}
 	return nil
 }
@@ -660,6 +682,42 @@ func (r extendPolicyRemote) CheckExtend(_ context.Context, p ext.Principal, req 
 	return out.err()
 }
 
+type ttlCapPolicyRemote struct{ *Remote }
+
+func (r ttlCapPolicyRemote) MaxBranchTTL(_ context.Context, p ext.Principal, base string) (time.Duration, bool) {
+	var out BranchTTLCapReply
+	if err := r.c.Call("Plugin.MaxBranchTTL", BranchArgs{Principal: p, Request: ext.BranchRequest{Base: base}}, &out); err != nil {
+		return 0, false
+	}
+	return out.TTL, out.Capped
+}
+
+func remoteBranchPolicy(r *Remote, info Info) ext.BranchPolicy {
+	switch {
+	case info.BranchExtendPolicy && info.BranchTTLCap:
+		return fullPolicyRemote{extendPolicyRemote{r}, ttlCapPolicyRemote{r}}
+	case info.BranchExtendPolicy:
+		return extendPolicyRemote{r}
+	case info.BranchTTLCap:
+		return ttlCapPolicyRemote{r}
+	default:
+		return r
+	}
+}
+
+type fullPolicyRemote struct {
+	extendPolicyRemote
+	ttlCapPolicyRemote
+}
+
+func (r fullPolicyRemote) CheckBranch(ctx context.Context, p ext.Principal, req ext.BranchRequest) error {
+	return r.extendPolicyRemote.CheckBranch(ctx, p, req)
+}
+
+func (r fullPolicyRemote) SharesBranches(ctx context.Context, p ext.Principal, owner string) bool {
+	return r.extendPolicyRemote.SharesBranches(ctx, p, owner)
+}
+
 func (r *Remote) Authorize(_ context.Context, p ext.Principal, action string, res ext.Resource) error {
 	var out RPCError
 	if err := r.c.Call("Plugin.Authorize", AuthorizeArgs{Principal: p, Action: action, Resource: res}, &out); err != nil {
@@ -967,10 +1025,7 @@ func start(path string) (*Loaded, error) {
 	m.Settings, m.Pages, m.RequiresLicense = info.Settings, info.Pages, info.RequiresLicense
 	m.PublicPaths, m.LoginMethods = info.PublicPaths, info.LoginMethods
 	if info.BranchPolicy {
-		m.BranchPolicy = remote
-		if info.BranchExtendPolicy {
-			m.BranchPolicy = extendPolicyRemote{remote}
-		}
+		m.BranchPolicy = remoteBranchPolicy(remote, info)
 	}
 	if info.Configurable {
 		m.Configurable = remote

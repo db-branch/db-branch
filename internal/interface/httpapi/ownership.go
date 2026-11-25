@@ -465,14 +465,32 @@ func (s *Server) publicBases(w http.ResponseWriter, r *http.Request, svc Branche
 
 // checkBranchPolicy asks the modules' branch policy (e.g. team limits,
 // masked snapshots only) about a branch anyone is creating.
-func (s *Server) checkBranchPolicy(ctx context.Context, svc Branches, p ext.Principal, in createBranchJSON, ttl time.Duration) error {
+type policyReservation struct{ owner, base string }
+
+// clampBranchTTL returns ttl clamped to any module BranchTTLCap when ttl was omitted.
+func (s *Server) clampBranchTTL(ctx context.Context, p ext.Principal, base string, ttl time.Duration) time.Duration {
+	tc, ok := s.Ext.BranchPolicy.(ext.BranchTTLCap)
+	if !ok {
+		return ttl
+	}
+	if cap, capped := tc.MaxBranchTTL(ctx, p, base); capped && cap > 0 && (ttl == 0 || ttl > cap) {
+		return cap
+	}
+	return ttl
+}
+
+// reserveBranchPolicy checks BranchPolicy under policyMu and reserves the branch
+// name until async creation makes it visible in ListBranches (or fails).
+func (s *Server) reserveBranchPolicy(ctx context.Context, svc Branches, p ext.Principal, in createBranchJSON, ttl time.Duration) (func(), error) {
 	pol := s.Ext.BranchPolicy
 	if pol == nil {
-		return nil // every policy decides whom it limits (the team limits skip admins)
+		return func() {}, nil // every policy decides whom it limits (the team limits skip admins)
 	}
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	list, err := svc.ListBranches(ctx)
 	if err != nil {
-		return err
+		return func() {}, err
 	}
 	req := ext.BranchRequest{Name: in.Name, Owner: in.Owner, Base: in.Base, TTL: ttl, Access: in.Access, Existing: []ext.BranchInfo{}}
 	if in.Snapshot != nil {
@@ -485,10 +503,35 @@ func (s *Server) checkBranchPolicy(ctx context.Context, svc Branches, p ext.Prin
 			}
 		}
 	}
+	listed := map[string]bool{}
 	for _, b := range list {
+		listed[b.Name.String()] = true
 		req.Existing = append(req.Existing, ext.BranchInfo{Name: b.Name.String(), Owner: b.Owner, Base: b.Base.String()})
 	}
-	return pol.CheckBranch(ctx, p, req)
+	for name, res := range s.policyPending {
+		if listed[name] {
+			continue
+		}
+		req.Existing = append(req.Existing, ext.BranchInfo{Name: name, Owner: res.owner, Base: res.base})
+	}
+	if err := pol.CheckBranch(ctx, p, req); err != nil {
+		return func() {}, err
+	}
+	if in.Name == "" {
+		return func() {}, nil
+	}
+	if s.policyPending == nil {
+		s.policyPending = map[string]*policyReservation{}
+	}
+	res := &policyReservation{owner: in.Owner, base: in.Base}
+	s.policyPending[in.Name] = res
+	return func() {
+		s.policyMu.Lock()
+		defer s.policyMu.Unlock()
+		if s.policyPending[in.Name] == res {
+			delete(s.policyPending, in.Name)
+		}
+	}, nil
 }
 
 // checkExtendPolicy asks the modules' branch policy about extending a branch's
