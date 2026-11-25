@@ -9,16 +9,16 @@ import { t } from "../lib/i18n";
 // (uploaded to the node, size checked first), or a path on the node.
 export type DumpSource = { kind: "none" } | { kind: "file"; file: File | null } | { kind: "path"; path: string };
 
-export function DumpPicker({ value, onChange, allowNone, node }: { value: DumpSource; onChange: (v: DumpSource) => void; allowNone: boolean; node?: string }) {
+export function DumpPicker({ value, onChange, allowNone, node, base }: { value: DumpSource; onChange: (v: DumpSource) => void; allowNone: boolean; node?: string; base?: string }) {
   const [room, setRoom] = useState<{ max: number; reason: string } | null>(null);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (value.kind !== "file") return;
-    api.uploadRoom(node).then(
+    api.uploadRoom(node, base).then(
       (r) => setRoom({ max: r.max_bytes, reason: r.reason }),
       () => setRoom(null),
     );
-  }, [value.kind, node]);
+  }, [value.kind, node, base]);
   const kinds: [DumpSource["kind"], string][] = [...(allowNone ? [["none", "Empty"] as [DumpSource["kind"], string]] : []), ["file", "Upload file"], ["path", "Path on node"]];
   const file = value.kind === "file" ? value.file : null;
   return (
@@ -93,16 +93,16 @@ export function dumpProblem(v: DumpSource, room: number | null): string | null {
 export function useDumpSender() {
   const [progress, setProgress] = useState<number | null>(null);
   const abort = useRef<AbortController | null>(null);
-  const send = async (v: DumpSource, node?: string): Promise<string | undefined> => {
+  const send = async (v: DumpSource, node?: string, base?: string): Promise<string | undefined> => {
     if (v.kind === "none") return undefined;
     if (v.kind === "path") return v.path.trim();
     if (!v.file) throw new LocalizedError(t("Choose a dump file."));
-    const room = await api.uploadRoom(node);
+    const room = await api.uploadRoom(node, base);
     if (v.file.size > room.max_bytes) throw new LocalizedError(t("The file is {size}; the node accepts at most {max} now.", { size: bytes(v.file.size), max: bytes(room.max_bytes) }));
     abort.current = new AbortController();
     setProgress(0);
     try {
-      const u = await uploadDump(v.file!, node, setProgress, abort.current.signal);
+      const u = await uploadDump(v.file!, node, setProgress, abort.current.signal, base);
       return u.id;
     } finally {
       setProgress(null);

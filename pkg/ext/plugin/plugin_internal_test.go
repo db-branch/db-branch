@@ -588,6 +588,13 @@ func (fakeExtendPolicy) CheckExtend(_ context.Context, _ ext.Principal, req ext.
 	return nil
 }
 
+func (fakeExtendPolicy) MaxBranchTTL(_ context.Context, _ ext.Principal, base string) (time.Duration, bool) {
+	if base == "prod" {
+		return time.Hour, true
+	}
+	return 0, false
+}
+
 type fakeResolver struct{}
 
 func (fakeResolver) ResolvePrincipal(_ context.Context, p ext.Principal) (ext.Principal, error) {
@@ -611,7 +618,7 @@ func Test認証と認可と監査とブランチ方針をRPC越しに運ぶ(t *t
 		PrincipalResolver: fakeResolver{},
 	})
 	info, err := r.Info()
-	if err != nil || !info.PrincipalResolver || !info.BranchExtendPolicy {
+	if err != nil || !info.PrincipalResolver || !info.BranchExtendPolicy || !info.BranchTTLCap {
 		t.Fatalf("info = %+v %v", info, err)
 	}
 	ctx := context.Background()
@@ -660,6 +667,20 @@ func Test認証と認可と監査とブランチ方針をRPC越しに運ぶ(t *t
 	if err := ep.CheckExtend(ctx, p, ext.BranchRequest{TTL: 2 * time.Hour}); !errors.Is(err, ext.ErrForbidden) {
 		t.Errorf("CheckExtend deny: %v", err)
 	}
+	tc := ttlCapPolicyRemote{r}
+	if ttl, ok := tc.MaxBranchTTL(ctx, p, "prod"); !ok || ttl != time.Hour {
+		t.Errorf("MaxBranchTTL prod = %v %v, want 1h true", ttl, ok)
+	}
+	if _, ok := tc.MaxBranchTTL(ctx, p, "other"); ok {
+		t.Error("MaxBranchTTL other: want false")
+	}
+	fp := fullPolicyRemote{ep, tc}
+	if err := fp.CheckBranch(ctx, p, ext.BranchRequest{Base: "prod"}); err != nil {
+		t.Errorf("fullPolicy CheckBranch: %v", err)
+	}
+	if !fp.SharesBranches(ctx, p, "team:a") {
+		t.Error("fullPolicy SharesBranches: want true")
+	}
 	_ = r.c.Close()
 	if err := pc.ChangePassword(ctx, p, "old", "new"); err == nil {
 		t.Error("closed ChangePassword: want error")
@@ -672,5 +693,25 @@ func Test認証と認可と監査とブランチ方針をRPC越しに運ぶ(t *t
 	}
 	if err := ep.CheckExtend(ctx, p, ext.BranchRequest{TTL: 30 * time.Minute}); err == nil {
 		t.Error("closed CheckExtend: want error")
+	}
+	if _, ok := tc.MaxBranchTTL(ctx, p, "prod"); ok {
+		t.Error("closed MaxBranchTTL: want false")
+	}
+	for _, tcCase := range []struct {
+		info        Info
+		wantExtend  bool
+		wantTTLCap  bool
+	}{
+		{Info{BranchPolicy: true}, false, false},
+		{Info{BranchPolicy: true, BranchExtendPolicy: true}, true, false},
+		{Info{BranchPolicy: true, BranchTTLCap: true}, false, true},
+		{Info{BranchPolicy: true, BranchExtendPolicy: true, BranchTTLCap: true}, true, true},
+	} {
+		bp := remoteBranchPolicy(r, tcCase.info)
+		_, gotExt := bp.(ext.BranchExtendPolicy)
+		_, gotCap := bp.(ext.BranchTTLCap)
+		if gotExt != tcCase.wantExtend || gotCap != tcCase.wantTTLCap {
+			t.Errorf("%+v: extend=%v cap=%v, want %v %v", tcCase.info, gotExt, gotCap, tcCase.wantExtend, tcCase.wantTTLCap)
+		}
 	}
 }

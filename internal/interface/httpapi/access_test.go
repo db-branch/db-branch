@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -697,4 +698,43 @@ func TestHTTPAPI_consoleActionsにブランチ系アクションが含まれる(
 			t.Errorf("session.can[%q] = %v, want true", a, can[a])
 		}
 	}
+}
+
+func TestAccess_アップロードはbaseクエリをリソース名として認可へ渡す(t *testing.T) {
+	f := newFixture(t)
+	var seen []ext.Resource
+	az := ext.AllOf{allowFunc(func(_ context.Context, _ ext.Principal, action string, r ext.Resource) error {
+		if action == "base.upload" {
+			seen = append(seen, r)
+			if r.Name != "shop" {
+				return ext.ErrForbidden
+			}
+		}
+		return nil
+	})}
+	f.srv.Ext = ext.Module{Authenticator: moduleAuth{}, Authorizer: az}
+	h := f.srv.Handler(false)
+	if resp, _ := send(t, h, "GET", "/v1/uploads/room?base=shop", nil, bearer("t-viewer")); resp.StatusCode != 501 {
+		t.Errorf("room with base=shop: %d, want 501 (not_implemented past authz)", resp.StatusCode)
+	}
+	if resp, _ := send(t, h, "GET", "/v1/uploads/room", nil, bearer("t-viewer")); resp.StatusCode != 403 {
+		t.Errorf("room without base: %d, want 403", resp.StatusCode)
+	}
+	req, _ := http.NewRequest("POST", "/v1/uploads?name=a.sql&base=shop", strings.NewReader("select 1;"))
+	bearer("t-viewer")(req)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 501 {
+		t.Errorf("upload with base=shop: %d, want 501 (past authz)", rec.Code)
+	}
+	if len(seen) != 3 || seen[0].Name != "shop" || seen[1].Name != "" || seen[2].Name != "shop" {
+		t.Errorf("seen resources = %+v", seen)
+	}
+}
+
+type allowFunc func(context.Context, ext.Principal, string, ext.Resource) error
+
+func (fn allowFunc) Authorize(ctx context.Context, p ext.Principal, action string, r ext.Resource) error {
+	return fn(ctx, p, action, r)
 }

@@ -462,7 +462,7 @@ export function UpdateData({ base, onClose }: { base: Base; onClose: () => void 
         await api.baseSQL(base.name, sql);
         if (snapshot) await api.snapshotBase(base.name);
       } else {
-        const ref = await sender.send(dump, base.node);
+        const ref = await sender.send(dump, base.node, base.name);
         if (!ref) throw new LocalizedError(t("Choose a dump file or a path."));
         await api.loadBase(base.name, ref, snapshot);
       }
@@ -486,7 +486,7 @@ export function UpdateData({ base, onClose }: { base: Base; onClose: () => void 
         </div>
         {mode === "dump" ? (
           <>
-            <DumpPicker value={dump} onChange={setDump} allowNone={false} node={base.node} />
+            <DumpPicker value={dump} onChange={setDump} allowNone={false} node={base.node} base={base.name} />
             <p className="muted small">{t("The dump runs on top of the current data, as the administrator. A dump with DROP/CREATE statements replaces what it covers.")}</p>
           </>
         ) : (

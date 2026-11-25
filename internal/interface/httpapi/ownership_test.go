@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1017,4 +1018,72 @@ type tokenAuthFuncAuthorize func(context.Context, ext.Principal, string, ext.Res
 
 func (fn tokenAuthFuncAuthorize) Authorize(ctx context.Context, p ext.Principal, action string, r ext.Resource) error {
 	return fn(ctx, p, action, r)
+}
+
+type ttlCapTeamPolicy struct {
+	teamPolicy
+	cap time.Duration
+}
+
+func (p *ttlCapTeamPolicy) MaxBranchTTL(_ context.Context, who ext.Principal, base string) (time.Duration, bool) {
+	if slices.Contains(who.Roles, "admin") || slices.Contains(who.Roles, "scope:full") || p.cap <= 0 || base != "prod" {
+		return 0, false
+	}
+	return p.cap, true
+}
+
+func TestBranchPolicy_TTL省略時はチームのMaxTTLに丸め並行作成の回数制限を守る(t *testing.T) {
+	f := ownedFixture(t)
+	f.branches.bases["prod"] = domain.Base{Name: name("prod"), Runtime: mysql84, Status: domain.BaseReady, Snapshots: []domain.BaseSnapshot{{Name: "s1"}}}
+	f.srv.DefaultTTL = func() time.Duration { return 24 * time.Hour }
+	pol := &ttlCapTeamPolicy{cap: 2 * time.Hour}
+	f.srv.Ext = ext.Module{BranchPolicy: pol}
+	h := f.srv.Handler(false)
+
+	// Explicit ttl above cap is still rejected (not clamped).
+	if resp, _ := send(t, h, "POST", "/v1/branches", map[string]any{"name": "b-explicit", "base": "prod", "ttl": "12h"}, as("t-bob")); resp.StatusCode != 403 {
+		t.Errorf("explicit ttl above cap: %d, want 403", resp.StatusCode)
+	}
+
+	// Omitting ttl clamps DefaultTTL (24h) to team cap (2h) instead of failing 403.
+	if resp, body := send(t, h, "POST", "/v1/branches", map[string]any{"name": "b-default-ttl", "base": "prod"}, as("t-bob")); resp.StatusCode != 202 {
+		t.Fatalf("default ttl clamp: %d %v", resp.StatusCode, body)
+	}
+	waitFor(t, func() bool { _, ok := f.branches.get("b-default-ttl"); return ok })
+	if pol.got[len(pol.got)-1].TTL != 2*time.Hour {
+		t.Errorf("clamped ttl = %s, want 2h", pol.got[len(pol.got)-1].TTL)
+	}
+
+	// Reset branches to 2 existing (alices, opened -> team cap is 3), then launch two concurrent creates with createGate.
+	f.branches.mu.Lock()
+	delete(f.branches.branches, "b-default-ttl")
+	f.branches.mu.Unlock()
+	gate := make(chan struct{})
+	f.branches.createGate = gate
+
+	var wg sync.WaitGroup
+	codes := make([]int, 2)
+	for i, bname := range []string{"race-1", "race-2"} {
+		wg.Add(1)
+		go func(idx int, nm string) {
+			defer wg.Done()
+			r, _ := send(t, h, "POST", "/v1/branches", map[string]any{"name": nm, "base": "prod", "ttl": "1h"}, as("t-bob"))
+			codes[idx] = r.StatusCode
+		}(i, bname)
+	}
+	// Wait until one enters CreateBranch (gated), or both return, then release gate.
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+	accepted, refused := 0, 0
+	for _, c := range codes {
+		if c == 202 {
+			accepted++
+		} else if c == 409 {
+			refused++
+		}
+	}
+	if accepted != 1 || refused != 1 {
+		t.Errorf("concurrent MaxBranches race: codes = %v (want one 202 and one 409)", codes)
+	}
 }
