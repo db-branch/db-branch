@@ -1,9 +1,9 @@
 import { FormEvent, useContext, useState } from "react";
 import { api, Base, Branch, can, isAdmin, ownerLabel } from "../api";
-import { Icon, Status } from "../components/marks";
+import { Icon, Status, StorageBar } from "../components/marks";
 import { Dialog, Drawer, Empty, ErrorLine, ErrorText, Field } from "../components/ui";
 import { serverError } from "../lib/errors";
-import { relative } from "../lib/format";
+import { formatDateTime, relative } from "../lib/format";
 import { useLive, useNow } from "../lib/live";
 import { t } from "../lib/i18n";
 import { RecordingBadge } from "../components/recording";
@@ -59,57 +59,86 @@ export function Branches() {
           }
         />
       )}
-      {branches && shown.length > 0 && (
-        <div className="table-wrap">
-          <table className="rows">
-            <thead>
-              <tr>
-                <th className="col-status" aria-label={t("Status")} />
-                <th>{t("Name")}</th>
-                <th>{t("Base")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((b) => (
-                <tr key={b.name} className={b.operation ? "busy" : ""}>
-                  <td className="col-status">
-                    <Status status={b.status} reason={b.status_reason} />
-                  </td>
-                  <td>
-                    <a className="branch-link" href={`${ADMIN}/branches/${encodeURIComponent(b.name)}`} onClick={(e) => {
-                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-                      e.preventDefault();
-                      go(`${ADMIN}/branches/${encodeURIComponent(b.name)}`);
-                    }}>
-                      <BranchName name={b.name} owner={ownerLabel(b)} />
-                    </a>
-                    {b.access === "open" && (
-                      <span className="badge" title={t("Anyone may connect, with the shared password")}>
-                        open
-                      </span>
-                    )}
-                    <RecordingBadge record={b.record} />
-                    {b.status_reason && <span className="reason"><ErrorText error={serverError(b.status_reason)} /></span>}
-                  </td>
-                  <td>
-                    <span className="mono muted" title={`snapshot ${b.snapshot}`}>
-                      {b.base}
-                    </span>
-                    {b.parent_branch && (
-                      <span className="muted small mono" title={t("Forked from {name}", { name: b.parent_branch })}>
-                        {" "}
-                        ← {b.parent_branch}
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {branches && shown.length > 0 && <BranchesTable branches={shown} all={all} onOpen={(name) => go(`${ADMIN}/branches/${encodeURIComponent(name)}`)} />}
       {creating && <CreateBranch bases={ready} onClose={() => setCreating(false)} />}
     </section>
+  );
+}
+
+export function BranchesTable({
+  branches,
+  all = branches,
+  now = Date.now(),
+  onOpen,
+}: {
+  branches: Branch[];
+  all?: Branch[];
+  now?: number;
+  onOpen: (name: string) => void;
+}) {
+  const maxStorage = Math.max(1, ...all.map((b) => Math.max(b.storage?.used ?? 0, b.storage?.referenced ?? 0)));
+  return (
+    <div className="table-wrap">
+      <table className="rows">
+        <thead>
+          <tr>
+            <th className="col-status" aria-label={t("Status")} />
+            <th>{t("Name")}</th>
+            <th>{t("Base")}</th>
+            <th>{t("Created")}</th>
+            <th>{t("Storage")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {branches.map((b) => (
+            <tr key={b.name} className={b.operation ? "busy" : ""}>
+              <td className="col-status">
+                <Status status={b.status} reason={b.status_reason} />
+              </td>
+              <td>
+                <a className="branch-link" href={`${ADMIN}/branches/${encodeURIComponent(b.name)}`} onClick={(e) => {
+                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                  e.preventDefault();
+                  onOpen(b.name);
+                }}>
+                  <BranchName name={b.name} owner={ownerLabel(b)} />
+                </a>
+                {b.access === "open" && (
+                  <span className="badge" title={t("Anyone may connect, with the shared password")}>
+                    open
+                  </span>
+                )}
+                <RecordingBadge record={b.record} />
+                {b.status_reason && <span className="reason"><ErrorText error={serverError(b.status_reason)} /></span>}
+              </td>
+              <td>
+                <span className="mono muted" title={`snapshot ${b.snapshot}`}>
+                  {b.base}
+                </span>
+                {b.parent_branch && (
+                  <span className="muted small mono" title={t("Forked from {name}", { name: b.parent_branch })}>
+                    {" "}
+                    ← {b.parent_branch}
+                  </span>
+                )}
+              </td>
+              <td>
+                {b.created_at ? (
+                  <span className="mono muted" title={formatDateTime(b.created_at)}>
+                    {relative(b.created_at, now)}
+                  </span>
+                ) : (
+                  <span className="muted">—</span>
+                )}
+              </td>
+              <td>
+                <StorageBar storage={b.storage} max={maxStorage} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

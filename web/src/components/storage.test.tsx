@@ -44,6 +44,8 @@ describe("StorageView", () => {
   it("tells the kind of each line and shows its size and its share of the pool", () => {
     const h = view();
     for (const k of ["base", "snapshot", "branch", "data"]) expect(h).toContain(`data-kind="${k}"`);
+    expect(h).toContain("Collapse all");
+    expect(h).toContain("Relative use");
     expect(h).toContain("2.1 GiB");
     expect(h).toContain("200 MiB");
     expect(h).toContain("100 MiB");
