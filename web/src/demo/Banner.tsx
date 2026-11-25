@@ -29,10 +29,10 @@ export function Banner({ role, onSwitch, home }: { role: Role | null; onSwitch: 
       <span className="demo-note">{t("Nothing here is real. Data resets when you reload.")}</span>
       <span className="demo-spacer" />
       <span className="demo-as">
-        <span>View as</span>
+        <span>{t("View as")}</span>
         {(["admin", "developer"] as const).map((r) => (
           <button key={r} type="button" aria-pressed={current === r} className={current === r ? "on" : ""} onClick={() => pick(r)}>
-            {r === "admin" ? "Admin console" : "Developer page"}
+            {r === "admin" ? t("Admin console") : t("Developer page")}
           </button>
         ))}
       </span>
@@ -43,7 +43,7 @@ export function Banner({ role, onSwitch, home }: { role: Role | null; onSwitch: 
         {t("Interested in Team / Business?")}
       </a>
       <a className="demo-home" href={home}>
-        Back to db-branch.com
+        {t("Back to db-branch.com")}
       </a>
     </div>
   );

@@ -163,7 +163,7 @@ function NodeMetrics({ node }: { node: string }) {
         <Sparkline label={t("CPU")} values={list.map((m) => m.cpu)} times={times} max={100} format={(v) => `${v.toFixed(0)}%`} />
       </div>
       <div className="metric">
-        <span className="muted" title={total ? `of ${bytes(total)}` : undefined}>
+        <span className="muted" title={total ? t("of {total}", { total: bytes(total) }) : undefined}>
           {t("Memory")}
         </span>
         <Sparkline label={t("Memory used")} values={list.map((m) => m.mem_used)} times={times} max={total} format={(v) => bytes(v)} />
@@ -257,11 +257,11 @@ function Engines({ nodes, installing }: { nodes: ClusterNode[]; installing: Oper
                         )}
                       </td>
                     ))}
-                    <td className="muted">{used === 0 ? "—" : `${used} base/branch${used > 1 ? "es" : ""}`}</td>
+                    <td className="muted">{used === 0 ? "—" : t("{n} base/branches", { n: used })}</td>
                     <td className="col-actions">
                       {can("runtime.install") && missing.length > 0 && (
-                        <button className="text-button" onClick={() => install(rt)} title={`Install on ${missing.map((n) => n.name).join(", ")}`}>
-                          Install on {missing.length === nodes.length ? "all" : `${missing.length} missing`}
+                        <button className="text-button" onClick={() => install(rt)} title={t("Install on {nodes}", { nodes: missing.map((n) => n.name).join(", ") })}>
+                          {missing.length === nodes.length ? t("Install on all") : t("Install on {n} missing", { n: missing.length })}
                         </button>
                       )}
                       {can("runtime.install") && missing.length === 0 && used === 0 && !busy.includes(rt) && (

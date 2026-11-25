@@ -38,7 +38,7 @@ export function TxTableView({
             </option>
           ))}
         </select>
-        <span className="muted small">line {line}</span>
+        <span className="muted small">{t("line {line}", { line })}</span>
       </div>
       {items.length === 0 ? (
         <p className="muted small">{t("No transactions")}</p>

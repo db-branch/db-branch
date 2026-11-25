@@ -84,7 +84,7 @@ function BaseLine({ base, branches, nodes, href, onOpen }: { base: Base; branche
         <a
           className="base-name mono strong"
           href={href}
-          aria-label={`Open ${base.name}`}
+          aria-label={t("Open {name}", { name: base.name })}
           onClick={(e) => {
             e.stopPropagation();
             if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
@@ -111,7 +111,7 @@ function BaseLine({ base, branches, nodes, href, onOpen }: { base: Base; branche
           const kids = bySnap.get(s.name) ?? [];
           return (
             <li key={s.name} className={s.name === base.latest_snapshot ? "latest" : ""}>
-              <span className="tick" title={new Date(s.created_at).toLocaleString()} />
+              <span className="tick" title={formatDateTime(s.created_at)} />
               <span className="mono snap-name">
                 {s.name}
                 {s.public && <span className="badge on">public</span>}
@@ -255,7 +255,7 @@ export function BaseBody({
                     </td>
                     <td className="mono">{used}</td>
                     <td>
-                      <div className="segmented small" role="radiogroup" aria-label={`Access to ${s.name}`} aria-disabled={!canBase(base, "base.publish")}>
+                      <div className="segmented small" role="radiogroup" aria-label={t("Access to {name}", { name: s.name })} aria-disabled={!canBase(base, "base.publish")}>
                         <button type="button" role="radio" aria-checked={!s.public} className={!s.public ? "on" : ""} disabled={!canBase(base, "base.publish")} onClick={() => s.public && run(api.setSnapshotPublic(base.name, s.name, false))}>
                           {t("Private")}
                         </button>

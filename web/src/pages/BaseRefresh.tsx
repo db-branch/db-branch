@@ -2,7 +2,7 @@ import { FormEvent, useState } from "react";
 import { api, Base, BaseRefresh, canBase } from "../api";
 import { Dialog, ErrorLine, ErrorText, Field } from "../components/ui";
 import { serverError } from "../lib/errors";
-import { relative } from "../lib/format";
+import { formatDateTime, relative } from "../lib/format";
 import { useLive, useNow } from "../lib/live";
 import { t } from "../lib/i18n";
 
@@ -49,7 +49,7 @@ export function RefreshCard({ base }: { base: Base }) {
               ) : refresh.last_run ? (
                 <>
                   <span className={refresh.last_run.ok ? "" : "error-text"}>{refresh.last_run.ok ? t("Succeeded") : t("Failed")}</span>{" "}
-                  <span className="muted" title={new Date(refresh.last_run.finished_at).toLocaleString()}>
+                  <span className="muted" title={formatDateTime(refresh.last_run.finished_at)}>
                     {relative(refresh.last_run.finished_at, now)}
                   </span>
                   {refresh.last_run.error && <p className="reason"><ErrorText error={serverError(refresh.last_run.error)} /></p>}
@@ -59,7 +59,7 @@ export function RefreshCard({ base }: { base: Base }) {
               )}
             </dd>
             <dt>{t("Next run")}</dt>
-            <dd title={new Date(refresh.next_run).toLocaleString()}>{relative(refresh.next_run, now)}</dd>
+            <dd title={formatDateTime(refresh.next_run)}>{relative(refresh.next_run, now)}</dd>
           </dl>
           <ErrorLine error={error} />
           {manage && (

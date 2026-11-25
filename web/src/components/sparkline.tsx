@@ -1,4 +1,9 @@
 import { useState } from "react";
+import { formatTime } from "../lib/format";
+
+export function sparkTitle(times: string[], hover: number | null): string | undefined {
+  return hover !== null && times[hover] ? formatTime(times[hover]) : undefined;
+}
 
 // Sparkline: one series, thin 2px line in the accent colour, a light area
 // beneath, and on hover a vertical rule with the value. The label next to it
@@ -43,7 +48,7 @@ export function Sparkline({
         {n > 0 && <path d={line} className="spark-line" />}
         {hover !== null && n > 0 && <line x1={x(hover)} x2={x(hover)} y1={0} y2={h} className="spark-rule" />}
       </svg>
-      <span className="mono spark-value" title={hover !== null && times[hover] ? new Date(times[hover]).toLocaleTimeString() : undefined}>
+      <span className="mono spark-value" title={sparkTitle(times, hover)}>
         {n ? format(values[shown]) : "—"}
       </span>
     </span>

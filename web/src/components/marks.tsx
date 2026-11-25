@@ -1,6 +1,6 @@
 // The console's visual vocabulary: every screen uses these marks the same way.
 import { useEffect, useRef, useState } from "react";
-import { bytes, engineLabel, statusShape, storageShare, ttlState } from "../lib/format";
+import { bytes, engineLabel, formatDateTime, statusShape, storageShare, ttlState } from "../lib/format";
 import { t } from "../lib/i18n";
 
 export function Status({ status, reason, tone }: { status: string; reason?: string | null; tone?: "soon" | "expired" }) {
@@ -36,9 +36,9 @@ export function Engine({ runtime }: { runtime: string }) {
 export function TtlBar({ created, expires }: { created: string; expires: string | null }) {
   const st = ttlState(created, expires);
   if (st.kind === "none") return <span className="ttl ttl-none" title={t("No expiry")}>∞</span>;
-  if (st.kind === "expired") return <span className="ttl ttl-expired" title={t("Expired {when}", { when: expires ?? "" })}>0</span>;
+  if (st.kind === "expired") return <span className="ttl ttl-expired" title={t("Expired {when}", { when: expires ? formatDateTime(expires) : "" })}>0</span>;
   return (
-    <span className={`ttl ${st.warn ? "ttl-warn" : ""}`} title={t("Expires {when}", { when: new Date(expires!).toLocaleString() })}>
+    <span className={`ttl ${st.warn ? "ttl-warn" : ""}`} title={t("Expires {when}", { when: formatDateTime(expires!) })}>
       <span className="bar">
         <span className="bar-fill" style={{ width: `${Math.max(2, st.fraction * 100)}%` }} />
       </span>

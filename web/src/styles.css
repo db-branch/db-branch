@@ -401,6 +401,7 @@ a.button { display: inline-flex; align-items: center; justify-content: center; t
 /* Connection panel */
 .connect { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .connect-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.connect-bar .segmented { max-width: 100%; overflow-x: auto; }
 .connect-snippet { display: flex; align-items: flex-start; gap: 6px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 8px 8px 10px; }
 .connect-snippet pre { flex: 1; min-width: 0; margin: 0; white-space: pre-wrap; word-break: break-all; font-size: 12px; line-height: 1.6; }
 .connect-values { margin: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -658,6 +659,7 @@ li.brow.skeleton { height: 56px; border-radius: 0; border-bottom: 2px solid var(
 @media (max-width: 720px), (pointer: coarse) {
   .portal-main button, .portal-main input[type="search"], .portal-main .name-input { min-height: 40px; }
   .brow-actions > button:not(.icon-button), .segmented.small button { height: 40px; }
+  .connect-bar .segmented.small button { padding: 0 7px; }
   .portal-main .icon-button { width: 40px; height: 40px; }
   .regenerate { width: 44px; }
   .portal-main .text-button { padding: 0 var(--s2); }

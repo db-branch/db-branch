@@ -106,6 +106,15 @@ export const ja: Record<string, string> = {
   " (cut)": "（省略）",
 
   // Tour
+  "Choose a Base": "Base を選ぶ",
+  "Name your Branch": "Branch に名前を付ける",
+  "Set the lifetime": "有効期限を決める",
+  "Create it": "作成する",
+  "Your branches": "自分の Branch",
+  "Skip tour": "ツアーをスキップ",
+  "Back": "戻る",
+  "Next": "次へ",
+  "Done": "完了",
   "Pick the Base to copy. A Branch is cloned from a Snapshot of it, so you get the data as it was when the latest Snapshot was taken.":
     "コピー元の Base を選びます。Branch はその Base の Snapshot から複製されるので、最新の Snapshot を取った時点のデータが手に入ります。",
   "Every name starts with {prefix}, which is fixed for your account. The full name is also the database user name you connect with.":
@@ -326,6 +335,12 @@ export const ja: Record<string, string> = {
     "リーダーが 1 日 1 回、パッケージリポジトリに新しい db-branch の版を問い合わせます。オフのときは、管理者が Check for updates を押したときだけ接続します。",
 
   // Demo (the static build at demo.db-branch.com)
+  "View as": "表示切り替え",
+  "Admin console": "管理コンソール",
+  "Developer page": "開発者ページ",
+  "Back to db-branch.com": "db-branch.com に戻る",
+  "Storefront catalog, carts and checkout (about 1 GiB)": "ストアフロントの商品カタログ・カート・チェックアウト（約 1 GiB）",
+  "Order history and fulfilment, refreshed from a read replica": "注文履歴とフルフィルメント（リードレプリカから定期更新）",
   "Run it on your own machine": "手元で試す",
   "Interested in Team / Business?": "Team / Business に興味がありますか？",
   "Nothing here is real. Data resets when you reload.": "ここにあるものはすべて架空です。再読み込みするとデータは元に戻ります。",
@@ -401,6 +416,34 @@ export const ja: Record<string, string> = {
   "Resolve all conflicts before applying the merge.": "マージを適用する前にすべての競合を解消してください。",
   "Automatic checkpoint saved: {checkpoint}": "自動チェックポイントを保存しました: {checkpoint}",
   // Modules
+  "Audit log of every change": "すべての変更の監査ログ",
+  "Users, roles, teams and single sign-on": "ユーザー・ロール・チーム・シングルサインオン",
+  "Record every change and restore a branch to any point": "すべての変更を記録し、Branch を任意の時点に復元",
+  "Connect to branches through ProxySQL": "ProxySQL 経由で Branch に接続",
+  "How long audit events are kept.": "監査イベントを保持する期間です。",
+  "Record the changes of every branch created from now on, not only those created with Record. Whether a branch records is decided when it is created and never changes: branches that exist are not affected.":
+    "これから作成するすべての Branch で、Record のチェック有無にかかわらず変更を記録します。記録するかどうかは作成時に決まり、あとから変更されません（既存の Branch には影響しません）。",
+  "How long recorded changes are kept. Older changes cannot be restored to.": "記録した変更を保持する期間です。これより古い変更時点には復元できません。",
+  "Check for updates daily": "毎日更新を確認する",
+  "Route by query comment": "クエリコメントでルーティング",
+  "Renew the license automatically": "ライセンスを自動更新する",
+  "Refuse changes that cannot be audited": "監査できない変更を拒否する",
+  "e.g. 30m, 2h, 1h30m or 14d": "例：30m、2h、1h30m、14d",
+  "Open {name}": "{name} を開く",
+  "Access to {name}": "{name} のアクセス権",
+  "of {total}": "合計 {total}",
+  "{n} base/branches": "{n} 件のベース/ブランチ",
+  "Install on {nodes}": "{nodes} に導入",
+  "Install on all": "すべてに導入",
+  "Install on {n} missing": "未導入の {n} 台に導入",
+  "History of {branch}": "{branch} の履歴",
+  "other version on {m}/{n}": "{m}/{n} 台が別バージョン",
+  "installing {done}/{total}": "導入中 {done}/{total}",
+  "{node} runs {loaded}, not {version}": "{node} は {version} ではなく {loaded} を実行中",
+  "{node}: not installed yet": "{node}: まだ導入されていません",
+  "running": "稼働中",
+  "running {version}": "{version} 稼働中",
+  "installing": "導入中",
   "Forget {name}?": "{name} の記録を削除しますか？",
   "Remove the cluster record of this module so it is no longer listed. You can install it again later.":
     "このモジュールのクラスタ記録を削除し、一覧に表示されないようにします。あとから入れ直すことができます。",
@@ -416,6 +459,8 @@ export const ja: Record<string, string> = {
   "Renewed": "更新済み",
   "Subscription not active": "サブスクリプションは無効です",
   "Failed": "失敗",
+  "Paused": "一時停止",
+  "line {line}": "ライン {line}",
   "Unknown": "不明",
 
   // Errors (by server error code and generic fallback)

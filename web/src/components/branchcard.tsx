@@ -143,8 +143,8 @@ export function BranchRow({
 
   const paused = b.status === "paused" && !job;
   const chip = paused ? (
-    <span className="chip chip-paused" title={b.expires_at ? new Date(b.expires_at).toLocaleString() : undefined}>
-      Paused
+    <span className="chip chip-paused" title={b.expires_at ? formatDateTime(b.expires_at) : undefined}>
+      {t("Paused")}
     </span>
   ) : failed ? (
     <span className="chip chip-failed">{t("Failed")}</span>
@@ -159,7 +159,7 @@ export function BranchRow({
       )}
     </span>
   ) : (
-    <span className={`chip chip-${ex}`} title={b.expires_at ? new Date(b.expires_at).toLocaleString() : undefined}>
+    <span className={`chip chip-${ex}`} title={b.expires_at ? formatDateTime(b.expires_at) : undefined}>
       {ex === "soon" && <strong>{t("Expires soon")} · </strong>}
       {ex === "expired" ? t("Expired") : ex === "none" ? t("No expiry") : countdown(b.expires_at, now)}
     </span>
@@ -279,7 +279,7 @@ export function BranchRow({
             </dd>
             {b.parent_branch && (
               <>
-                <dt>Forked from</dt>
+                <dt>{t("Forked from")}</dt>
                 <dd className="mono wide">
                   {onOpenParent ? (
                     <button type="button" className="link-button mono" onClick={() => onOpenParent(b.parent_branch!)}>

@@ -194,7 +194,7 @@ function CreateBranch({ bases, onClose }: { bases: Base[]; onClose: () => void }
           </div>
         </Field>
         {custom !== null && (
-          <Field label={t("Custom TTL")} hint={custom && !customTTL ? t("Use e.g. 30m, 2h, 1h30m or 14d") : "e.g. 30m, 2h, 1h30m or 14d"}>
+          <Field label={t("Custom TTL")} hint={custom && !customTTL ? t("Use e.g. 30m, 2h, 1h30m or 14d") : t("e.g. 30m, 2h, 1h30m or 14d")}>
             <input className="mono" value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="30m" autoFocus />
           </Field>
         )}
