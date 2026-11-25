@@ -174,6 +174,33 @@ type pol struct {
 func (p pol) CheckBranch(context.Context, ext.Principal, ext.BranchRequest) error { return p.deny }
 func (p pol) SharesBranches(context.Context, ext.Principal, string) bool          { return p.share }
 
+type extendPol struct {
+	pol
+	extendDeny error
+}
+
+func (p extendPol) CheckExtend(context.Context, ext.Principal, ext.BranchRequest) error {
+	return p.extendDeny
+}
+
+type roleResolver struct {
+	prefix string
+	role   string
+	deny   error
+}
+
+func (r roleResolver) ResolvePrincipal(_ context.Context, p ext.Principal) (ext.Principal, error) {
+	if r.deny != nil {
+		return ext.Principal{}, r.deny
+	}
+	if r.prefix == "" || len(p.ID) >= len(r.prefix) && p.ID[:len(r.prefix)] == r.prefix {
+		out := p
+		out.Roles = []string{r.role}
+		return out, nil
+	}
+	return p, nil
+}
+
 func TestCombine_ブランチの方針は全員が許せば作れどれかが許せば共有する(t *testing.T) {
 	no := errors.New("no")
 	all := ext.Combine([]ext.Module{{BranchPolicy: pol{}}, {BranchPolicy: pol{share: true}}})
@@ -183,6 +210,13 @@ func TestCombine_ブランチの方針は全員が許せば作れどれかが許
 	if !all.BranchPolicy.SharesBranches(ctx, ext.Principal{}, "x") {
 		t.Error("one shares")
 	}
+	ep, ok := all.BranchPolicy.(ext.BranchExtendPolicy)
+	if !ok {
+		t.Fatal("combined BranchPolicy implements BranchExtendPolicy")
+	}
+	if err := ep.CheckExtend(ctx, ext.Principal{}, ext.BranchRequest{}); err != nil {
+		t.Errorf("extend allowed: %v", err)
+	}
 	deny := ext.Combine([]ext.Module{{BranchPolicy: pol{}}, {BranchPolicy: pol{deny: no}}})
 	if err := deny.BranchPolicy.CheckBranch(ctx, ext.Principal{}, ext.BranchRequest{}); !errors.Is(err, no) {
 		t.Errorf("denied: %v", err)
@@ -190,8 +224,33 @@ func TestCombine_ブランチの方針は全員が許せば作れどれかが許
 	if deny.BranchPolicy.SharesBranches(ctx, ext.Principal{}, "x") {
 		t.Error("none shares")
 	}
+	extDeny := ext.Combine([]ext.Module{{BranchPolicy: pol{}}, {BranchPolicy: extendPol{extendDeny: no}}})
+	if err := extDeny.BranchPolicy.(ext.BranchExtendPolicy).CheckExtend(ctx, ext.Principal{}, ext.BranchRequest{}); !errors.Is(err, no) {
+		t.Errorf("extend denied: %v", err)
+	}
 	if ext.Combine(nil).BranchPolicy != nil {
 		t.Error("no policy")
+	}
+}
+
+func TestCombine_主体解決は順に引き継ぎ拒否されれば止まる(t *testing.T) {
+	if ext.Combine(nil).PrincipalResolver != nil {
+		t.Error("no resolver")
+	}
+	all := ext.Combine([]ext.Module{
+		{PrincipalResolver: roleResolver{prefix: "sso:", role: "viewer"}},
+		{PrincipalResolver: roleResolver{prefix: "user:", role: "developer"}},
+	})
+	p, err := all.PrincipalResolver.ResolvePrincipal(ctx, ext.Principal{ID: "user:a", Roles: []string{"admin"}})
+	if err != nil || len(p.Roles) != 1 || p.Roles[0] != "developer" {
+		t.Errorf("resolved = %+v %v", p, err)
+	}
+	deny := ext.Combine([]ext.Module{
+		{PrincipalResolver: roleResolver{prefix: "user:", role: "developer"}},
+		{PrincipalResolver: roleResolver{deny: ext.ErrUnauthenticated}},
+	})
+	if _, err := deny.PrincipalResolver.ResolvePrincipal(ctx, ext.Principal{ID: "user:a"}); !errors.Is(err, ext.ErrUnauthenticated) {
+		t.Errorf("denied = %v", err)
 	}
 }
 

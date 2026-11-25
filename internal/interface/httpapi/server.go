@@ -408,6 +408,13 @@ func (s *Server) routes(mux router, local bool) {
 
 const sessionCookie = "dbb_session"
 
+func (s *Server) resolvePrincipal(ctx context.Context, p ext.Principal) (ext.Principal, error) {
+	if s.Ext.PrincipalResolver == nil || p.ID == "" || p.ID == LocalPrincipal.ID || p.ID == Anonymous.ID {
+		return p, nil
+	}
+	return s.Ext.PrincipalResolver.ResolvePrincipal(ctx, p)
+}
+
 func (s *Server) requireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hasHeaderFold(r.Header, forwardedHeader, principalHeader) {
@@ -422,6 +429,9 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			// API clients: a module's Authenticator checks the token. No CSRF:
 			// browsers never send this header on their own.
 			p, err := s.authenticator().Authenticate(r.Context(), ext.Credentials{Token: token})
+			if err == nil {
+				p, err = s.resolvePrincipal(r.Context(), p)
+			}
 			if err != nil || p.ID == LocalPrincipal.ID {
 				// The ID "local" is the socket's alone (path dumps, no guard
 				// for local admin): no remote identity may take it.
@@ -444,7 +454,10 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 					if !s.sessionAllowed(w, r, sess) {
 						return
 					}
-					p = ext.Principal{ID: sess.User, Name: sess.Name, Roles: sess.Roles}
+					cand := ext.Principal{ID: sess.User, Name: sess.Name, Roles: sess.Roles}
+					if resolved, rerr := s.resolvePrincipal(r.Context(), cand); rerr == nil {
+						p = resolved
+					}
 				}
 			}
 			next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), p)))
@@ -459,8 +472,9 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "log in first")
 			return
 		}
+		isLogout := r.Method == http.MethodPost && r.URL.Path == "/v1/auth/logout"
 		sess, err := s.Auth.Session(c.Value)
-		if err != nil && r.Method == http.MethodPost && r.URL.Path == "/v1/auth/logout" {
+		if err != nil && isLogout {
 			sess, err = s.Auth.PendingSession(c.Value)
 		}
 		if err != nil {
@@ -471,11 +485,22 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 		if !s.sessionAllowed(w, r, sess) {
 			return
 		}
+		ctx := context.WithValue(r.Context(), ctxKey{}, sess)
+		p := ext.Principal{ID: sess.User, Name: sess.Name, Roles: sess.Roles}
+		if resolved, rerr := s.resolvePrincipal(r.Context(), p); rerr != nil {
+			if !isLogout {
+				s.auditAuthFailure(r, p, "auth.session", http.StatusUnauthorized)
+				writeError(w, http.StatusUnauthorized, "unauthenticated", "session invalid; log in again")
+				return
+			}
+			ctx = withDeactivatedLogout(ctx)
+		} else {
+			p = resolved
+		}
 		if sess.Renewed {
 			setSessionCookie(w, sess)
 		}
-		ctx := context.WithValue(r.Context(), ctxKey{}, sess)
-		next.ServeHTTP(w, r.WithContext(withPrincipal(ctx, ext.Principal{ID: sess.User, Name: sess.Name, Roles: sess.Roles})))
+		next.ServeHTTP(w, r.WithContext(withPrincipal(ctx, p)))
 	})
 }
 

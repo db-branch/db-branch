@@ -240,7 +240,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return // dropped for reading too slowly; the client reconnects
 			}
-			if !s.canReceive(r.Context(), p, ev.Audience) {
+			cur, rerr := s.resolvePrincipal(r.Context(), p)
+			if rerr != nil {
+				return
+			}
+			if !s.canReceive(r.Context(), cur, ev.Audience) {
 				continue
 			}
 			data, _ := json.Marshal(ev.Data)
@@ -292,9 +296,14 @@ func (s *Server) passwordChanger(sess auth.Session) (ext.PasswordChanger, bool) 
 }
 
 func (s *Server) sessionView(ctx context.Context, sess auth.Session) sessionJSON {
+	p := ext.Principal{ID: sess.User, Name: sess.Name, Roles: sess.Roles}
+	if resolved, err := s.resolvePrincipal(ctx, p); err == nil {
+		p = resolved
+	}
+	sess.Name, sess.Roles = p.Name, p.Roles
 	v := sessionView(sess)
 	v.MustChangePassword = sess.MustChange
-	p, az := ext.Principal{ID: sess.User, Name: sess.Name, Roles: sess.Roles}, s.authorizer()
+	az := s.authorizer()
 	v.Can = map[string]bool{}
 	actions := append([]string{}, consoleActions...)
 	for _, m := range s.Modules { // a module's pages and API; entries are "name version"

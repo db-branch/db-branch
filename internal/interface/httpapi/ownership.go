@@ -490,3 +490,23 @@ func (s *Server) checkBranchPolicy(ctx context.Context, svc Branches, p ext.Prin
 	}
 	return pol.CheckBranch(ctx, p, req)
 }
+
+// checkExtendPolicy asks the modules' branch policy about extending a branch's
+// TTL when it implements BranchExtendPolicy.
+func (s *Server) checkExtendPolicy(ctx context.Context, svc Branches, p ext.Principal, n domain.Name, ttl time.Duration) error {
+	ep, ok := s.Ext.BranchPolicy.(ext.BranchExtendPolicy)
+	if !ok {
+		return nil
+	}
+	b, err := svc.GetBranch(ctx, n)
+	if err != nil {
+		return err
+	}
+	return ep.CheckExtend(ctx, p, ext.BranchRequest{
+		Name:   b.Name.String(),
+		Owner:  b.Owner,
+		Base:   b.Base.String(),
+		TTL:    ttl,
+		Access: string(b.Access),
+	})
+}

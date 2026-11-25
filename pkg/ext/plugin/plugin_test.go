@@ -31,7 +31,7 @@ func TestMain(m *testing.M) {
 			Settings: []ext.Setting{{Key: "k", Type: "string"}}, Configurable: noConfig{},
 			Handler: hello{}, Pages: []ext.Page{{Path: "/ui/", Title: "Test"}}, Starter: &keeper{}, RequiresLicense: true,
 			PublicPaths: []string{"/sso/"}, LoginMethods: []ext.LoginMethod{{Label: "SSO", Path: "/sso/start"}},
-			BranchPolicy: twoMax{}})
+			BranchPolicy: twoMax{}, PrincipalResolver: tokens{}})
 		return
 	}
 	os.Exit(m.Run())
@@ -60,11 +60,26 @@ func (tokens) ChangePassword(_ context.Context, p ext.Principal, current, next s
 	return nil
 }
 
+// ResolvePrincipal makes tokens a PrincipalResolver.
+func (tokens) ResolvePrincipal(_ context.Context, p ext.Principal) (ext.Principal, error) {
+	if p.ID == "token:revoked" {
+		return ext.Principal{}, ext.ErrUnauthenticated
+	}
+	return p, nil
+}
+
 // twoMax allows branches from base "prod" only and shares with "team:" owners.
 type twoMax struct{}
 
 func (twoMax) CheckBranch(_ context.Context, _ ext.Principal, r ext.BranchRequest) error {
 	if r.Base != "prod" || len(r.Existing) >= 2 {
+		return ext.ErrForbidden
+	}
+	return nil
+}
+
+func (twoMax) CheckExtend(_ context.Context, _ ext.Principal, r ext.BranchRequest) error {
+	if r.TTL > 2*time.Hour {
 		return ext.ErrForbidden
 	}
 	return nil
@@ -177,6 +192,12 @@ func TestLoad_別プロセスのモジュールを起動し各ポートを呼べ
 		m.Module.Router == nil || m.Module.Ports["mysql"] != 6033 || m.Module.Configurable == nil || len(m.Module.Settings) != 1 || !m.Module.RequiresLicense || len(m.Module.PublicPaths) != 1 || len(m.Module.LoginMethods) != 1 {
 		t.Fatalf("info = %+v", m.Info)
 	}
+	if m.Module.PrincipalResolver == nil {
+		t.Fatal("missing PrincipalResolver")
+	}
+	if _, err := m.Module.PrincipalResolver.ResolvePrincipal(ctx, ext.Principal{ID: "token:revoked"}); !errors.Is(err, ext.ErrUnauthenticated) {
+		t.Errorf("revoked resolve: %v", err)
+	}
 	p, err := m.Module.Authenticator.Authenticate(ctx, ext.Credentials{Token: "good"})
 	if err != nil || p.ID != "token:alice" || p.Roles[0] != "viewer" {
 		t.Errorf("good token: %+v %v", p, err)
@@ -192,6 +213,11 @@ func TestLoad_別プロセスのモジュールを起動し各ポートを呼べ
 		!errors.Is(bp.CheckBranch(ctx, p, ext.BranchRequest{Base: "other"}), ext.ErrForbidden) ||
 		!bp.SharesBranches(ctx, p, "team:x") || bp.SharesBranches(ctx, p, "solo") {
 		t.Error("branch policy over RPC")
+	}
+	ep, ok := bp.(ext.BranchExtendPolicy)
+	if !ok || ep.CheckExtend(ctx, p, ext.BranchRequest{Base: "prod", TTL: time.Hour}) != nil ||
+		!errors.Is(ep.CheckExtend(ctx, p, ext.BranchRequest{Base: "prod", TTL: 3 * time.Hour}), ext.ErrForbidden) {
+		t.Error("branch extend policy over RPC")
 	}
 	pc, ok := m.Module.Authenticator.(ext.PasswordChanger)
 	if !ok {

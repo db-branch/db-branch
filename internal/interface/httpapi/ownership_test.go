@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/infrastructure/filestore"
 	"github.com/db-branch/db-branch/internal/interface/httpapi"
+	"github.com/db-branch/db-branch/internal/usecase/token"
 	"github.com/db-branch/db-branch/pkg/ext"
 )
 
@@ -856,4 +859,162 @@ type tokenAuthFunc func(context.Context, ext.Credentials) (ext.Principal, error)
 
 func (fn tokenAuthFunc) Authenticate(ctx context.Context, c ext.Credentials) (ext.Principal, error) {
 	return fn(ctx, c)
+}
+
+type extendTeamPolicy struct{ teamPolicy }
+
+func (p *extendTeamPolicy) CheckExtend(_ context.Context, who ext.Principal, r ext.BranchRequest) error {
+	p.got = append(p.got, r)
+	if slices.Contains(who.Roles, "admin") || slices.Contains(who.Roles, "scope:full") {
+		return nil
+	}
+	if r.TTL <= 0 || r.TTL > 4*time.Hour {
+		return fmt.Errorf("%w: max TTL 4h", ext.ErrForbidden)
+	}
+	return nil
+}
+
+func TestBranchPolicy_期限延長にも方針を適用する(t *testing.T) {
+	f := ownedFixture(t)
+	pol := &extendTeamPolicy{}
+	f.srv.Ext = ext.Module{BranchPolicy: pol}
+	h := f.srv.Handler(false)
+
+	// Bob owns a branch; extending beyond team MaxTTL (4h) must be refused (403).
+	f.branches.branches["bobs"] = domain.Branch{Name: name("bobs"), Base: name("prod"), Owner: "token:b", Status: domain.BranchReady, Runtime: mysql84}
+	if resp, _ := send(t, h, "PATCH", "/v1/branches/bobs", map[string]any{"ttl": "12h"}, as("t-bob")); resp.StatusCode != 403 {
+		t.Fatalf("extend above MaxTTL: %d", resp.StatusCode)
+	}
+	if resp, _ := send(t, h, "PATCH", "/v1/branches/bobs", map[string]any{"ttl": "2h"}, as("t-bob")); resp.StatusCode != 200 {
+		t.Fatalf("extend within MaxTTL: %d", resp.StatusCode)
+	}
+	if len(pol.got) == 0 || pol.got[0].Base != "prod" || pol.got[0].TTL != 12*time.Hour {
+		t.Errorf("policy request = %+v", pol.got)
+	}
+	// Unknown branch still returns 404 even when BranchExtendPolicy is active.
+	if resp, _ := send(t, h, "PATCH", "/v1/branches/nope", map[string]any{"ttl": "1h"}, as("t-bob")); resp.StatusCode != 404 {
+		t.Errorf("unknown branch extend: %d", resp.StatusCode)
+	}
+	// Admin bypasses team limit.
+	if resp, _ := send(t, h, "PATCH", "/v1/branches/bobs", map[string]any{"ttl": "24h"}, as("t-full")); resp.StatusCode != 200 {
+		t.Errorf("admin extend: %d", resp.StatusCode)
+	}
+}
+
+type roleAuth struct {
+	mu       func() ([]string, bool)
+	changer  bool
+}
+
+func (a roleAuth) Authenticate(_ context.Context, c ext.Credentials) (ext.Principal, error) {
+	switch c.Username {
+	case "alice@example.com":
+		roles, active := a.mu()
+		if !active {
+			return ext.Principal{}, ext.ErrUnauthenticated
+		}
+		return ext.Principal{ID: "user:alice@example.com", Name: "alice@example.com", Roles: roles}, nil
+	case "admin":
+		return ext.Principal{}, ext.ErrUnauthenticated
+	}
+	return ext.Principal{}, ext.ErrUnauthenticated
+}
+
+func (a roleAuth) ResolvePrincipal(_ context.Context, p ext.Principal) (ext.Principal, error) {
+	if p.ID != "user:alice@example.com" {
+		return p, nil
+	}
+	roles, active := a.mu()
+	if !active {
+		return ext.Principal{}, ext.ErrUnauthenticated
+	}
+	out := p
+	out.Roles = append([]string(nil), roles...)
+	return out, nil
+}
+
+func TestPrincipalResolver_セッションとトークンに現在のロールと無効化を即座に反映する(t *testing.T) {
+	f := ownedFixture(t)
+	toks := &token.Service{Store: &filestore.Store{Path: filepath.Join(t.TempDir(), "t.json")}, Clock: time.Now, Settle: time.Millisecond}
+	f.srv.Tokens, f.srv.TokenAuth = toks, toks
+	currentRoles := []string{"admin"}
+	active := true
+	ra := roleAuth{mu: func() ([]string, bool) { return currentRoles, active }}
+	f.srv.Ext = ext.Module{
+		Authenticator:     ra,
+		PrincipalResolver: ra,
+		Authorizer: ext.AllOf{tokenAuthFuncAuthorize(func(_ context.Context, p ext.Principal, action string, _ ext.Resource) error {
+			if !active {
+				return ext.ErrForbidden // mirrors auth.Module.Authorize for disabled/deleted users
+			}
+			if action == "setting.write" && !slices.Contains(p.Roles, "admin") {
+				return ext.ErrForbidden
+			}
+			return nil
+		})},
+	}
+	h := f.srv.Handler(false)
+
+	// Log in as alice while she is admin.
+	resp, body := send(t, h, "POST", "/v1/auth/login", map[string]any{"username": "alice@example.com", "password": "pw"}, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("login: %d %v", resp.StatusCode, body)
+	}
+	var cookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == "dbb_session" {
+			cookie = c
+		}
+	}
+	csrf := body["csrf_token"].(string)
+
+	// Also mint a personal token while admin (bearer auth uses ResolvePrincipal too).
+	tokResp, tokBody := send(t, h, "POST", "/v1/account/tokens", map[string]any{"name": "ci"}, withSession(cookie, csrf))
+	if tokResp.StatusCode != 201 {
+		t.Fatalf("token create: %d %v", tokResp.StatusCode, tokBody)
+	}
+	tok := tokBody["token"].(string)
+
+	// Before demotion, alice may call setting.write and /v1/auth/session shows admin.
+	if r, _ := send(t, h, "PUT", "/v1/settings/core", map[string]any{}, withSession(cookie, csrf)); r.StatusCode == 403 {
+		t.Fatalf("admin setting.write unexpectedly forbidden: %d", r.StatusCode)
+	}
+
+	// Demote alice to viewer: existing cookie must lose admin actions immediately and /v1/auth/session reflects viewer.
+	currentRoles = []string{"viewer"}
+	if r, _ := send(t, h, "PUT", "/v1/settings/core", map[string]any{}, withSession(cookie, csrf)); r.StatusCode != 403 {
+		t.Errorf("demoted admin setting.write: %d, want 403", r.StatusCode)
+	}
+	if r, sbody := send(t, h, "GET", "/v1/auth/session", nil, withSession(cookie, csrf)); r.StatusCode != 200 {
+		t.Fatalf("session: %d %v", r.StatusCode, sbody)
+	} else {
+		userMap := sbody["user"].(map[string]any)
+		if fmt.Sprint(userMap["roles"]) != "[viewer]" {
+			t.Errorf("session user roles = %v, want [viewer]", userMap["roles"])
+		}
+		if can := sbody["can"].(map[string]any); can["setting.write"] != false {
+			t.Errorf("session can setting.write = %v, want false", can["setting.write"])
+		}
+	}
+	if r, _ := send(t, h, "PUT", "/v1/settings/core", map[string]any{}, as(tok)); r.StatusCode != 403 {
+		t.Errorf("demoted personal token setting.write: %d, want 403", r.StatusCode)
+	}
+
+	// Disable alice: cookie and personal token must be rejected with 401, but logout still succeeds cleanly.
+	active = false
+	if r, _ := send(t, h, "GET", "/v1/branches", nil, withSession(cookie, csrf)); r.StatusCode != 401 {
+		t.Errorf("disabled user cookie: %d, want 401", r.StatusCode)
+	}
+	if r, _ := send(t, h, "GET", "/v1/branches", nil, as(tok)); r.StatusCode != 401 {
+		t.Errorf("disabled user bearer: %d, want 401", r.StatusCode)
+	}
+	if r, _ := send(t, h, "POST", "/v1/auth/logout", nil, withSession(cookie, csrf)); r.StatusCode != 204 {
+		t.Errorf("disabled user logout: %d, want 204", r.StatusCode)
+	}
+}
+
+type tokenAuthFuncAuthorize func(context.Context, ext.Principal, string, ext.Resource) error
+
+func (fn tokenAuthFuncAuthorize) Authorize(ctx context.Context, p ext.Principal, action string, r ext.Resource) error {
+	return fn(ctx, p, action, r)
 }

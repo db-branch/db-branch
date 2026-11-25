@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -212,5 +213,46 @@ func TestHTTPAPI_宛先にアクションを持つイベントはそのアクシ
 	defer srv.Close()
 	if got := strings.Join(sseTypes(t, srv, "t-bob", "1")("stop"), ","); got != "runtime.updated" {
 		t.Errorf("bob receives %q", got)
+	}
+}
+
+type atomicResolver struct{ active atomic.Bool }
+
+func (r *atomicResolver) ResolvePrincipal(_ context.Context, p ext.Principal) (ext.Principal, error) {
+	if !r.active.Load() {
+		return ext.Principal{}, ext.ErrUnauthenticated
+	}
+	return p, nil
+}
+
+func TestHTTPAPI_SSE中に無効化された利用者のストリームは閉じる(t *testing.T) {
+	f := ownedFixture(t)
+	res := &atomicResolver{}
+	res.active.Store(true)
+	f.srv.Ext = ext.Module{PrincipalResolver: res}
+	srv := httptest.NewServer(f.srv.Handler(false))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/v1/events", nil)
+	as("t-bob")(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("events: %v %d", err, resp.StatusCode)
+	}
+	defer resp.Body.Close()
+
+	res.active.Store(false)
+	f.srv.Bus.PublishTo(operation.Audience{Open: true}, "runtime.updated", "x")
+	rd := bufio.NewReader(resp.Body)
+	for {
+		line, rerr := rd.ReadString('\n')
+		if strings.Contains(line, "runtime.updated") {
+			t.Fatal("disabled user received event after deactivation")
+		}
+		if rerr != nil {
+			break // stream closed cleanly
+		}
 	}
 }
