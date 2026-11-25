@@ -2,7 +2,7 @@ import { FormEvent, ReactNode, RefObject, useEffect, useMemo, useRef, useState }
 import { api, Branch, HistoryTx } from "../api";
 import { useCapabilities } from "../lib/caps";
 import { checkpointNameProblem, MAX_CHECKPOINT_NAME, newestFirst, notes, spaceWarning } from "../lib/checkpoints";
-import { bytes, relative } from "../lib/format";
+import { bytes, formatDateTime, formatTime, relative } from "../lib/format";
 import { hasHistoryModule, rowsLabel, txNumber } from "../lib/history";
 import { GNode, mergeLines } from "../lib/historygraph";
 import { t } from "../lib/i18n";
@@ -332,14 +332,14 @@ export function PanelBody({ p, modal, hideTitle, onExpand, expandRef, onFork, on
                     {n}
                   </span>
                 ))}
-                <span className="muted small" title={new Date(c.created_at).toLocaleString()}>
+                <span className="muted small" title={formatDateTime(c.created_at)}>
                   {relative(c.created_at)}
                 </span>
                 <span className="muted small" title={t("Space only this checkpoint holds")}>
                   {bytes(c.size)}
                 </span>
                 {c.runtime && <span className="muted small mono" title={t("The runtime the Branch ran when this Checkpoint was taken")}>{c.runtime}</span>}
-                {p.showLines && <span className="muted small">line {p.shown(c.line)}</span>}
+                {p.showLines && <span className="muted small">{t("line {line}", { line: p.shown(c.line) })}</span>}
               </div>
               {asking?.name === c.name && asking.from === "list" ? (
                 <div className="confirm" role="group" aria-label={asking.what === "restore" ? t("Restore {name}", { name: c.name }) : t("Delete {name}", { name: c.name })} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), p.setAsking(null))}>
@@ -417,8 +417,8 @@ function CheckpointDetail({ c, line, liveLine, branch, asking, working, why, for
             {n}
           </span>
         ))}
-        <span className="muted small">line {line}</span>
-        <span className="muted small" title={new Date(c.created_at).toLocaleString()}>
+        <span className="muted small">{t("line {line}", { line })}</span>
+        <span className="muted small" title={formatDateTime(c.created_at)}>
           {relative(c.created_at)}
         </span>
         <span className="muted small">{bytes(c.size)}</span>
@@ -463,8 +463,8 @@ function GroupDetail({ group, line, branch, asking, working, why, onAsk, onResto
     <div className="hg-detail-body">
       <div className="cp-main">
         <span className="strong">{t("{count} transactions", { count: group.length })}</span>
-        <span className="muted small">line {line}</span>
-        <span className="muted small" title={new Date(group[0].time).toLocaleString()}>
+        <span className="muted small">{t("line {line}", { line })}</span>
+        <span className="muted small" title={formatDateTime(group[0].time)}>
           {relative(group[group.length - 1].time)}
         </span>
       </div>
@@ -494,8 +494,8 @@ function GroupDetail({ group, line, branch, asking, working, why, onAsk, onResto
                     #{txNumber(x.gtid)}
                   </button>
                 </td>
-                <td className="mono muted" title={new Date(x.time).toLocaleString()}>
-                  {new Date(x.time).toLocaleTimeString()}
+                <td className="mono muted" title={formatDateTime(x.time)}>
+                  {formatTime(x.time)}
                 </td>
                 <td className="mono">{rowsLabel(x)}</td>
                 <td className="mono hg-stmt">{x.sql ? x.sql.replace(/\s+/g, " ").slice(0, 120) : ""}</td>
@@ -516,8 +516,8 @@ function TxDetail({ tx, line, branch, asking, working, why, onAsk, onRestore, sa
         <>
       <div className="cp-main">
         <span className="mono strong">#{txNumber(tx.gtid)}</span>
-        <span className="muted small">line {line}</span>
-        <span className="muted small" title={new Date(tx.time).toLocaleString()}>
+        <span className="muted small">{t("line {line}", { line })}</span>
+        <span className="muted small" title={formatDateTime(tx.time)}>
           {relative(tx.time)}
         </span>
         <span className="small mono">{rowsLabel(tx)}</span>

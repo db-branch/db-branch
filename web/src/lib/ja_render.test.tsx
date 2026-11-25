@@ -1,13 +1,22 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Base, Branch, Checkpoint, Line } from "../api";
+import { BranchRow } from "../components/branchcard";
 import { PanelBody, type Panel } from "../components/checkpoints";
+import { TtlBar } from "../components/marks";
+import { ScopeForm } from "../components/scopeform";
+import { Sparkline, sparkTitle } from "../components/sparkline";
+import { TourCard } from "../components/tour";
 import { UpgradePanel } from "../components/upgrade";
+import { Banner } from "../demo/Banner";
+import { seed } from "../demo/state";
 import { DeleteBase, UpdateData } from "../pages/Bases";
 import { DeleteBranch } from "../pages/Branches";
+import { ModuleRow } from "../pages/Modules";
 import { relative } from "./format";
 import { setLanguage } from "./i18n";
 import { layoutGraph } from "./historygraph";
+import { tourSteps } from "./tour";
 
 afterEach(() => setLanguage("en"));
 
@@ -131,5 +140,89 @@ describe("Japanese UI rendering", () => {
     const upHtml = renderToStaticMarkup(<UpgradePanel branch={{ ...branch, checkpoints: false }} ready={true} allow={() => true} onChange={noop} />);
     expect(upHtml).toContain("アップグレードは Checkpoint と同じく、ノード自身の ZFS が必要です。");
     expect(relative(new Date(Date.now() - 120_000).toISOString())).toBe("2m前");
+  });
+
+  it("renders TourCard and tourSteps titles and buttons in Japanese", () => {
+    setLanguage("ja");
+    const steps = tourSteps("alice-");
+    expect(steps[0].title).toBe("Base を選ぶ");
+    const html = renderToStaticMarkup(
+      <TourCard id="t" title={steps[0].title} body={steps[0].body} index={0} total={steps.length} onNext={noop} onBack={noop} onSkip={noop} />,
+    );
+    expect(html).toContain("Base を選ぶ");
+    expect(html).toContain("ツアーをスキップ");
+    expect(html).toContain("次へ");
+    expect(html).not.toContain("Choose a Base");
+    expect(html).not.toContain("Skip tour");
+    expect(html).not.toContain(">Next<");
+  });
+
+  it("renders demo Banner in Japanese", () => {
+    setLanguage("ja");
+    const html = renderToStaticMarkup(<Banner role="admin" onSwitch={noop} home="https://db-branch.com" />);
+    expect(html).toContain("表示切り替え");
+    expect(html).toContain("管理コンソール");
+    expect(html).toContain("開発者ページ");
+    expect(html).toContain("db-branch.com に戻る");
+    expect(html).not.toContain("View as");
+    expect(html).not.toContain("Admin console");
+    expect(html).not.toContain("Developer page");
+    expect(html).not.toContain("Back to db-branch.com");
+  });
+
+  it("renders ModuleRow descriptions and module ScopeForm settings in Japanese", () => {
+    setLanguage("ja");
+    const modHtml = renderToStaticMarkup(
+      <ModuleRow
+        name="audit"
+        description="Audit log of every change"
+        state={{ name: "audit", version: "0.1.0", wanted: true, nodes: [{ node: "n1", loaded: "0.1.0", current: true }], requires_license: true }}
+        licensed={true}
+        trial={true}
+        onEnable={noop}
+        onDisable={noop}
+      />,
+    );
+    expect(modHtml).toContain("すべての変更の監査ログ");
+    expect(modHtml).not.toContain("Audit log of every change");
+
+    const demo = seed(Date.now());
+    const historyScope = demo.settings.find((s) => s.scope === "history")!;
+    const formHtml = renderToStaticMarkup(<ScopeForm scope={historyScope} bare />);
+    expect(formHtml).toContain("記録した変更を保持する期間です。");
+    expect(formHtml).not.toContain("How long recorded changes are kept.");
+  });
+
+  it("uses ja-JP 24-hour date formatting instead of US locale in BranchRow, TtlBar, and Sparkline", () => {
+    setLanguage("ja");
+    const iso = "2026-11-24T19:06:57Z";
+    const ttlHtml = renderToStaticMarkup(<TtlBar created="2026-11-24T00:00:00Z" expires="2099-11-24T19:06:57Z" />);
+    expect(ttlHtml).not.toMatch(/AM|PM|11\/24\/2099/);
+    expect(ttlHtml).toMatch(/2099\/11\/2[45]/);
+
+    const expiredTtlHtml = renderToStaticMarkup(<TtlBar created="2026-11-24T00:00:00Z" expires="2026-11-24T19:06:57Z" />);
+    expect(expiredTtlHtml).toContain("期限切れ（2026/11/2");
+    expect(expiredTtlHtml).not.toContain("2026-11-24T19:06:57Z");
+
+    const rowHtml = renderToStaticMarkup(
+      <BranchRow
+        branch={{ ...branch, expires_at: iso, status: "paused" }}
+        now={Date.parse("2026-11-24T10:00:00Z")}
+        manage
+        mode="page"
+        onChange={noop}
+      />,
+    );
+    expect(rowHtml).toContain("一時停止");
+    expect(rowHtml).not.toContain(">Paused<");
+    expect(rowHtml).not.toMatch(/AM|PM|11\/24\/2026/);
+    expect(rowHtml).toMatch(/2026\/11\/2[45] \d{2}:\d{2}:\d{2}/);
+
+    const hoverTitle = sparkTitle([iso], 0);
+    expect(hoverTitle).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    expect(hoverTitle).not.toMatch(/AM|PM/);
+    expect(sparkTitle([iso], null)).toBeUndefined();
+    const sparkHtml = renderToStaticMarkup(<Sparkline values={[10]} times={[iso]} format={(v) => `${v}%`} label="CPU" />);
+    expect(sparkHtml).toContain("10%");
   });
 });

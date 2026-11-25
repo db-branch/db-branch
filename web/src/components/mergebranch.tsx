@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, Branch, MergeOperation, MergeResult } from "../api";
-import { serverError } from "../lib/errors";
+import { LocalizedError, serverError } from "../lib/errors";
 import { t } from "../lib/i18n";
 import { Modal } from "./modal";
 import { ErrorLine } from "./ui";
@@ -64,7 +64,7 @@ export function MergeBranchModal({
         const done = await pollOperation(started, alive);
         if (!done || !active) return;
         if (done.result) setResult(done.result);
-        if (done.state === "failed" && !done.result) setError(done.error ? serverError(done.error) : t("Preview failed."));
+        if (done.state === "failed" && !done.result) setError(done.error ? serverError(done.error) : new LocalizedError(t("Preview failed.")));
         else if (done.result?.error && done.result.status !== "conflicted") setError(serverError(done.result.error, done.result.code));
       } catch (e) {
         if (active) setError(e);
@@ -94,7 +94,7 @@ export function MergeBranchModal({
       if (!done || !mounted.current) return;
       if (done.result) setResult(done.result);
       if (done.state === "failed") {
-        setError(done.result?.error ? serverError(done.result.error, done.result.code) : done.error ? serverError(done.error) : t("Merge failed."));
+        setError(done.result?.error ? serverError(done.result.error, done.result.code) : done.error ? serverError(done.error) : new LocalizedError(t("Merge failed.")));
       } else if (done.result?.status === "merged") {
         onMerged?.();
       }

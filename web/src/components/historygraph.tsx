@@ -1,6 +1,7 @@
 import { KeyboardEvent, useEffect, useRef } from "react";
 import type { Checkpoint, HistoryTx, Line } from "../api";
 import { describe, forkPath, GNode, layoutGraph, neighbour } from "../lib/historygraph";
+import { t } from "../lib/i18n";
 
 const LABEL = 13; // characters of a checkpoint's name drawn under its node
 
@@ -63,7 +64,7 @@ export function HistoryGraph({
 
   return (
     <div className={scale === 1 ? "hg" : "hg big"} ref={scroller}>
-      <svg width={g.width * scale} height={g.height * scale} viewBox={`0 0 ${g.width} ${g.height}`} role="group" aria-label={`History of ${branch}`}>
+      <svg width={g.width * scale} height={g.height * scale} viewBox={`0 0 ${g.width} ${g.height}`} role="group" aria-label={t("History of {branch}", { branch })}>
         {g.lanes.map((l) => (
           <g key={`lane-${l.line}`} className={`hg-lane hg-c${l.line % 6}`}>
             <text x={8} y={l.y + 4} className="hg-lane-label">
@@ -91,7 +92,7 @@ export function HistoryGraph({
               onClick={() => onSelect(n)}
               onKeyDown={(e) => key(e, n)}
             >
-              <title>{n.kind === "tx" ? n.tx!.sql || n.tx!.gtid : n.kind === "group" ? `${n.group!.length} transactions` : label}</title>
+              <title>{n.kind === "tx" ? n.tx!.sql || n.tx!.gtid : n.kind === "group" ? t("{count} transactions", { count: n.group!.length }) : label}</title>
               {n.kind === "tx" ? <circle cx={n.x} cy={n.y} r={3.2} className="hg-dot" /> : null}
               {n.kind === "tx" ? <circle cx={n.x} cy={n.y} r={9} className="hg-hit" /> : null}
               {n.kind === "group" ? <circle cx={n.x} cy={n.y} r={5.2} className="hg-dot hg-grp" /> : null}

@@ -4,6 +4,7 @@
 // publish the same events as the real server. No network, no real data.
 import type { APIToken, Base, BaseRefresh, Branch, Checkpoint, HistoryTx, MergeResult, Operation, SettingScope, Upload } from "../api";
 import { ownerPrefix } from "../lib/branchname";
+import { t } from "../lib/i18n";
 import { upgradeProblem, type Finding, type UpgradeResult } from "../lib/upgrade";
 import {
   ADMIN,
@@ -291,6 +292,7 @@ export class DemoBackend {
     const { size: _size, refresh: _refresh, ...rest } = b;
     return {
       ...rest,
+      description: rest.description ? t(rest.description) : "",
       replicas: Object.fromEntries(b.snapshots.map((s) => [s.name, others])),
       holders: NODES.filter(held).map((node) => ({ node, state: "held" as const, origin: node === b.node })),
       can: Object.fromEntries(BASE_ACTIONS.map((a) => [a, !!who?.admin])),
@@ -389,7 +391,7 @@ export class DemoBackend {
       body: {
         items: s()
           .bases.filter((b) => b.snapshots.some((x) => x.public))
-          .map((b) => ({ name: b.name, runtime: b.runtime, description: b.description, snapshots: b.snapshots.filter((x) => x.public).map(({ name, created_at }) => ({ name, created_at })) })),
+          .map((b) => ({ name: b.name, runtime: b.runtime, description: b.description ? t(b.description) : "", snapshots: b.snapshots.filter((x) => x.public).map(({ name, created_at }) => ({ name, created_at })) })),
         anonymous: ANON,
       },
     }));

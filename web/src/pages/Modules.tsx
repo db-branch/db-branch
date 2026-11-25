@@ -156,9 +156,9 @@ export function ModuleRow({
           </a>
         )}
         {on && <span className="mono muted">{state!.version}</span>}
-        {description && <span className="muted module-desc">{description}</span>}
+        {description && <span className="muted module-desc">{t(description)}</span>}
         {on && (
-          <span className="holders" title={nodes.map((n) => `${n.node}: ${n.current ? "running" : n.loaded ? `running ${n.loaded}` : "installing"}`).join("\n")}>
+          <span className="holders" title={nodes.map((n) => `${n.node}: ${n.current ? t("running") : n.loaded ? t("running {version}", { version: n.loaded }) : t("installing")}`).join("\n")}>
             {nodes.map((n) => (
               <span key={n.node} className={n.current ? "held" : ""} />
             ))}
@@ -169,10 +169,10 @@ export function ModuleRow({
             className="warn mono"
             title={nodes
               .filter((n) => !n.current)
-              .map((n) => (n.loaded ? `${n.node} runs ${n.loaded}, not ${state!.version}` : `${n.node}: not installed yet`))
+              .map((n) => (n.loaded ? t("{node} runs {loaded}, not {version}", { node: n.node, loaded: n.loaded, version: state!.version }) : t("{node}: not installed yet", { node: n.node })))
               .join("\n")}
           >
-            {nodes.some((n) => !n.current && n.loaded) ? `other version on ${nodes.length - done}/${nodes.length}` : `installing ${done}/${nodes.length}`}
+            {nodes.some((n) => !n.current && n.loaded) ? t("other version on {m}/{n}", { m: nodes.length - done, n: nodes.length }) : t("installing {done}/{total}", { done, total: nodes.length })}
           </span>
         )}
         {on && nodes.some((n) => n.problem) && (
