@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/db-branch/db-branch/internal/app"
+	"github.com/db-branch/db-branch/internal/clientapp"
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/interface/cli"
 	"github.com/db-branch/db-branch/internal/usecase/rtmodule"
@@ -20,7 +21,7 @@ var version = "dev"
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	node := app.SystemNode(os.Stderr)
-	code := cli.App{
+	cliApp := cli.App{
 		Version: version,
 		Stdin:   os.Stdin, Stdout: os.Stdout,
 		Stderr: os.Stderr,
@@ -37,7 +38,9 @@ func main() {
 		RuntimeModules: func(cfg config.Config, prompter rtmodule.TrustPrompter) cli.RuntimeModuleService {
 			return node.RuntimeModules(cfg, prompter)
 		},
-	}.Run(ctx, os.Args[1:])
+	}
+	clientapp.Configure(&cliApp)
+	code := cliApp.Run(ctx, os.Args[1:])
 	stop()
 	os.Exit(code)
 }
