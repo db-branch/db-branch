@@ -62,8 +62,25 @@ type App struct {
 	// Poll is how often operations are polled while waiting.
 	Poll time.Duration
 
-	configPath string
-	output     string
+	// ClientOnly limits the CLI to remote HTTPS client commands (no node admin).
+	ClientOnly bool
+	// NewClientStores builds ClientConfigStore and SecretStore for clientConfigPath.
+	NewClientStores func(clientConfigPath string) (ClientConfigStore, SecretStore, error)
+	// RemoteClient connects to a remote db-branch server over HTTPS.
+	RemoteClient func(RemoteOptions) (Client, error)
+	// ProbeTLS checks the remote server's TLS 1.3 certificate for login TOFU.
+	ProbeTLS func(ctx context.Context, rawURL, caCert, expectedSHA256 string) (CertSummary, error)
+	// ReadSecret reads a secret line from r with terminal echo disabled when possible.
+	ReadSecret func(io.Reader) (string, error)
+	// Getenv looks up environment variables (defaults to os.Getenv).
+	Getenv func(string) string
+
+	configPath       string
+	clientConfigFlag string
+	profileFlag      string
+	serverFlag       string
+	caFlag           string
+	output           string
 }
 
 // Run executes the command given by args and returns the process exit code.
@@ -91,10 +108,23 @@ func (a *App) rootCommand() *cobra.Command {
 	root.SetOut(a.Stdout)
 	root.SetErr(a.Stderr)
 	root.CompletionOptions.DisableDefaultCmd = true
-	root.PersistentFlags().StringVar(&a.configPath, "config", config.DefaultPath, "path to config.toml")
 	root.PersistentFlags().StringVarP(&a.output, "output", "o", "table", "output format: table or json")
+	root.PersistentFlags().StringVar(&a.profileFlag, "profile", "", "remote profile name from client.toml")
+	root.PersistentFlags().StringVar(&a.serverFlag, "server", "", "remote db-branch HTTPS server URL")
+	root.PersistentFlags().StringVar(&a.caFlag, "ca", "", "CA certificate PEM file for remote HTTPS")
+	if a.ClientOnly {
+		root.PersistentFlags().StringVar(&a.clientConfigFlag, "config", "", "path to client.toml")
+		root.AddCommand(
+			a.versionCommand(), a.loginCommand(), a.logoutCommand(), a.profileCommand(),
+			a.branchCommand(), a.baseCommand(),
+		)
+		return root
+	}
+	root.PersistentFlags().StringVar(&a.configPath, "config", config.DefaultPath, "path to config.toml")
+	root.PersistentFlags().StringVar(&a.clientConfigFlag, "client-config", "", "path to client.toml")
 	root.AddCommand(
-		a.versionCommand(), a.agentCommand(), a.initCommand(), a.adminCommand(),
+		a.versionCommand(), a.loginCommand(), a.logoutCommand(), a.profileCommand(),
+		a.agentCommand(), a.initCommand(), a.adminCommand(),
 		a.branchCommand(), a.baseCommand(), a.runtimeCommand(), a.clusterCommand(), a.routeCommand(), a.moduleCommand(), a.settingsCommand(), a.tokenCommand(), a.backupCommand(), a.updateCommand(),
 	)
 	return root
@@ -102,8 +132,11 @@ func (a *App) rootCommand() *cobra.Command {
 
 func (a *App) loadConfig() (config.Config, error) { return config.Load(a.configPath) }
 
-// client loads the config and connects to the agent's socket.
+// client selects either the remote HTTPS client or the local agent UNIX socket.
 func (a *App) client() (Client, error) {
+	if a.useRemoteTransport() {
+		return a.remoteClient()
+	}
 	cfg, err := a.loadConfig()
 	if err != nil {
 		return nil, err
