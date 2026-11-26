@@ -37,6 +37,7 @@ type backupFile struct {
 	Modules    map[string]domain.ModuleSpec `json:"modules,omitempty"`
 	Settings   map[string]map[string]string `json:"settings,omitempty"`
 	Tokens     map[string]domain.APIToken   `json:"tokens,omitempty"`
+	Users      map[string]domain.User       `json:"users,omitempty"`
 	ModuleData map[string]map[string][]byte `json:"module_data,omitempty"`
 	Bases      map[string]domain.Base       `json:"bases,omitempty"`
 	Branches   map[string]domain.Branch     `json:"branches,omitempty"`
@@ -48,7 +49,7 @@ type backupFile struct {
 func (s *Store) WriteBackup(w io.Writer, node string, now time.Time) error {
 	st := s.fsm.State()
 	b := backupFile{Format: BackupFormat, TakenAt: now.UTC(), Node: node, Admin: st.Admin, Runtimes: st.Runtimes, RouteUsers: st.RouteUsers,
-		Modules: st.Modules, Settings: st.Settings, Tokens: st.Tokens, ModuleData: st.ModuleData, Bases: st.Bases, Branches: st.Branches}
+		Modules: st.Modules, Settings: st.Settings, Tokens: st.Tokens, Users: st.Users, ModuleData: st.ModuleData, Bases: st.Bases, Branches: st.Branches}
 	zw := gzip.NewWriter(w)
 	if err := json.NewEncoder(zw).Encode(b); err != nil {
 		return err
@@ -91,6 +92,28 @@ func (s *Store) RestoreBackup(ctx context.Context, r io.Reader) (domain.RestoreS
 		err := s.Apply(ctx, SetAdmin(*b.Admin))
 		sum.Admin = err == nil
 		apply(err, nil)
+	}
+	for _, u := range b.Users {
+		apply(s.PutUser(ctx, u), &sum.Users)
+	}
+	if b.Admin != nil && len(b.Admin.Hash) > 0 && s.ClusterProtocol() >= domain.ProtocolUsers {
+		if _, hasAdmin := b.Users[domain.AdminUserID]; !hasAdmin {
+			gen := b.Admin.Generation
+			if cur, err := s.GetUser(ctx, domain.AdminUserID); err == nil && cur.SessionGen+1 > gen {
+				gen = cur.SessionGen + 1
+			}
+			u := domain.User{
+				ID:         domain.AdminUserID,
+				Name:       domain.AdminUserID,
+				Salt:       append([]byte(nil), b.Admin.Salt...),
+				Hash:       append([]byte(nil), b.Admin.Hash...),
+				MustChange: b.Admin.MustChange,
+				SessionGen: gen,
+				CreatedAt:  b.Admin.UpdatedAt,
+				UpdatedAt:  b.Admin.UpdatedAt,
+			}
+			apply(s.PutUser(ctx, u), nil)
+		}
 	}
 	current := s.fsm.State().Settings
 	for scope, v := range b.Settings {

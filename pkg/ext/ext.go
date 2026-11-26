@@ -12,6 +12,7 @@ package ext
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"sort"
@@ -25,7 +26,29 @@ var (
 	ErrUnauthenticated = errors.New("unauthenticated")
 	// ErrForbidden: the principal may not perform the action.
 	ErrForbidden = errors.New("forbidden")
+	// ErrStopAuth stops Authenticator chains even when joined with ErrUnauthenticated,
+	// preventing fallback to lower-priority authenticators (e.g. for SSO-only accounts).
+	ErrStopAuth = errors.New("stop authentication chain")
+	// ErrInvalid indicates an invalid input or request.
+	ErrInvalid = errors.New("invalid request")
+	// ErrAlreadyExists indicates a resource already exists.
+	ErrAlreadyExists = errors.New("already exists")
+	// ErrNotFound indicates a resource does not exist.
+	ErrNotFound = errors.New("not found")
+	// ErrConflict indicates a state conflict (e.g. removing the last active user).
+	ErrConflict = errors.New("conflict")
+	// ErrClusterUpgrading indicates the cluster protocol is not ready for the operation.
+	ErrClusterUpgrading = errors.New("cluster upgrading")
+	// ErrWeakPassword indicates a password fails strength checks.
+	ErrWeakPassword = errors.New("weak password")
 )
+
+// RateLimitedError indicates too many failed authentication attempts.
+type RateLimitedError struct{ RetryAfter time.Duration }
+
+func (e *RateLimitedError) Error() string {
+	return fmt.Sprintf("too many failed logins; retry in %s", e.RetryAfter.Round(time.Second))
+}
 
 // Principal is who is acting.
 type Principal struct {
@@ -43,6 +66,8 @@ type Credentials struct {
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
 	Token    string `json:"token,omitempty"`
+	// Client identifies the caller address for per-client rate limiting.
+	Client string `json:"client,omitempty"`
 }
 
 // Authenticator turns credentials into a principal.
@@ -605,6 +630,48 @@ type ModuleAPI interface {
 	Call(ctx context.Context, r Request) (Response, error)
 }
 
+// User is a core console user account exposed to modules via Host.Users.
+type User struct {
+	ID          string    `json:"id"`
+	Email       string    `json:"email,omitempty"`
+	Name        string    `json:"name"`
+	Disabled    bool      `json:"disabled,omitempty"`
+	MustChange  bool      `json:"must_change,omitempty"`
+	HasPassword bool      `json:"has_password,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// UserCreate describes a new core user account.
+type UserCreate struct {
+	Email         string `json:"email"`
+	Name          string `json:"name,omitempty"`
+	Password      string `json:"password,omitempty"`
+	MustChange    bool   `json:"must_change,omitempty"`
+	Disabled      bool   `json:"disabled,omitempty"`
+	EmptyPassword bool   `json:"empty_password,omitempty"`
+}
+
+// UserUpdate describes partial updates to a core user account.
+type UserUpdate struct {
+	Name          *string `json:"name,omitempty"`
+	Password      *string `json:"password,omitempty"`
+	Disabled      *bool   `json:"disabled,omitempty"`
+	MustChange    *bool   `json:"must_change,omitempty"`
+	ClearPassword bool    `json:"clear_password,omitempty"`
+}
+
+// UserStore lets modules (such as auth) read and manage core user accounts
+// without duplicating user credentials or lifecycle state.
+type UserStore interface {
+	ListUsers(ctx context.Context) ([]User, error)
+	GetUser(ctx context.Context, id string) (User, error)
+	CreateUser(ctx context.Context, in UserCreate) (User, error)
+	UpdateUser(ctx context.Context, id string, in UserUpdate) (User, error)
+	DeleteUser(ctx context.Context, id string) error
+	VerifyPassword(ctx context.Context, client, username, password string) (User, error)
+}
+
 // Host is what the agent gives a module at start.
 type Host struct {
 	// API is the module's way to call its own API on any node (see
@@ -613,6 +680,8 @@ type Host struct {
 	// Branches lets the module work with this node's branches. Nil when the
 	// agent is older than the module.
 	Branches BranchHost
+	// Users lets modules access core user accounts. Nil when the agent is older.
+	Users UserStore
 	// Node is this node's name.
 	Node string
 	// DataDir is the module's own directory on this node
@@ -827,7 +896,7 @@ type Chain []Authenticator
 func (c Chain) Authenticate(ctx context.Context, cr Credentials) (Principal, error) {
 	for _, a := range c {
 		p, err := a.Authenticate(ctx, cr)
-		if !errors.Is(err, ErrUnauthenticated) {
+		if !errors.Is(err, ErrUnauthenticated) || errors.Is(err, ErrStopAuth) {
 			return p, err
 		}
 	}

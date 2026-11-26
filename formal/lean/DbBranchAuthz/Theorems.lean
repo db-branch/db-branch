@@ -729,4 +729,128 @@ theorem license_over_nodes_never_usable (l : License) (now nodes : Nat)
     (l.state now nodes).usable = false := by
   simp [License.state, hMax, hOver, LicenseState.usable]
 
+/-! ## F-14 Multi-User OSS Theorems -/
+
+/-- F-14: On all `/v1/users` endpoints (`user.read` / `user.write`), `scope:branches`
+    tokens are denied (`forbidden`) while authenticated non-`scope:branches`
+    principals are allowed (`AllowAuthenticated`). -/
+theorem prop8_user_endpoints_scoped_denied_and_oss_allowed (ep : Endpoint) (r : Role) (isTok : Bool)
+    (hUserEp : ep = .userList ∨ ep = .userCreate ∨ ep = .userGet ∨
+               ep = .userPatch ∨ ep = .userResetPassword ∨ ep = .userDelete) :
+    (evalRequest ⟨.publicHTTP, .none, .anonymous, false, .valid, ep, .other⟩).allowed = false ∧
+    (evalRequest ⟨.publicHTTP, .bearerToken, .scopeBranches, true, .valid, ep, .other⟩ = Decision.deny .forbidden) ∧
+    (r ≠ .anonymous ∧ r ≠ .localPrincipal ∧ r ≠ .scopeBranches →
+      (evalRequest ⟨.publicHTTP, .sessionCookie, r, isTok, .valid, ep, .other⟩).allowed = true) := by
+  rcases hUserEp with rfl | rfl | rfl | rfl | rfl | rfl
+  all_goals
+    refine ⟨by decide, by decide, ?_⟩
+    intro ⟨hAnon, hLoc, hBr⟩
+    cases r <;> cases isTok <;> first | exact (hAnon rfl).elim | exact (hLoc rfl).elim | exact (hBr rfl).elim | decide
+
+/-- F-14: Any authenticated user (not only built-in `"admin"`) whose session has
+    `must_change_password = true` is blocked with `.passwordChangeRequired` on
+    every gated endpoint not in `{authSession, authLogout, authPassword}` (including `/v1/users`). -/
+theorem prop8_general_user_must_change_restricted (r : Role) (ep : Endpoint)
+    (hNotPre : ep.isPreMuxPublic = false)
+    (hNotLogin : ep.isLogin = false)
+    (hNotPub : ep.isPublicExt = false)
+    (hNotAllowed : ep.allowedBeforePasswordChange = false)
+    (_hNotLoc : r ≠ .localPrincipal) :
+    evalRequest ⟨.publicHTTP, .sessionCookie, r, false, .mustChange, ep, .other⟩ =
+      Decision.deny .passwordChangeRequired := by
+  simp [evalRequest, hNotPre, hNotLogin, hNotPub, hNotAllowed]
+
+/-- F-14 helper: disabling a user immediately ends their existing cookie sessions
+    and personal API tokens when `st.users` has unique user IDs. -/
+theorem prop8_disabled_user_loses_session_and_tokens
+    (st st' : MultiUserState) (uid : String) (tok : UserSessionCookie) (tid : Nat)
+    (hUid : uid ≠ "")
+    (hTokUser : tok.userID = uid)
+    (_hOldTok : ∀ u ∈ st.users, u.id = uid → tok.uGen ≤ u.sessionGen)
+    (hOwned : ∀ t ∈ st.tokens, t.id = tid → t.owner = uid)
+    (hDisable : disableCoreUser st uid = some st') :
+    validateMultiUserSession st' tok = false ∧
+    authenticateMultiUserToken st' tid = false := by
+  simp only [disableCoreUser] at hDisable
+  split at hDisable
+  · contradiction
+  · rename_i target hFind
+    have _hTargetMem : target ∈ st.users := List.mem_of_find?_eq_some hFind
+    have hTargetPred := (List.find?_eq_some_iff_append.mp hFind).1
+    have hTargetId : target.id = uid := beq_iff_eq.mp hTargetPred
+    split at hDisable
+    · rename_i hDis
+      injection hDisable with hEq
+      subst hEq
+      have hFindU : st.users.find? (fun u => u.id == tok.userID) = some target := by
+        simpa [hTokUser] using hFind
+      have hSessFalse : validateMultiUserSession st tok = false := by
+        simp [validateMultiUserSession, hFindU, hDis]
+      have hTokFalse : authenticateMultiUserToken st tid = false := by
+        simp only [authenticateMultiUserToken]
+        cases hT : st.tokens.find? (fun t => t.id == tid)
+        · rfl
+        · rename_i t
+          have hTMem : t ∈ st.tokens := List.mem_of_find?_eq_some hT
+          have hTId : t.id = tid := beq_iff_eq.mp (List.find?_eq_some_iff_append.mp hT).1
+          have hOwn : t.owner = uid := hOwned t hTMem hTId
+          simp [hOwn, hUid, hFind, hDis]
+      exact ⟨hSessFalse, hTokFalse⟩
+    · split at hDisable
+      · contradiction
+      · injection hDisable with hEq
+        subst hEq
+        have hSessFalse : validateMultiUserSession
+            { st with
+              users := st.users.map (fun u => if u.id == uid then { u with disabled := true, sessionGen := u.sessionGen + 1 } else u)
+            , tokens := revokeTokensByOwner st.tokens uid } tok = false := by
+          simp only [validateMultiUserSession]
+          cases hF : (st.users.map (fun u => if u.id == uid then { u with disabled := true, sessionGen := u.sessionGen + 1 } else u)).find? (fun u => u.id == tok.userID)
+          · rfl
+          · rename_i u'
+            rcases List.mem_map.mp (List.mem_of_find?_eq_some hF) with ⟨orig, _, rfl⟩
+            have hEqTok := beq_iff_eq.mp (List.find?_eq_some_iff_append.mp hF).1
+            have hOrigId : orig.id = uid := by
+              by_cases hC : orig.id == uid
+              · exact beq_iff_eq.mp hC
+              · simp [hC, hTokUser] at hEqTok
+                exact hEqTok
+            have hCond : (orig.id == uid) = true := beq_iff_eq.mpr hOrigId
+            simp [hCond]
+        have hTokFalse : authenticateMultiUserToken
+            { st with
+              users := st.users.map (fun u => if u.id == uid then { u with disabled := true, sessionGen := u.sessionGen + 1 } else u)
+            , tokens := revokeTokensByOwner st.tokens uid } tid = false := by
+          simp only [authenticateMultiUserToken]
+          have hNone : (revokeTokensByOwner st.tokens uid).find? (fun t => t.id == tid) = none := by
+            simp only [revokeTokensByOwner, beq_iff_eq, hUid, ↓reduceIte]
+            rw [List.find?_eq_none]
+            intro t ht hId
+            rw [List.mem_filter] at ht
+            have hOwn := hOwned t ht.1 (beq_iff_eq.mp hId)
+            simp [hOwn] at ht
+          simp [hNone]
+        exact ⟨hSessFalse, hTokFalse⟩
+
+/-- F-14: When no other active password user remains, disabling or deleting a
+    user is refused (`none`), guaranteeing at least one active password user remains. -/
+theorem prop8_last_active_password_user_protected
+    (st : MultiUserState) (uid : String)
+    (hNoOther : (st.users.filter (fun u => u.id != uid && !u.disabled && u.hasPassword)).length = 0)
+    (hActive : ∀ u ∈ st.users, u.id = uid → u.disabled = false) :
+    disableCoreUser st uid = none ∧ deleteCoreUser st uid = none := by
+  constructor
+  · simp only [disableCoreUser]
+    cases hFind : st.users.find? (fun u => u.id == uid)
+    · rfl
+    · rename_i target
+      have hMem := List.mem_of_find?_eq_some hFind
+      have hId := beq_iff_eq.mp (List.find?_eq_some_iff_append.mp hFind).1
+      have hD := hActive target hMem hId
+      simp [hD, hNoOther]
+  · simp only [deleteCoreUser]
+    cases hFind : st.users.find? (fun u => u.id == uid)
+    · rfl
+    · simp [hNoOther]
+
 end DbBranchAuthz.Theorems

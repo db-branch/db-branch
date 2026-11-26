@@ -11,14 +11,20 @@ export function FilterBar({
   facets,
   shown,
   total,
+  extra,
+  extraActive = false,
+  onClearExtra,
 }: {
   values: FilterValues;
   onChange: (v: FilterValues) => void;
   facets: Facet[];
   shown: number;
   total: number;
+  extra?: ReactNode;
+  extraActive?: boolean;
+  onClearExtra?: () => void;
 }): ReactNode {
-  const active = activeCount(values) > 0;
+  const active = activeCount(values) > 0 || extraActive;
   return (
     <div className="filterbar" role="search">
       <input type="search" value={values.q ?? ""} placeholder="Search" aria-label="Search" onChange={(e) => onChange({ ...values, q: e.target.value })} />
@@ -34,12 +40,20 @@ export function FilterBar({
             ))}
           </select>
         ))}
+      {extra}
       {active && (
         <>
           <span className="muted small mono">
             {shown} / {total}
           </span>
-          <button type="button" className="text-button" onClick={() => onChange(Object.fromEntries(Object.keys(values).map((k) => [k, ""])))}>
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => {
+              onChange(Object.fromEntries(Object.keys(values).map((k) => [k, ""])));
+              onClearExtra?.();
+            }}
+          >
             Clear
           </button>
         </>

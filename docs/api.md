@@ -199,9 +199,16 @@ PUT  /v1/auth/password     {"current_password":"...","new_password":"..."} → 2
 - セッションは Raft に保存し、どのノードでも有効。有効期限は 12 時間、操作のたびに延長する
 - ログアウト（`POST /v1/auth/logout`）の失効記録は全ノードがプロトコル 24 以上である必要がある。混在クラスター（更新中）では、受けたノードの手元でのみ失効して保留キューに積み、`503 cluster_upgrading` を返す（利用者に成功とは見せず、更新完了後に再ログアウトできる案内を返す）。全ノードの更新が完了すると保留分は自動で Raft に記録されるが、**既知の制約として、更新完了前にそのノードを再起動するとメモリ上の失効・保留が失われ、他ノードと同様に期限切れまたは更新後の再ログアウトまでセッションが有効のまま残る**
 - ログインの失敗が続いたら `429 rate_limited`（`Retry-After` 付き）
-- パスワードを変更すると、今のセッション以外はすべて無効になる
-- パスワードのリセット（忘れたとき）は API にしない。ノード上で `sudo db-branch admin reset-password` を実行する
-- OSS 版の `username` は `admin` だけ
+- パスワードを変更すると、今のセッション以外はすべて無効になる（自分のセッションだけ継続、他ユーザーには影響しない）
+- 組み込み `admin` の緊急パスワードリセットはノード上で `sudo db-branch admin reset-password`（ローカルソケット限定の `POST /v1/auth/reset`）を実行する。通常ユーザーのパスワード再設定や管理は `/v1/users`（`POST /v1/users/{id}/reset-password`）およびノード CLI `db-branch user` で行える
+- OSS 版の `username` は `admin` またはメールアドレス（コンソールユーザー ID `user:<email>`）を指定できる
+
+### 3.1.1 コアコンソールユーザー（`/v1/users`）
+
+- `GET /v1/users`（`user.read`）・`POST /v1/users`（`user.write`）・`GET /v1/users/{id}`（`user.read`）・`PATCH /v1/users/{id}`（`user.write`）・`DELETE /v1/users/{id}`（`user.write`）・`POST /v1/users/{id}/reset-password`（`user.write`）
+- 認証済みユーザー（OSS 全員 admin 同等）・ローカルソケット・`scope:full` トークンで利用でき、`scope:branches` トークンでは `403 forbidden`
+- 有効かつパスワード付きの最後の 1 人の無効化・削除は `409 conflict` で拒否し、自分自身の無効化・削除は `400 invalid_request` で拒否する（ローカルソケットおよび `scope:full` サービストークンを除く）
+- 無効化・削除時は対象ユーザーのセッションおよび個人 API トークンを即時失効する
 
 ### 3.2 ローカル CLI（UNIX ソケット）
 
@@ -221,7 +228,7 @@ PUT  /v1/auth/password     {"current_password":"...","new_password":"..."} → 2
 
 | ポート | OSS 版 | 有償 `auth` / `audit` モジュール |
 |---|---|---|
-| `Authenticator` | セッション Cookie（admin のみ）、ソケットの UID 確認、API トークン（`Authorization: Bearer dbb_...`） | 複数ユーザー・SSO（OIDC / SAML） |
+| `Authenticator` | セッション Cookie（`admin` とコアユーザー `user:<email>`）、ソケットの UID 確認、API トークン（`Authorization: Bearer dbb_...`） | ロール・チーム・SSO（OIDC / SAML） |
 | `Authorizer` | 認証済みならすべて許可 | RBAC。拒否時は `403 forbidden` |
 | `AuditSink` | 構造化ログに出すだけ | 永続化・検索・外部転送 |
 

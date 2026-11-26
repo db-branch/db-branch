@@ -1,5 +1,6 @@
-// Package auth implements the OSS console login: one "admin" user, password
-// change, and a reset path for root on the node.
+// Package auth implements the OSS console login: built-in "admin" and
+// unlimited email-identified console users, password change, and a reset path
+// for root on the node.
 package auth
 
 import (
@@ -131,9 +132,12 @@ type Session struct {
 // Service checks passwords and issues signed session tokens. Nothing about
 // sessions is stored but logouts (see Revocations).
 type Service struct {
-	Store  Store
-	Hasher Hasher
-	Clock  func() time.Time
+	Store        Store
+	Users        domain.UserStore
+	Hasher       Hasher
+	Clock        func() time.Time
+	Protocol     func() int
+	RevokeTokens func(ctx context.Context, owner string) error
 	// TTL is how long a session lasts without use (default DefaultSessionTTL).
 	TTL func() time.Duration
 	// Revocations is the shared list of logged-out sessions. Optional: without
@@ -174,9 +178,9 @@ func (s *Service) SetPassword(password string) error { return s.setPassword(pass
 func (s *Service) SetInitialPassword(password string) error { return s.setPassword(password, true) }
 
 func (s *Service) setPassword(password string, mustChange bool) error {
-	c, err := s.Store.Load()
-	if err != nil && !errors.Is(err, ErrNoCredentials) {
-		return err
+	c, loadErr := s.Store.Load()
+	if loadErr != nil && !errors.Is(loadErr, ErrNoCredentials) {
+		return loadErr
 	}
 	salt := make([]byte, 16)
 	_, _ = rand.Read(salt)
@@ -184,32 +188,42 @@ func (s *Service) setPassword(password string, mustChange bool) error {
 	if len(key) == 0 {
 		key = newKey()
 	}
-	return s.Store.Save(Credentials{
-		Salt: salt, Hash: s.Hasher.Hash(password, salt), Generation: c.Generation + 1, UpdatedAt: s.Clock(), SessionKey: key, MustChange: mustChange,
-	})
+	hash := s.Hasher.Hash(password, salt)
+	now := s.Clock().UTC()
+	if s.Users == nil {
+		return s.Store.Save(Credentials{
+			Salt: salt, Hash: hash, Generation: c.Generation + 1, UpdatedAt: now, SessionKey: key, MustChange: mustChange,
+		})
+	}
+	return s.setAdminUserPassword(c, loadErr, salt, hash, key, now, mustChange)
 }
 
 func (s *Service) verify(c Credentials, password string) bool {
-	if len(password) > MaxPasswordLen {
+	return s.verifyHash(c.Salt, c.Hash, password)
+}
+
+func (s *Service) verifyHash(salt, hash []byte, password string) bool {
+	if len(hash) == 0 || len(password) > MaxPasswordLen {
 		return false
 	}
 	s.hashingOnce.Do(func() { s.hashing = make(chan struct{}, MaxHashing) })
 	s.hashing <- struct{}{}
 	defer func() { <-s.hashing }()
-	return subtle.ConstantTimeCompare(s.Hasher.Hash(password, c.Salt), c.Hash) == 1
+	return subtle.ConstantTimeCompare(s.Hasher.Hash(password, salt), hash) == 1
 }
 
-// Login checks the admin password and starts a session.
+// Login checks the user password and starts a session.
 func (s *Service) Login(user, password string) (Session, error) {
 	return s.LoginFrom("", user, password)
 }
 
 // LoginFrom is Login with failures counted against client.
 func (s *Service) LoginFrom(client, user, password string) (Session, error) {
-	if err := s.VerifyFrom(client, user, password); err != nil {
+	u, err := s.VerifyUserFrom(client, user, password)
+	if err != nil {
 		return Session{}, err
 	}
-	return s.Begin(user, user, nil)
+	return s.Begin(u.ID, u.DisplayName(), nil)
 }
 
 // Verify is VerifyFrom for a caller with no address (the node itself).
@@ -222,31 +236,75 @@ func (s *Service) TrackedClients() int {
 	return len(s.clients)
 }
 
-// VerifyFrom checks the admin password, locking out the calling client (not
-// everyone) for a while after repeated failures. The attempt is counted
-// before the password is hashed (and forgiven on success), so concurrent
-// guesses cannot outrun the limit; the hash runs outside the lock, a few at
-// a time.
+// VerifyFrom checks user credentials, locking out the calling client for a
+// while after repeated failures.
 func (s *Service) VerifyFrom(client, user, password string) error {
-	c, err := s.Store.Load()
-	if errors.Is(err, ErrNoCredentials) {
-		return ErrInvalidCredentials
+	_, err := s.VerifyUserFrom(client, user, password)
+	return err
+}
+
+// VerifyUserFrom validates user ("admin" or an email/user:<email>) and
+// password with per-client rate limiting, returning the matched domain.User.
+func (s *Service) VerifyUserFrom(client, user, password string) (domain.User, error) {
+	c, loadErr := s.Store.Load()
+	if loadErr != nil && !errors.Is(loadErr, ErrNoCredentials) {
+		return domain.User{}, loadErr
 	}
-	if err != nil {
-		return err
+	if s.Users == nil {
+		if errors.Is(loadErr, ErrNoCredentials) {
+			return domain.User{}, ErrInvalidCredentials
+		}
+		if retry := s.reserve(client); retry > 0 {
+			return domain.User{}, &RateLimitedError{RetryAfter: retry}
+		}
+		if user != AdminUser || !s.verify(c, password) {
+			return domain.User{}, ErrInvalidCredentials
+		}
+		s.clearExpiredLock(client)
+		return domain.User{ID: AdminUser, Name: AdminUser, MustChange: c.MustChange}, nil
 	}
 	if retry := s.reserve(client); retry > 0 {
-		return &RateLimitedError{RetryAfter: retry}
+		return domain.User{}, &RateLimitedError{RetryAfter: retry}
 	}
-	if user != AdminUser || !s.verify(c, password) {
-		return ErrInvalidCredentials
+	id, err := domain.ResolveUserID(user)
+	if err != nil {
+		return domain.User{}, ErrInvalidCredentials
 	}
+	u, uerr := s.Users.GetUser(context.Background(), id)
+	if errors.Is(uerr, domain.ErrNotFound) && id == AdminUser && loadErr == nil && len(c.Hash) > 0 {
+		legacyAllowed := s.Protocol != nil && s.Protocol() < domain.ProtocolUsers
+		if !legacyAllowed {
+			if list, lerr := s.Users.ListUsers(context.Background()); lerr == nil && len(list) == 0 {
+				legacyAllowed = true
+			}
+		}
+		if legacyAllowed {
+			if !s.verify(c, password) {
+				return domain.User{}, ErrInvalidCredentials
+			}
+			s.clearExpiredLock(client)
+			return domain.User{ID: AdminUser, Name: AdminUser, MustChange: c.MustChange}, nil
+		}
+	}
+	if errors.Is(uerr, domain.ErrNotFound) {
+		return domain.User{}, ErrInvalidCredentials
+	}
+	if uerr != nil {
+		return domain.User{}, uerr
+	}
+	if !u.ActiveWithPassword() || !s.verifyHash(u.Salt, u.Hash, password) {
+		return domain.User{}, ErrInvalidCredentials
+	}
+	s.clearExpiredLock(client)
+	return u, nil
+}
+
+func (s *Service) clearExpiredLock(client string) {
 	s.mu.Lock()
 	if f := s.clients[client]; f != nil && !s.Clock().Before(f.lockedUntil) {
 		delete(s.clients, client)
 	}
 	s.mu.Unlock()
-	return nil
 }
 
 // overflowClient is the shared record for clients beyond MaxTrackedClients
@@ -317,11 +375,46 @@ func (s *Service) pruneClients(now time.Time) {
 // Begin starts a session for someone already authenticated (by Verify or a
 // module). Changing the admin password ends it like any other session.
 func (s *Service) Begin(user, name string, roles []string) (Session, error) {
+	return s.buildSession(randomToken()[:22], user, name, roles, false)
+}
+
+// Reissue returns a refreshed session keeping sess's ID/CSRF while picking up
+// the user's latest SessionGen and MustChange from storage.
+func (s *Service) Reissue(sess Session) (Session, error) {
+	return s.buildSession(sess.id, sess.User, sess.Name, sess.Roles, true)
+}
+
+func (s *Service) buildSession(id, user, name string, roles []string, renewed bool) (Session, error) {
 	c, err := s.credentialsWithKey()
 	if err != nil {
 		return Session{}, err
 	}
-	return s.issue(c, payload{ID: randomToken()[:22], User: user, Name: name, Roles: roles}), nil
+	p := payload{ID: id, User: user, Name: name, Roles: roles}
+	mustChange := c.MustChange && p.User == AdminUser
+	if s.Users != nil {
+		u, uerr := s.Users.GetUser(context.Background(), user)
+		switch {
+		case uerr == nil:
+			if u.Disabled {
+				return Session{}, ErrNoSession
+			}
+			gen := u.SessionGen
+			p.UGen = &gen
+			mustChange = u.MustChange
+			if p.Name == "" || p.Name == p.User {
+				p.Name = u.DisplayName()
+			}
+		case errors.Is(uerr, domain.ErrNotFound):
+			if user != AdminUser {
+				mustChange = false
+			}
+		default:
+			return Session{}, uerr
+		}
+	}
+	out := s.issueWithMustChange(c, p, mustChange)
+	out.Renewed = renewed
+	return out, nil
 }
 
 // credentialsWithKey loads the credentials, adding a session key to ones
@@ -356,6 +449,7 @@ type payload struct {
 	Name    string   `json:"n,omitempty"`
 	Roles   []string `json:"r,omitempty"`
 	Gen     int      `json:"g"`
+	UGen    *int     `json:"ug,omitempty"`
 	Expires int64    `json:"e"`
 }
 
@@ -369,13 +463,17 @@ func mac(key []byte, parts ...string) []byte {
 }
 
 func (s *Service) issue(c Credentials, p payload) Session {
+	return s.issueWithMustChange(c, p, c.MustChange && p.User == AdminUser)
+}
+
+func (s *Service) issueWithMustChange(c Credentials, p payload, mustChange bool) Session {
 	exp := s.Clock().Add(s.ttl())
 	p.Gen, p.Expires = c.Generation, exp.Unix()
 	b, _ := json.Marshal(p)
 	body := base64.RawURLEncoding.EncodeToString(b)
 	token := body + "." + base64.RawURLEncoding.EncodeToString(mac(c.SessionKey, "session", body))
 	csrf := base64.RawURLEncoding.EncodeToString(mac(c.SessionKey, "csrf", p.ID))[:32]
-	return Session{Token: token, CSRF: csrf, User: p.User, Name: p.Name, Roles: p.Roles, ExpiresAt: time.Unix(p.Expires, 0).UTC(), MustChange: c.MustChange && p.User == AdminUser, id: p.ID}
+	return Session{Token: token, CSRF: csrf, User: p.User, Name: p.Name, Roles: p.Roles, ExpiresAt: time.Unix(p.Expires, 0).UTC(), MustChange: mustChange, id: p.ID}
 }
 
 func (s *Service) parse(c Credentials, token string) (payload, error) {
@@ -436,15 +534,22 @@ func (s *Service) inspect(token string) (sess Session, revokedLocal, pending boo
 	_, pending = s.pendingRevoke[p.ID]
 	s.mu.Unlock()
 	revokedShared := s.Revocations != nil && s.Revocations.Revoked(p.ID)
-	if p.Gen != c.Generation || !now.Before(exp) || revokedShared {
+	if !now.Before(exp) || revokedShared {
+		return Session{}, false, false, ErrNoSession
+	}
+	mustChange, valid, err := s.validatePayloadUser(c, p)
+	if err != nil {
+		return Session{}, false, false, err
+	}
+	if !valid {
 		return Session{}, false, false, ErrNoSession
 	}
 	if exp.Sub(now) < s.ttl()/2 {
-		sess = s.issue(c, p)
+		sess = s.issueWithMustChange(c, p, mustChange)
 		sess.Renewed = true
 		return sess, revokedLocal, pending, nil
 	}
-	return Session{Token: token, CSRF: s.issue(c, p).CSRF, User: p.User, Name: p.Name, Roles: p.Roles, ExpiresAt: exp.UTC(), MustChange: c.MustChange && p.User == AdminUser, id: p.ID}, revokedLocal, pending, nil
+	return Session{Token: token, CSRF: s.issueWithMustChange(c, p, mustChange).CSRF, User: p.User, Name: p.Name, Roles: p.Roles, ExpiresAt: exp.UTC(), MustChange: mustChange, id: p.ID}, revokedLocal, pending, nil
 }
 
 // Logout ends a session. It is recorded in Revocations so that every node
@@ -552,6 +657,33 @@ func (s *Service) ChangePassword(token, current, next string) (Session, error) {
 	c, err := s.Store.Load()
 	if err != nil {
 		return Session{}, err
+	}
+	if s.Users != nil {
+		u, uerr := s.Users.GetUser(context.Background(), sess.User)
+		switch {
+		case uerr == nil:
+			if !s.verifyHash(u.Salt, u.Hash, current) {
+				return Session{}, ErrInvalidCredentials
+			}
+			if len(next) < minPasswordLen || len(next) > MaxPasswordLen {
+				return Session{}, ErrWeakPassword
+			}
+			mustChange := false
+			updated, perr := s.UpdateUser(context.Background(), u.ID, UpdateUserInput{Password: &next, MustChange: &mustChange})
+			if perr != nil {
+				return Session{}, perr
+			}
+			gen := updated.SessionGen
+			fresh := s.issueWithMustChange(c, payload{ID: sess.id, User: updated.ID, Name: updated.DisplayName(), Roles: sess.Roles, UGen: &gen}, false)
+			fresh.Renewed = true
+			return fresh, nil
+		case errors.Is(uerr, domain.ErrNotFound):
+			if sess.User != AdminUser {
+				return Session{}, ErrNoSession
+			}
+		default:
+			return Session{}, uerr
+		}
 	}
 	if !s.verify(c, current) {
 		return Session{}, ErrInvalidCredentials

@@ -428,15 +428,16 @@ agent が管理画面を配信する。フロントエンド（React + Vite）�
 - アイコンは 1 つのアイコンセットに統一する
 - 状態の変化は SSE（`/v1/events`）を受けて該当する一覧を取り直す
 
-### 認証（OSS 版）
+### 認証とマルチユーザー（OSS 版）
 
-OSS 版のユーザーは `admin` の 1 人だけ。ユーザーの追加はできない（有償モジュールで提供。§12）。
+OSS 版では組み込みの `admin` アカウントに加え、メール識別（`user:<email>`）による無制限のコンソールユーザーを追加・無効化・パスワード再設定・削除できる。OSS 版のユーザーはすべて管理者（`admin`）同等の権限を持ち、ロール分離・チーム・SSO・監査ログ・ベースアクセス制限は有償 `auth` モジュール（§12）で提供する。
 
-- **初期パスワード**: `db-branch init`（クラスタでは `cluster init`）でランダムに生成し、1 回だけ表示する。あわせて `/etc/db-branch/initial-admin-password`（root のみ読み取り可、0600）に保存する。パスワードを変更したら、このファイルは削除する
-- **パスワードの変更**: Web コンソールから（現在のパスワードの入力が必要）
-- **評価用の初期パスワード**：`db-branch init --pool <pool> --evaluation` は、最初の管理者パスワードをランダムではなく `admin` にし、コンソールの最初のサインインで、新しいパスワード（12 文字以上）への変更を求める（Multipass の評価用 VM 向け。使い捨ての VM 以外では使わない）。変更するまでは、セッションの確認（`GET /v1/auth/session`、`must_change_password: true`）、サインアウト、パスワード変更の3つ以外の API は 403 `password_change_required` になる。変更が済めば通常どおり。すでに初期化したノードには何もしない。保存済みのランダムなパスワード（`/etc/db-branch/initial-admin-password`）は削除する。管理者のセッションにだけ付き、モジュールのユーザーには付かない
-- **パスワードのリセット**: パスワードを忘れたときは、ノードの root が `sudo db-branch admin reset-password` を実行する。新しいランダムパスワードを表示し、既存のセッションはすべて無効にする
-- **保存**: パスワードは argon2id でハッシュ化して Raft に保存する（どのノードでも同じパスワードでログインできる）
+- **初期パスワード**: `db-branch init`（クラスタでは `cluster init`）で組み込み `admin` の初期パスワードをランダムに生成し、1 回だけ表示する。あわせて `/etc/db-branch/initial-admin-password`（root のみ読み取り可、0600）に保存する。パスワードを変更したら、このファイルは削除する
+- **ユーザーの追加・管理**: Web コンソールの Users 画面（`auth` モジュール有効時は `/admin/m/auth/ui/` へ誘導）、REST API（`/v1/users`）、またはノード CLI（`db-branch user add/list/disable/enable/remove/reset-password`）で管理する。最後の有効なパスワード付きユーザーの無効化・削除は拒否され、無効化・削除時にセッションと個人 API トークンは即時失効する
+- **パスワードの変更**: Web コンソールから（現在のパスワードの入力が必要）。対象ユーザー自身の他セッションのみ無効化し、他のユーザーのセッションには影響しない
+- **評価用の初期パスワード**：`db-branch init --pool <pool> --evaluation` は、最初の管理者パスワードをランダムではなく `admin` にし、コンソールの最初のサインインで、新しいパスワード（12 文字以上）への変更を求める（Multipass の評価用 VM 向け。使い捨ての VM 以外では使わない）。追加ユーザーも作成・パスワード再設定時に初回変更必須（`must_change_password`）を指定できる。変更するまでは、セッションの確認（`GET /v1/auth/session`、`must_change_password: true`）、サインアウト、パスワード変更の3つ以外の API は 403 `password_change_required` になる
+- **緊急パスワードリセット**: 組み込み `admin` のパスワードを忘れたときは、ノードの root が `sudo db-branch admin reset-password` を実行する（削除・無効化されていた `admin` も再有効化される）。通常ユーザーは `db-branch user reset-password <id-or-email>` で再設定する
+- **保存**: パスワードは argon2id でハッシュ化して Raft（プロトコル 30 以降、シングルノード時は `state.json`）に保存する（どのノードでも同じパスワードでログインできる）
 - **セッション**: Cookie（`HttpOnly`・`Secure`・`SameSite=Strict`）と CSRF トークン。ログインの試行回数には上限を設ける
 - **CLI**: ノード上の CLI は UNIX ソケット経由で agent に接続し、root か `db-branch-admin` グループのメンバーなら操作できる（パスワード不要）。DB サーバーは `db-branch` ユーザーで動くので、このグループには入れない。DB サーバーを乗っ取った者が agent の管理者になれないようにするためである（ソケットは `db-branch-admin` がなければ root だけ）。DB サーバーの unit は `/run/db-branch` と `/etc/db-branch` を見られない
 - **DB サーバーの設定と unit**: インスタンスのディレクトリ（`/var/lib/db-branch/instances/<id>`）と、その `env`・`my.cnf` は `root:db-branch`（0750/0640）で、DB サーバーのユーザーは読めるが書き換えられない（乗っ取った者が再起動後も居座るために `env` を書き換えるのを防ぐ）。MySQL のエラーログだけは、サービスユーザーの持ち物の `log/` に置く。DB サーバーの unit には `NoNewPrivileges`・`PrivateTmp`・`ProtectHome`・`ProtectSystem=full` などを付けてあるので、ブランチのデータ（ZFS のマウント先）を `/home`・`/usr`・`/etc` 以下に置くことはできない。稼働中のインスタンスは、次に再起動されるときに新しい所有者になる。

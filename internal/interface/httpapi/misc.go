@@ -279,14 +279,14 @@ type sessionJSON struct {
 // consoleActions are the actions whose pages and buttons the console
 // shows or hides.
 var consoleActions = []string{"base.read", "base.create", "base.delete", "base.load", "base.snapshot", "base.publish", "base.refresh", "base.refresh.read",
-	"runtime.install", "cluster.read", "setting.write", "module.install", "token.write", "backup.read", "route-user.write", "update.read", "update.check", "update.apply", "license.write",
+	"runtime.install", "cluster.read", "setting.write", "module.install", "token.write", "backup.read", "route-user.write", "user.read", "user.write", "update.read", "update.check", "update.apply", "license.write",
 	"branch.read", "branch.create", "branch.connect", "branch.query", "branch.extend", "branch.pause", "branch.resume", "branch.update", "branch.reset", "branch.delete", "branch.recreate", "branch.checkpoint", "branch.checkpoint.delete", "branch.checkpoint_delete", "branch.restore", "branch.upgrade", "branch.fork", "branch.merge"}
 
 // adminUser is the session user of the built-in admin password.
 const adminUser = "admin"
 
 // passwordChanger is who changes the signed-in user's password: the
-// built-in admin password, a module that supports it, or no one.
+// built-in/core password user, a module that supports it, or no one.
 func (s *Server) passwordChanger(sess auth.Session) (ext.PasswordChanger, bool) {
 	if sess.User == adminUser {
 		return nil, true
@@ -294,8 +294,15 @@ func (s *Server) passwordChanger(sess auth.Session) (ext.PasswordChanger, bool) 
 	if slices.Contains(sess.Roles, ext.NoPasswordRole) {
 		return nil, false
 	}
-	pc, ok := s.Ext.Authenticator.(ext.PasswordChanger)
-	return pc, ok
+	if pc, ok := s.Ext.Authenticator.(ext.PasswordChanger); ok {
+		return pc, true
+	}
+	if s.Auth != nil && s.Auth.Users != nil {
+		if u, err := s.Auth.Users.GetUser(context.Background(), sess.User); err == nil {
+			return nil, len(u.Hash) > 0
+		}
+	}
+	return nil, false
 }
 
 func (s *Server) sessionView(ctx context.Context, sess auth.Session) sessionJSON {
@@ -344,11 +351,17 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	who := ext.Principal{ID: in.Username, Name: in.Username}
-	p, err := s.authenticator().Authenticate(auth.WithClient(r.Context(), ClientKey(r.RemoteAddr)), ext.Credentials{Username: in.Username, Password: in.Password})
+	client := ClientKey(r.RemoteAddr)
+	p, err := s.authenticator().Authenticate(auth.WithClient(r.Context(), client), ext.Credentials{Username: in.Username, Password: in.Password, Client: client})
 	var sess auth.Session
 	if err == nil {
-		who = p
-		sess, err = s.Auth.Begin(p.ID, p.Name, p.Roles)
+		if resolved, rerr := s.resolvePrincipal(r.Context(), p); rerr != nil {
+			err = rerr
+		} else {
+			p = resolved
+			who = p
+			sess, err = s.Auth.Begin(p.ID, p.Name, p.Roles)
+		}
 	}
 	if err != nil {
 		s.audit(r, who, "auth.login", ext.Resource{Kind: "auth"}, ext.OutcomeFailed, http.StatusUnauthorized)
@@ -415,6 +428,11 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		if err := pc.ChangePassword(r.Context(), ext.Principal{ID: sess.User, Name: sess.Name, Roles: sess.Roles}, in.Current, in.New); err != nil {
 			fail(w, err)
 			return
+		}
+		if s.Auth != nil {
+			if fresh, rerr := s.Auth.Reissue(sess); rerr == nil {
+				setSessionCookie(w, fresh)
+			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return

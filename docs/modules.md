@@ -6,7 +6,7 @@
 
 | ポート | 呼ばれるとき | OSS の既定 |
 |---|---|---|
-| `ext.Authenticator` | コンソールのログイン（ユーザー名とパスワード）、API の `Authorization: Bearer <token>` | admin 1 人のパスワード認証と API トークン（個人用・サービス用） |
+| `ext.Authenticator` | コンソールのログイン（ユーザー名とパスワード）、API の `Authorization: Bearer <token>` | `admin` およびコアコンソールユーザー（`user:<email>`）のパスワード認証と API トークン（個人用・サービス用） |
 | `ext.Authorizer` | すべての API 呼び出しの前（`branch.create`、`branch.read`、`base.delete` などのアクション名と対象） | ログインしていれば許可 |
 | `ext.AuditSink` | 変更を伴う呼び出し・拒否・ログインの後 | agent の構造化ログに 1 行 |
 | `ext.Router` | 振り分けの設定（ブランチごとの hostgroup・ユーザー・コメントの規則）が変わったとき | なし（振り分けをしない）。`db-branch-proxysql` モジュールが ProxySQL を設定する |
@@ -103,4 +103,5 @@ func main() {
 - 用途: ブランチ A のノードで動くモジュールが、別のノードにあるブランチ B の中身（チェックサムや行）を、B のノードのモジュールに頼む。データベースの認証情報はノードの外に出ない（各ノードのモジュールがローカルのソケットで自分のブランチだけを読み、結果だけが agent 間の相互 TLS を通る）
 - `Principal` は呼び出し元のモジュールが責任を持つ（モジュールは agent と同じ信頼の内側で動く）。受けた要求の利用者をそのまま渡すこと
 - ライセンス（masking）: `license.FeatureMasking` はどのプランにも入れない（トライアルにも入らない）。`Modules` に `masking` を名指しで書いたライセンスだけが `Has` で真になる（`*` は含まない）
-- ライセンス（diff）: `license.FeatureDiff`（`diff`）もどのプランにも入れない（オプトイン。`Modules` に `diff` を名指しで書いたライセンスだけが `Has` で真になる）。Lite は `history` で 3 ノードまで、Team は `users`・`history` で 5 ノードまで、Business は `users`・`audit`・`sso`・`history` で 10 ノードまで（`planFeatures` の 1 か所）
+- ライセンス（diff）: `license.FeatureDiff`（`diff`）もどのプランにも入れない（オプトイン。`Modules` に `diff` を名指しで書いたライセンスだけが `Has` で真になる）。Lite は `history` で 3 ノードまで、Team は `roles`・`teams`・`history` で 5 ノードまで（無制限のコンソールユーザー自体は OSS コア標準）、Business は `roles`・`teams`・`audit`・`sso`・`history` で 10 ノードまで（`planFeatures` の 1 か所）。
+- `ext.Host.Users`（`ext.UserStore`）: `auth` モジュールとコアのユーザーストアを単一ソースで統合するポート。メールアドレス単位のアカウント作成・更新・削除・無効化・パスワード検証（client ごとのレート制限含む）をコアへ委譲し、モジュールのアンインストールやライセンス期限切れ時もパスワード付きコアユーザー（`admin` 同等）のままフォールバックする。また `Chain.Authenticate` は `ext.ErrStopAuth` を含むエラーを受け取った場合に後続の認証器へフォールバックしない。

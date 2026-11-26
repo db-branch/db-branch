@@ -20,7 +20,10 @@ import (
 // The file holds branch passwords, so it is created 0600.
 type Store struct {
 	Path string
-	mu   sync.Mutex
+	// LegacyAdminActive optionally reports whether an unmigrated admin password
+	// exists outside state.json (e.g. auth.json) when guarding the last user.
+	LegacyAdminActive func() bool
+	mu                sync.Mutex
 }
 
 var (
@@ -32,6 +35,7 @@ var (
 	_ domain.TrialStore          = (*Store)(nil)
 	_ domain.ClusterIDStore      = (*Store)(nil)
 	_ domain.TokenStore          = (*Store)(nil)
+	_ domain.UserStore           = (*Store)(nil)
 	_ domain.ModuleDataStore     = (*Store)(nil)
 	_ domain.BaseRefreshStore    = (*Store)(nil)
 	_ domain.UpdateStore         = (*Store)(nil)
@@ -44,6 +48,7 @@ type state struct {
 	Modules    map[string]domain.ModuleSpec `json:"modules,omitempty"`
 	Settings   map[string]map[string]string `json:"settings,omitempty"`
 	Tokens     map[string]domain.APIToken   `json:"tokens,omitempty"`
+	Users      map[string]domain.User       `json:"users,omitempty"`
 	ModuleData map[string]map[string][]byte `json:"module_data,omitempty"`
 	// BaseRefreshes are the base refresh schedules by base name.
 	BaseRefreshes map[string]domain.BaseRefresh `json:"base_refreshes,omitempty"`
@@ -644,11 +649,95 @@ type Snapshot struct {
 	Modules       []domain.ModuleSpec
 	Settings      map[string]map[string]string
 	Tokens        []domain.APIToken
+	Users         []domain.User
 	ModuleData    map[string]map[string][]byte
 	BaseRefreshes []domain.BaseRefresh
 	Update        *domain.UpdateCheck
 	Rollout       *domain.Rollout
 	ClusterID     string
+}
+
+func (s *Store) legacyAdminActive() bool {
+	return s.LegacyAdminActive != nil && s.LegacyAdminActive()
+}
+
+// ListUsers returns all users sorted by ID.
+func (s *Store) ListUsers(context.Context) ([]domain.User, error) {
+	st, err := s.read()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.User, 0, len(st.Users))
+	for _, u := range st.Users {
+		out = append(out, u.Clone())
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// GetUser returns the user with ID id.
+func (s *Store) GetUser(_ context.Context, id string) (domain.User, error) {
+	st, err := s.read()
+	if err != nil {
+		return domain.User{}, err
+	}
+	u, ok := st.Users[id]
+	if !ok {
+		return domain.User{}, fmt.Errorf("user %s: %w", id, domain.ErrNotFound)
+	}
+	return u.Clone(), nil
+}
+
+// InsertUser stores a new user, failing with ErrAlreadyExists if ID is taken.
+func (s *Store) InsertUser(_ context.Context, u domain.User) error {
+	return s.update(func(st *state) error {
+		if st.Users == nil {
+			st.Users = map[string]domain.User{}
+		}
+		if _, ok := st.Users[u.ID]; ok {
+			return fmt.Errorf("user %s: %w", u.ID, domain.ErrAlreadyExists)
+		}
+		st.Users[u.ID] = u.Clone()
+		return nil
+	})
+}
+
+// PutUser replaces or creates user u, ensuring at least one active user with a
+// password remains when disabling or clearing passwords.
+func (s *Store) PutUser(_ context.Context, u domain.User) error {
+	return s.update(func(st *state) error {
+		if st.Users == nil {
+			st.Users = map[string]domain.User{}
+		}
+		if old, existed := st.Users[u.ID]; existed && old.ActiveWithPassword() && !u.ActiveWithPassword() {
+			if err := domain.EnsureActivePasswordUserAfterUpdate(st.Users, u, s.legacyAdminActive()); err != nil {
+				return err
+			}
+		}
+		st.Users[u.ID] = u.Clone()
+		return nil
+	})
+}
+
+// DeleteUser removes user id, refusing to remove the last user or the last active
+// user with a password.
+func (s *Store) DeleteUser(_ context.Context, id string) error {
+	return s.update(func(st *state) error {
+		cur, ok := st.Users[id]
+		if !ok {
+			return fmt.Errorf("user %s: %w", id, domain.ErrNotFound)
+		}
+		if len(st.Users) <= 1 {
+			return fmt.Errorf("%w: cannot delete the last user", domain.ErrConflict)
+		}
+		if cur.ActiveWithPassword() {
+			if err := domain.EnsureActivePasswordUserAfterDelete(st.Users, id, false); err != nil {
+				return err
+			}
+		}
+		delete(st.Users, id)
+		return nil
+	})
 }
 
 // Snapshot reads the full state file in one pass.
@@ -664,6 +753,7 @@ func (s *Store) Snapshot() (Snapshot, error) {
 		Modules:       make([]domain.ModuleSpec, 0, len(st.Modules)),
 		Settings:      st.Settings,
 		Tokens:        make([]domain.APIToken, 0, len(st.Tokens)),
+		Users:         make([]domain.User, 0, len(st.Users)),
 		ModuleData:    st.ModuleData,
 		BaseRefreshes: make([]domain.BaseRefresh, 0, len(st.BaseRefreshes)),
 		Update:        st.Update,
@@ -690,6 +780,10 @@ func (s *Store) Snapshot() (Snapshot, error) {
 		out.Tokens = append(out.Tokens, t)
 	}
 	sort.Slice(out.Tokens, func(i, j int) bool { return out.Tokens[i].CreatedAt.Before(out.Tokens[j].CreatedAt) })
+	for _, u := range st.Users {
+		out.Users = append(out.Users, u.Clone())
+	}
+	sort.Slice(out.Users, func(i, j int) bool { return out.Users[i].ID < out.Users[j].ID })
 	for _, r := range st.BaseRefreshes {
 		out.BaseRefreshes = append(out.BaseRefreshes, r)
 	}

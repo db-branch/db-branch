@@ -110,6 +110,14 @@ export function legacyRedirect(pathname: string): string | null {
   return tab === "modules" ? `${ADMIN}/modules` : `${ADMIN}/modules/${tab}`;
 }
 
+// When the paid auth module provides its own Users page, /admin/users forwards
+// there so core and module do not show two separate user lists.
+export function usersRedirect(pathname: string, modPages?: ModulePage[]): string | null {
+  if (pathname !== `${ADMIN}/users` && pathname !== `${ADMIN}/users/`) return null;
+  const authPage = modPages?.find((p) => p.module === "auth");
+  return authPage ? `${ADMIN}/m/auth${authPage.path}` : null;
+}
+
 export type Store = { getItem(k: string): string | null; setItem(k: string, v: string): void };
 export type OpenState = Record<string, boolean>;
 

@@ -38,12 +38,12 @@ func TestClientOnly_ノード管理コマンドを外しbranchとbaseReadとvers
 	if code != 0 {
 		t.Fatalf("--help exit %d: %s", code, errOut)
 	}
-	for _, forbidden := range []string{"agent", "init", "admin", "cluster", "module", "update", "settings", "token", "backup", "route", "runtime"} {
+	for _, forbidden := range []string{"agent", "init", "admin", "user", "cluster", "module", "update", "settings", "token", "backup", "route", "runtime"} {
 		if strings.Contains(out, "\n  "+forbidden+" ") {
 			t.Errorf("ClientOnly --help unexpectedly lists node command %q:\n%s", forbidden, out)
 		}
 	}
-	for _, removed := range []string{"init", "agent", "admin", "cluster", "module", "update", "settings", "token", "backup", "route", "runtime"} {
+	for _, removed := range []string{"init", "agent", "admin", "user", "cluster", "module", "update", "settings", "token", "backup", "route", "runtime"} {
 		if c, _, _ := runRemoteCLI(t, cfgPath, osKC, env, "", false, r, removed); c == 0 {
 			t.Errorf("ClientOnly must not register %q", removed)
 		}

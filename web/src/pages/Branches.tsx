@@ -1,5 +1,5 @@
 import { FormEvent, useContext, useState } from "react";
-import { api, Base, Branch, can, isAdmin, ownerLabel } from "../api";
+import { api, Base, Branch, can, currentSession, isAdmin, ownerLabel } from "../api";
 import { Icon, Status, StorageBar } from "../components/marks";
 import { Dialog, Drawer, Empty, ErrorLine, ErrorText, Field } from "../components/ui";
 import { serverError } from "../lib/errors";
@@ -19,11 +19,13 @@ export function Branches() {
   const { data: branches, error } = useLive(api.branches, ["branch", "operation"]);
   const { data: bases } = useLive(api.bases, ["base"]);
   const [creating, setCreating] = useState(false);
+  const [mine, setMine] = useState(false);
   const [filter, setFilter] = useFilter(["q", "status", "engine", "base", "owner"]);
   useNow();
   const ready = (bases ?? []).filter((b) => b.latest_snapshot);
   const all = branches ?? [];
-  const shown = filterBranches(all, filter);
+  const me = currentSession()?.user.id ?? "";
+  const shown = filterBranches(all, filter).filter((b) => !mine || (me !== "" && b.owner === me));
   const facets = [
     { key: "status", label: "Status", options: optionsOf(all.map((b) => b.status)) },
     { key: "engine", label: "Engine", options: optionsOf(all.map((b) => engineOf(b.runtime))) },
@@ -48,12 +50,35 @@ export function Branches() {
           action={ready.length > 0 && can("branch.create") && <button onClick={() => setCreating(true)}>{t("Create a branch")}</button>}
         />
       )}
-      {branches && branches.length > 0 && <FilterBar values={filter} onChange={setFilter} facets={facets} shown={shown.length} total={all.length} />}
+      {branches && branches.length > 0 && (
+        <FilterBar
+          values={filter}
+          onChange={setFilter}
+          facets={facets}
+          shown={shown.length}
+          total={all.length}
+          extra={
+            me ? (
+              <button type="button" aria-pressed={mine} className={mine ? "on" : ""} onClick={() => setMine((m) => !m)}>
+                {t("My branches")}
+              </button>
+            ) : undefined
+          }
+          extraActive={mine}
+          onClearExtra={() => setMine(false)}
+        />
+      )}
       {branches && branches.length > 0 && shown.length === 0 && (
         <Empty
           line={t("No matching branches.")}
           action={
-            <button type="button" onClick={() => setFilter({ q: "", status: "", engine: "", base: "", owner: "" })}>
+            <button
+              type="button"
+              onClick={() => {
+                setFilter({ q: "", status: "", engine: "", base: "", owner: "" });
+                setMine(false);
+              }}
+            >
               {t("Clear filters")}
             </button>
           }

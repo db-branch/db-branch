@@ -126,7 +126,7 @@ func (a *App) rootCommand() *cobra.Command {
 	root.PersistentFlags().StringVar(&a.clientConfigFlag, "client-config", "", "path to client.toml")
 	root.AddCommand(
 		a.versionCommand(), a.loginCommand(), a.logoutCommand(), a.profileCommand(),
-		a.agentCommand(), a.initCommand(), a.adminCommand(),
+		a.agentCommand(), a.initCommand(), a.adminCommand(), a.userCommand(),
 		a.branchCommand(), a.baseCommand(), a.connectCommand(), a.runtimeCommand(), a.clusterCommand(), a.routeCommand(), a.moduleCommand(), a.settingsCommand(), a.tokenCommand(), a.backupCommand(), a.updateCommand(),
 	)
 	return root

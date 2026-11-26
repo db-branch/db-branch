@@ -499,6 +499,18 @@ func (h *leanHarness) endpointMethodPathBody(ep, branch string, seq int64) (stri
 		return http.MethodPut, "/v1/auth/password", map[string]any{"current_password": "correct horse battery", "new_password": "short"}
 	case "auth_reset":
 		return http.MethodPost, "/v1/auth/reset", nil
+	case "user_list":
+		return http.MethodGet, "/v1/users", nil
+	case "user_create":
+		return http.MethodPost, "/v1/users", map[string]any{"email": "bad"}
+	case "user_get":
+		return http.MethodGet, "/v1/users/admin", nil
+	case "user_patch":
+		return http.MethodPatch, "/v1/users/missing@example.com", map[string]any{"name": "X"}
+	case "user_reset_password":
+		return http.MethodPost, "/v1/users/missing@example.com/reset-password", nil
+	case "user_delete":
+		return http.MethodDelete, "/v1/users/missing@example.com", nil
 	case "branch_list":
 		return http.MethodGet, "/v1/branches", nil
 	case "branch_get":

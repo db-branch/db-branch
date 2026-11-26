@@ -4,6 +4,7 @@ namespace DbBranchAuthz
 
 def Endpoint.isGet : Endpoint → Bool
   | .healthz | .readyz | .tlsPem | .authMethods | .authSession
+  | .userList | .userGet
   | .branchList | .branchGet | .branchDSN | .branchCheckpointRead
   | .baseList | .baseGet | .basePublic | .baseRefreshRead | .uploadRoom
   | .routeUserRead | .tokenRead | .accountPreferenceRead | .accountTokenRead
@@ -38,6 +39,8 @@ def Endpoint.action : Endpoint → String
   | .authLogout => "auth.logout"
   | .authPassword => "auth.password"
   | .authReset => "auth.reset"
+  | .userList | .userGet => "user.read"
+  | .userCreate | .userPatch | .userResetPassword | .userDelete => "user.write"
   | .branchList | .branchGet => "branch.read"
   | .branchDSN => "branch.connect"
   | .branchQuery => "branch.query"
@@ -117,16 +120,17 @@ def Endpoint.routeMethod : Endpoint → String
   | .branchList | .branchGet | .branchDSN | .branchCheckpointRead
   | .baseList | .baseGet | .basePublic | .baseRefreshRead | .uploadRoom
   | .routeUserRead | .tokenRead | .accountPreferenceRead | .accountTokenRead
+  | .userList | .userGet
   | .settingRead | .licenseRead | .licenseRenewalRead | .moduleRead | .updateRead
   | .runtimeRead | .runtimeAvailable | .operationList | .operationGet
   | .eventRead | .capabilityRead | .clusterRead | .nodeMetrics | .nodeStorage | .metricsRead
   | .backupRead | .backupDownload
   | .extPrivateRead | .extPublicRead => "GET"
-  | .branchExtend | .baseDescribe | .basePatchAnonymous | .baseSnapshotPatch => "PATCH"
+  | .userPatch | .branchExtend | .baseDescribe | .basePatchAnonymous | .baseSnapshotPatch => "PATCH"
   | .authPassword | .baseReplicas | .baseRefreshWrite
   | .routeUserWrite | .accountPreferenceWrite | .settingWrite | .licenseWrite => "PUT"
   | .branchDelete | .branchCheckpointDelete | .baseDelete | .baseRefreshDelete
-  | .baseSnapshotDelete | .routeUserDelete | .tokenDelete | .accountTokenDelete
+  | .baseSnapshotDelete | .routeUserDelete | .userDelete | .tokenDelete | .accountTokenDelete
   | .moduleRemove | .updateCancel | .runtimeRemove | .clusterRemove => "DELETE"
   | _ => "POST"
 
@@ -141,6 +145,9 @@ def Endpoint.routePath : Endpoint → String
   | .authLogout => "/v1/auth/logout"
   | .authPassword => "/v1/auth/password"
   | .authReset => "/v1/auth/reset"
+  | .userList | .userCreate => "/v1/users"
+  | .userGet | .userPatch | .userDelete => "/v1/users/{id}"
+  | .userResetPassword => "/v1/users/{id}/reset-password"
   | .branchList | .branchCreate => "/v1/branches"
   | .branchGet | .branchDelete | .branchExtend => "/v1/branches/{name}"
   | .branchDSN => "/v1/branches/{name}/dsn"
@@ -212,6 +219,7 @@ def Endpoint.routePath : Endpoint → String
 def Endpoint.resourceKind : Endpoint → String
   | .healthz | .readyz | .tlsPem | .authMethods => ""
   | .authLogin | .authSession | .authLogout | .authPassword | .authReset => "auth"
+  | .userList | .userCreate | .userGet | .userPatch | .userResetPassword | .userDelete => "user"
   | .branchList | .branchGet | .branchDSN | .branchQuery | .branchCreate
   | .branchReset | .branchDelete | .branchExtend | .branchPause | .branchResume
   | .branchCheckpointRead | .branchCheckpointCreate | .branchCheckpointDelete
@@ -272,7 +280,7 @@ def isBranchAction (action : String) : Bool :=
 def isDotReadAction (action : String) : Bool :=
   action == "branch.read" || action == "branch.checkpoint.read" ||
   action == "base.read" || action == "base.refresh.read" ||
-  action == "route-user.read" || action == "token.read" ||
+  action == "route-user.read" || action == "user.read" || action == "token.read" ||
   action == "account.token.read" || action == "account.preference.read" ||
   action == "setting.read" || action == "license.read" ||
   action == "module.read" || action == "update.read" ||

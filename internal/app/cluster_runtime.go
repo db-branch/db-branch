@@ -141,6 +141,7 @@ func (c *clusterRuntime) adoptPassword(local auth.Store) error {
 	if err != nil {
 		return err
 	}
+	adoptClusterAdminUser(context.Background(), c.store, cur)
 	if string(mine.Hash) != string(cur.Hash) {
 		_ = os.Remove(InitialPasswordFile)
 	}

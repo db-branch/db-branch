@@ -311,6 +311,17 @@ export type ModuleState = { requires_license?: boolean; name: string; version: s
 
 export type APIToken = { id: string; name: string; scope: string; created_at: string; expires_at: string | null; token?: string };
 
+export type CoreUser = {
+  id: string;
+  email: string;
+  name: string;
+  kind: "admin" | "user";
+  disabled: boolean;
+  must_change_password: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ModulePage = { module: string; path: string; title: string };
 export type Capabilities = { version: string; node: string; modules: string[]; pages: ModulePage[]; record?: boolean };
 
@@ -367,6 +378,8 @@ export type Session = {
 };
 
 let current: Session | null = null;
+
+export const currentSession = (): Session | null => current;
 
 // isAdmin tells whether the signed-in user may act for others (owner field,
 // everyone's branches).
@@ -442,6 +455,14 @@ export const api = {
   myTokens: () => call<{ items: APIToken[] }>("GET", "/v1/account/tokens").then((r) => r.items),
   createMyToken: (t: { name: string; ttl?: string }) => call<APIToken>("POST", "/v1/account/tokens", t),
   revokeMyToken: (id: string) => call<void>("DELETE", `/v1/account/tokens/${id}`),
+  users: () => call<{ items: CoreUser[] }>("GET", "/v1/users").then((r) => r.items),
+  createUser: (u: { email: string; name?: string; password?: string; must_change_password?: boolean }) =>
+    call<{ user: CoreUser; initial_password?: string }>("POST", "/v1/users", u),
+  updateUser: (id: string, u: { name?: string; disabled?: boolean; password?: string; must_change_password?: boolean }) =>
+    call<CoreUser>("PATCH", `/v1/users/${encodeURIComponent(id)}`, u),
+  resetUserPassword: (id: string, must_change_password = true) =>
+    call<{ user: CoreUser; password: string }>("POST", `/v1/users/${encodeURIComponent(id)}/reset-password`, { must_change_password }),
+  deleteUser: (id: string) => call<void>("DELETE", `/v1/users/${encodeURIComponent(id)}`),
   settings: () => call<{ items: SettingScope[] }>("GET", "/v1/settings").then((r) => r.items),
   putSettings: (scope: string, values: Record<string, string>, clear: string[] = []) =>
     call<SettingScope>("PUT", `/v1/settings/${scope}`, clear.length > 0 ? { values, clear } : { values }),
