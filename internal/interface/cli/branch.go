@@ -38,6 +38,11 @@ type branchView struct {
 		Port int    `json:"port"`
 		User string `json:"user"`
 	} `json:"connection"`
+	Proxy *struct {
+		Host string `json:"host"`
+		Port int    `json:"port"`
+		User string `json:"user"`
+	} `json:"proxy"`
 	Storage *struct {
 		Used       uint64 `json:"used"`
 		Referenced uint64 `json:"referenced"`
