@@ -265,10 +265,13 @@ func TestLogin_追加フラグとエラー分岐とJSON出力を網羅する(t *
 		t.Fatalf("interactive login --ca failed (%d): %s", code, errOut)
 	}
 
-	// Profile list JSON includes both profiles with tls modes.
+	// Profile list JSON includes both profiles with tls modes, plus pinned profile in table mode.
 	code, out, _ = runRemoteCLI(t, cfgPath, osKC, nil, "", false, r, "profile", "list", "-o", "json")
 	if code != 0 || !strings.Contains(out, `"tls": "ca"`) {
 		t.Fatalf("profile list json = (%d, %q)", code, out)
+	}
+	if code, _, _ := runRemoteCLI(t, cfgPath, osKC, nil, "", false, r, "profile", "list", "-o", "table"); code != 0 {
+		t.Fatal("profile list table failed")
 	}
 
 	// Cert rotation on existing pinned profile warns and rejects non-TTY, accepts TTY 'y'.
@@ -291,6 +294,10 @@ func TestLogin_追加フラグとエラー分岐とJSON出力を網羅する(t *
 	if code, _, errOut := runRemoteCLI(t, cfgPath, osKC, nil, "dbb_rot\n", false, rPin,
 		"login", "--profile", "rot", "--server", "https://rot.example.com", "--token-stdin", "--trust-sha256", oldFP); code != 0 {
 		t.Fatal(errOut)
+	}
+	// Profile list shows "pinned" mode for rot.
+	if code, out, _ := runRemoteCLI(t, cfgPath, osKC, nil, "", false, rPin, "profile", "list"); code != 0 || !strings.Contains(out, "pinned") {
+		t.Fatalf("expected pinned in profile list, got (%d, %q)", code, out)
 	}
 	// Re-login with same cert via DB_BRANCH_PROFILE reuses existing URL without --server.
 	if code, _, errOut := runRemoteCLI(t, cfgPath, osKC, map[string]string{"DB_BRANCH_PROFILE": "rot"}, "dbb_rot\n", false, rPin,
@@ -334,11 +341,16 @@ func TestLogin_追加フラグとエラー分岐とJSON出力を網羅する(t *
 		{"profile", "use", "missing"},
 		{"profile", "remove", "missing"},
 		{"--profile", "missing", "branch", "list"},
+		{"--profile", "bad/name", "branch", "list"},
 	}
 	for _, args := range badCases {
 		if code, _, _ := runRemoteCLI(t, cfgPath, osKC, nil, "", false, r, args...); code == 0 {
 			t.Errorf("expected non-zero exit for %v", args)
 		}
+	}
+	// TTY EOF on server prompt fails cleanly.
+	if code, _, _ := runRemoteCLI(t, cfgPath, osKC, nil, "", true, r, "login"); code == 0 {
+		t.Error("TTY EOF on server prompt should fail")
 	}
 
 	// Non-empty capabilities version check.

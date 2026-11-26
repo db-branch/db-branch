@@ -37,8 +37,12 @@ func readLine(r io.Reader) (string, error) {
 }
 
 func termReadSecret(r io.Reader) (string, error) {
+	return termReadSecretWith(r, disableEcho)
+}
+
+func termReadSecretWith(r io.Reader, noEcho func(*os.File) (func(), bool)) (string, error) {
 	if f, ok := r.(*os.File); ok && f != nil {
-		if restore, ok := disableEcho(f); ok {
+		if restore, ok := noEcho(f); ok {
 			defer restore()
 			sigCh := make(chan os.Signal, 1)
 			signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
