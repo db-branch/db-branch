@@ -505,6 +505,30 @@ func TestModuleStore_authモジュールがuser削除時に個人トークンを
 	if len(aliceToks) != 0 || len(bobToks) != 1 || len(svcToks) != 1 {
 		t.Errorf("after auth user delete: alice=%d bob=%d svc=%d", len(aliceToks), len(bobToks), len(svcToks))
 	}
+	atomicAuth, ok := authStore.(ext.AtomicStore)
+	if !ok {
+		t.Fatal("authUserDeleteStore must implement ext.AtomicStore")
+	}
+	if _, _, err := atomicAuth.Get(ctx, "missing"); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if putOK, err := atomicAuth.PutIfAbsent(ctx, "sso/t1", []byte("1")); err != nil || !putOK {
+		t.Fatalf("PutIfAbsent: %v %v", putOK, err)
+	}
+	if v, ok, err := atomicAuth.Get(ctx, "sso/t1"); err != nil || !ok || string(v) != "1" {
+		t.Fatalf("Get sso/t1: %q %v %v", v, ok, err)
+	}
+	if got, ok, err := atomicAuth.Take(ctx, "sso/t1"); err != nil || !ok || string(got) != "1" {
+		t.Fatalf("Take: %q %v %v", got, ok, err)
+	}
+	// Take on a user/<email> key must also revoke personal API tokens.
+	_ = authStore.Put(ctx, "user/bob@example.com", []byte(`{"email":"bob@example.com"}`))
+	if got, ok, err := atomicAuth.Take(ctx, "user/bob@example.com"); err != nil || !ok || len(got) == 0 {
+		t.Fatalf("Take user/bob: %q %v %v", got, ok, err)
+	}
+	if bobAfter, _ := toks.ListOwned(ctx, bob.ID); len(bobAfter) != 0 {
+		t.Errorf("Take on user/bob did not revoke personal tokens: %+v", bobAfter)
+	}
 }
 
 func TestSweepExpiredTokens_クラスタではリーダーだけがGCを実行する(t *testing.T) {

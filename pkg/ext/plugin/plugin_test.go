@@ -109,7 +109,31 @@ func (hello) Serve(_ context.Context, r ext.Request) (ext.Response, error) {
 type keeper struct{}
 
 func (*keeper) Start(ctx context.Context, h ext.Host) error {
-	return h.Store.Put(ctx, "started-on", []byte(h.Node))
+	if err := h.Store.Put(ctx, "started-on", []byte(h.Node)); err != nil {
+		return err
+	}
+	as, ok := h.Store.(ext.AtomicStore)
+	if !ok {
+		return errors.New("remoteStore must implement ext.AtomicStore")
+	}
+	okPut, err := as.PutIfAbsent(ctx, "atomic-k", []byte("ok"))
+	if err != nil || !okPut {
+		return fmt.Errorf("PutIfAbsent 1st: %v %v", okPut, err)
+	}
+	if okPut2, err := as.PutIfAbsent(ctx, "atomic-k", []byte("no")); err != nil || okPut2 {
+		return fmt.Errorf("PutIfAbsent 2nd: %v %v", okPut2, err)
+	}
+	if v, found, err := as.Get(ctx, "atomic-k"); err != nil || !found || string(v) != "ok" {
+		return fmt.Errorf("Get: %q %v %v", v, found, err)
+	}
+	v, found, err := as.Take(ctx, "atomic-k")
+	if err != nil || !found || string(v) != "ok" {
+		return fmt.Errorf("Take 1st: %q %v %v", v, found, err)
+	}
+	if _, found2, err := as.Take(ctx, "atomic-k"); err != nil || found2 {
+		return fmt.Errorf("Take 2nd: %v %v", found2, err)
+	}
+	return h.Store.Put(ctx, "atomic", v)
 }
 
 type noConfig struct{}
@@ -253,6 +277,9 @@ func TestLoad_別プロセスのモジュールを起動し各ポートを呼べ
 	data := memStore{}
 	if err := m.Module.Starter.Start(ctx, ext.Host{Node: "n1", Store: data}); err != nil || string(data["started-on"]) != "n1" {
 		t.Errorf("start: %v %v", err, data)
+	}
+	if string(data["atomic"]) != "ok" {
+		t.Errorf("atomic store over RPC failed: %v", data)
 	}
 	b, _ := os.ReadFile(out)
 	var e ext.Event

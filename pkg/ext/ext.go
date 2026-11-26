@@ -433,6 +433,15 @@ type Store interface {
 	Delete(ctx context.Context, key string) error
 }
 
+// AtomicStore is an optional extension of Store providing cluster-linearizable
+// reads and atomic one-time operations.
+type AtomicStore interface {
+	Store
+	Get(ctx context.Context, key string) ([]byte, bool, error)
+	PutIfAbsent(ctx context.Context, key string, value []byte) (bool, error)
+	Take(ctx context.Context, key string) ([]byte, bool, error)
+}
+
 // ServerBranch is a branch whose database server is being configured.
 type ServerBranch struct {
 	Name  string `json:"name"`

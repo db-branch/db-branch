@@ -1,7 +1,9 @@
 package nodeapi_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -674,5 +676,117 @@ func TestJoin_フォロワー経由のJoinでも1回限り消費と同時競合�
 	}
 	if succeeded != 1 || rejected != attempts-1 {
 		t.Errorf("leader/follower race: succeeded=%d rejected=%d, want 1 and %d", succeeded, rejected, attempts-1)
+	}
+}
+
+func TestModuleData_フォロワー経由でも線形化GetとPutIfAbsentと1回限りTakeが動く(t *testing.T) {
+	ca, _ := clusterpki.InitCA(t.TempDir())
+	a := start(t, ca, "node-a")
+	if err := a.store.Bootstrap([]raft.Server{{ID: "node-a", Address: raft.ServerAddress(a.raft)}}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, a.store.IsLeader)
+	_ = a.store.PutNode(ctx, domain.Node{Name: "node-a", Address: a.api, RaftAddress: a.raft, Protocol: raftstore.Protocol})
+
+	b := start(t, ca, "node-b")
+	if err := nodeapi.NewClient(b.cert.ClientTLS()).AddMember(ctx, a.api, "node-b", b.raft); err != nil {
+		t.Fatal(err)
+	}
+	_ = a.store.PutNode(ctx, domain.Node{Name: "node-b", Address: b.api, RaftAddress: b.raft, Protocol: raftstore.Protocol})
+	eventually(t, func() bool {
+		id, _ := b.store.Leader()
+		nodes, _ := b.store.ListNodes(ctx)
+		return id == "node-a" && len(nodes) == 2
+	})
+
+	if err := a.store.PutModuleData(ctx, "auth", "sso/ticket/t1", []byte("ann")); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := b.store.GetModuleData(ctx, "auth", "sso/ticket/t1")
+	if err != nil || !ok || string(got) != "ann" {
+		t.Fatalf("follower GetModuleData: %q ok=%v err=%v", got, ok, err)
+	}
+	ok1, err := b.store.PutIfAbsentModuleData(ctx, "auth", "sso/used/s1", []byte("1"))
+	if err != nil || !ok1 {
+		t.Fatalf("follower PutIfAbsent 1st: ok=%v err=%v", ok1, err)
+	}
+	ok2, err := a.store.PutIfAbsentModuleData(ctx, "auth", "sso/used/s1", []byte("2"))
+	if err != nil || ok2 {
+		t.Fatalf("leader PutIfAbsent 2nd: ok=%v err=%v", ok2, err)
+	}
+
+	const workers = 6
+	type res struct {
+		ok  bool
+		err error
+	}
+	ch := make(chan res, workers)
+	for i := range workers {
+		st := b.store
+		if i%2 == 0 {
+			st = a.store
+		}
+		go func() {
+			v, ok, err := st.TakeModuleData(ctx, "auth", "sso/ticket/t1")
+			if ok && string(v) != "ann" {
+				t.Errorf("unexpected value %q", v)
+			}
+			ch <- res{ok: ok, err: err}
+		}()
+	}
+	wins := 0
+	for range workers {
+		r := <-ch
+		if r.err != nil {
+			t.Errorf("TakeModuleData err: %v", r.err)
+		}
+		if r.ok {
+			wins++
+		}
+	}
+	if wins != 1 {
+		t.Errorf("concurrent TakeModuleData across leader+follower wins=%d, want 1", wins)
+	}
+
+	// Cover malformed request body and Store error paths on POST /internal/v1/moduledata.
+	rec := httptest.NewRecorder()
+	(&nodeapi.Server{Store: a.store}).Handler().ServeHTTP(rec, asMember(httptest.NewRequest(http.MethodPost, "/internal/v1/moduledata", strings.NewReader("{bad"))))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("malformed moduledata JSON: %d, want 400", rec.Code)
+	}
+	recFollower := httptest.NewRecorder()
+	(&nodeapi.Server{Store: b.store}).Handler().ServeHTTP(recFollower, asMember(httptest.NewRequest(http.MethodPost, "/internal/v1/moduledata", strings.NewReader("{}"))))
+	if recFollower.Code != http.StatusServiceUnavailable {
+		t.Errorf("follower /internal/v1/moduledata must return 503 ErrNoLeader (no forwarding loop): %d", recFollower.Code)
+	}
+	if _, err := nodeapi.NewClient(b.cert.ClientTLS()).ModuleDataOp(ctx, a.api, raftstore.ModuleDataOpRequest{Op: "unknown", Module: "auth", Key: "k"}); err == nil {
+		t.Error("expected error for unknown ModuleDataOp via nodeapi")
+	}
+
+	// Boundary 64 KiB value via follower PutIfAbsent succeeds despite base64 expansion (>64 KiB JSON).
+	maxVal := bytes.Repeat([]byte("A"), domain.MaxModuleValue)
+	if okMax, err := b.store.PutIfAbsentModuleData(ctx, "auth", "max-val", maxVal); err != nil || !okMax {
+		t.Fatalf("follower 64 KiB PutIfAbsentModuleData: ok=%v err=%v", okMax, err)
+	}
+	if gotMax, okMax, err := a.store.GetModuleData(ctx, "auth", "max-val"); err != nil || !okMax || len(gotMax) != domain.MaxModuleValue {
+		t.Fatalf("leader GetModuleData max-val: len=%d ok=%v err=%v", len(gotMax), okMax, err)
+	}
+	// Oversized key/value rejected via nodeapi surfaces domain.ErrModuleDataTooLarge.
+	if _, err := nodeapi.NewClient(b.cert.ClientTLS()).ModuleDataOp(ctx, a.api, raftstore.ModuleDataOpRequest{Op: "put_if_absent", Module: "auth", Key: ""}); !errors.Is(err, domain.ErrModuleDataTooLarge) {
+		t.Errorf("oversized/empty ModuleDataOp via nodeapi: %v, want ErrModuleDataTooLarge", err)
+	}
+}
+
+func TestModuleData_混合クラスタで旧リーダーが404を返すとフォールバックする(t *testing.T) {
+	oldLeader := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer oldLeader.Close()
+
+	// Client.ModuleDataOp against old server (404) surfaces domain.ErrUnsupported.
+	addr := strings.TrimPrefix(oldLeader.URL, "https://")
+	_, err := nodeapi.NewClient(&tls.Config{InsecureSkipVerify: true}).ModuleDataOp(ctx, addr, raftstore.ModuleDataOpRequest{Op: "get", Module: "auth", Key: "k"})
+	if !errors.Is(err, domain.ErrUnsupported) {
+		t.Fatalf("expected domain.ErrUnsupported on 404, got: %v", err)
 	}
 }

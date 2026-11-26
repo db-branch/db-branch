@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"net/url"
 	"slices"
@@ -343,6 +344,11 @@ func sessionView(sess auth.Session) sessionJSON {
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mt != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json")
+		return
+	}
 	var in struct {
 		Username string `json:"username"`
 		Password string `json:"password"`

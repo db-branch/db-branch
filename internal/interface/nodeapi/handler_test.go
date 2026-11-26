@@ -58,6 +58,9 @@ func (f *fakeStore) ConsumeJoinSecret(_ context.Context, hash string, _ time.Tim
 	f.joinHash = ""
 	return nil
 }
+func (f *fakeStore) ModuleDataOp(context.Context, raftstore.ModuleDataOpRequest) (raftstore.ModuleDataOpResponse, error) {
+	return raftstore.ModuleDataOpResponse{}, nil
+}
 func (f *fakeStore) State() raftstore.State { return f.state }
 
 func asMember(r *http.Request) *http.Request {

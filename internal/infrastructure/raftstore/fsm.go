@@ -917,6 +917,33 @@ func (s *snapshot) Persist(sink raft.SnapshotSink) error {
 func (s *snapshot) Release() {}
 
 // Restore replaces the state from a snapshot.
+func (f *FSM) NodeAddress(id string) (string, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	n, ok := f.state.Nodes[id]
+	return n.Address, ok && n.Address != ""
+}
+
+func (f *FSM) ModuleValue(module, key string) ([]byte, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	v, ok := f.state.ModuleData[module][key]
+	if !ok {
+		return nil, false
+	}
+	return append([]byte(nil), v...), true
+}
+
+func (f *FSM) ModuleUsage(module string) (records, totalBytes int) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	for k, v := range f.state.ModuleData[module] {
+		records++
+		totalBytes += len(k) + len(v)
+	}
+	return records, totalBytes
+}
+
 func (f *FSM) Restore(r io.ReadCloser) error {
 	defer r.Close()
 	st := newState()
