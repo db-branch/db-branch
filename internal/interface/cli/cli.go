@@ -74,6 +74,8 @@ type App struct {
 	ReadSecret func(io.Reader) (string, error)
 	// Getenv looks up environment variables (defaults to os.Getenv).
 	Getenv func(string) string
+	// ExecCommand launches an interactive external DB client (defaults to os/exec).
+	ExecCommand func(name string, args []string, extraEnv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 
 	configPath       string
 	clientConfigFlag string
@@ -116,7 +118,7 @@ func (a *App) rootCommand() *cobra.Command {
 		root.PersistentFlags().StringVar(&a.clientConfigFlag, "config", "", "path to client.toml")
 		root.AddCommand(
 			a.versionCommand(), a.loginCommand(), a.logoutCommand(), a.profileCommand(),
-			a.branchCommand(), a.baseCommand(),
+			a.branchCommand(), a.baseCommand(), a.connectCommand(),
 		)
 		return root
 	}
@@ -125,7 +127,7 @@ func (a *App) rootCommand() *cobra.Command {
 	root.AddCommand(
 		a.versionCommand(), a.loginCommand(), a.logoutCommand(), a.profileCommand(),
 		a.agentCommand(), a.initCommand(), a.adminCommand(),
-		a.branchCommand(), a.baseCommand(), a.runtimeCommand(), a.clusterCommand(), a.routeCommand(), a.moduleCommand(), a.settingsCommand(), a.tokenCommand(), a.backupCommand(), a.updateCommand(),
+		a.branchCommand(), a.baseCommand(), a.connectCommand(), a.runtimeCommand(), a.clusterCommand(), a.routeCommand(), a.moduleCommand(), a.settingsCommand(), a.tokenCommand(), a.backupCommand(), a.updateCommand(),
 	)
 	return root
 }
