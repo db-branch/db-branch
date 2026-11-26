@@ -118,6 +118,7 @@ jobs:
 
   client-build-linux:
     needs: verify-tag
+    if: "!startsWith(github.ref_name, 'v0.') || vars.ENABLE_CLIENT_RELEASE == 'true'"
     runs-on: ubuntu-24.04
     strategy:
       matrix:
@@ -138,6 +139,7 @@ jobs:
 
   client-build-darwin:
     needs: verify-tag
+    if: "!startsWith(github.ref_name, 'v0.') || vars.ENABLE_CLIENT_RELEASE == 'true'"
     runs-on: macos-15
     environment: release
     strategy:
@@ -213,6 +215,7 @@ jobs:
 
   client-build-windows:
     needs: verify-tag
+    if: "!startsWith(github.ref_name, 'v0.') || vars.ENABLE_CLIENT_RELEASE == 'true'"
     runs-on: windows-latest
     environment: release
     strategy:
@@ -265,6 +268,7 @@ jobs:
 
   client-release:
     needs: [verify-tag, client-build-linux, client-build-darwin, client-build-windows]
+    if: "!startsWith(github.ref_name, 'v0.') || vars.ENABLE_CLIENT_RELEASE == 'true'"
     runs-on: ubuntu-24.04
     environment: release
     permissions:
