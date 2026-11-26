@@ -4,29 +4,58 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-26
+
+1.0 (GA) readiness release introducing multi-user OSS console accounts, DB client connection file export in the Web Console, 100% Japanese Web Console localization, console TLS 1.3 hardening, API/CLI/MCP 1.0 contract unification, and token/cluster security improvements.
+
+### Upgrade notes (read before upgrading)
+
+- **Raft Protocol `26` → `30`**: upgrade nodes one at a time, followers first and the leader last (`apt update && apt upgrade`), then run `db-branch module install proxysql` (and any other installed module) once every node is on `0.4.0` so the cluster record matches. Until every node is upgraded, operations that need the new protocol answer `503 cluster_upgrading`: adding or changing console users, logging out (the local session ends; log out again after the upgrade), service token base/team restrictions, and the new join-token rules. Do not downgrade a node after the cluster has moved to protocol `30`.
+- **Console requires TLS 1.3**: clients and reverse proxies that only speak TLS 1.2 can no longer connect to the console port (`:7080`). Existing self-signed certificates valid for more than 825 days are regenerated on start: trust the new certificate again (it is served at `/tls.pem`). To use your own certificate, set `[console] tls_cert` and `tls_key`.
+- **API action names (1.0 contract)**: `branch.pause` and `branch.resume` are now separate actions, and checkpoint and snapshot deletes are `branch.checkpoint.delete` and `base.snapshot.delete`. The old names are still accepted as aliases for now; update custom authorizers, token policies and scripts to the new names. List endpoints always return `next_cursor` (`null` on the last page), and an unsupported engine feature answers `409 feature_not_supported`.
+- **`branches`-scope API tokens are narrower**: they can call branch endpoints and `metrics.read` only. Cluster, license, module, update and extension read endpoints now answer `403`; use an admin token for those. Personal tokens carry their owner's role, so a token can no longer do more than its owner.
+- **`base mask` is hidden** from the CLI, public API, Web Console and MCP in this release. Snapshots you already published keep working.
+- **Join tokens** are single-use and expire after 24 hours by default (`cluster.join_token_ttl`); create a new one with `db-branch cluster token` for each node you add.
+- **Legacy branches without an owner ID** (created before owner IDs were recorded and not migrated automatically) can be managed by an admin only.
+- **MCP**: the branch argument is now `branch`; `name` still works but is deprecated.
+
 ### Added
 
-- **Console TLS Configuration & Hot Reload (`F-08`)**: Added `[console] tls_cert` and `tls_key` options in `config.toml` with zero-restart certificate reload on TLS handshakes and `/tls.pem`, enforced TLS 1.3 minimum, and capped self-signed certificate validity to 825 days (auto-regenerating existing certificates exceeding 825 days on startup).
-- **Lean 4 Formal Authorization Verification (`LEAN-01`, `LEAN-02`)**: Integrated Lean 4 formal model and theorems under `formal/lean/`, Go differential and route/alias coverage tests (`TestLeanAuthz_*`), and CI `lean` verification job.
+- **Unlimited Multi-User OSS Console Accounts**: Core (without the paid `auth` module) now supports creating and managing unlimited console users (`db-branch user add/list/enable/disable/remove/reset-password`, `/v1/users` API, and the Web Console **Users** page).
+  - All OSS users have admin-equivalent privileges (roles, teams, SSO, and base access restrictions remain in paid modules), with personal API tokens, `must_change_password` support, protection against removing the last active user, and seamless account migration when enabling/disabling the paid `auth` module (Raft Protocol `30`).
+- **DB Client Connection File Export**: Added the **Client file** tab in the Web Console connection panel to generate connection files/URLs for DBeaver (`.dbp`), Chat2DB (`.json`), DataGrip (`dataSources.xml` + JDBC URL), Navicat (`.ncx`), pgAdmin 4 (`servers.json`), MySQL Workbench (`connections.xml`), and TablePlus URLs, supporting both direct and ProxySQL endpoints.
+- **Console TLS Configuration & Hot Reload**: Added `[console] tls_cert` and `tls_key` options in `config.toml` with zero-restart certificate reload on TLS handshakes and `/tls.pem`, enforced TLS 1.3 minimum, and capped self-signed certificate validity to 825 days (auto-regenerating existing certificates exceeding 825 days on startup).
+- **Lean 4 Formal Authorization Verification**: Integrated Lean 4 formal authorization model and theorems under `formal/lean/`, Go differential and route/alias coverage tests, and CI `lean` verification job.
+- **Storage & Branch UI Enhancements**: Improved Storage tree alignment and displayed branch age and storage usage in the Web Console.
 
 ### Security
 
-- **API Token Scope & Lifecycle (`R-02`)**: Replaced the `branches` token scope denylist with an explicit allowlist, propagated non-admin owner roles onto personal tokens (`OwnerRoles`, Raft Protocol `28`), revoked personal tokens immediately when external `auth` users are deleted, and added periodic GC for expired tokens.
-- **Node API & Join Token Hardening (`R-05`)**: Blocked `socket_only` routes (`POST /v1/auth/reset`, `POST /v1/backups/restore`, `POST /v1/cluster/token`) on `/internal/v1/api/` mTLS forwarding, and made cluster join tokens single-use with configurable TTL (`cluster.join_token_ttl`, default `24h`, Raft Protocol `27`).
-- **Legacy Ownership & Mixed-Cluster Logout (`F-09`)**: Removed display-name fallback ownership matching for unmigrated legacy branches (admin-only), and returned `503 cluster_upgrading` with pending revocation flushing on `POST /v1/auth/logout` when cluster protocol is below `24`.
+- **API Token Scope & Lifecycle**:
+  - Replaced the `branches` token scope denylist with an explicit allowlist, rejecting admin/extension read endpoints (`ext.<module>.read`, `license.read`, `cluster.read`, `module.read`, `update.read`, etc.) with `403` while keeping `metrics.read` allowed.
+  - Propagated non-admin owner roles onto personal tokens (`OwnerRoles`, Raft Protocol `28`) to prevent privilege escalation.
+  - Revoked personal tokens immediately when users are deleted, and added periodic GC for expired tokens.
+  - Enforced base and team restrictions on service tokens (Raft Protocol `29`).
+- **Node API & Join Token Hardening**: Blocked `socket_only` routes (`POST /v1/auth/reset`, `POST /v1/backups/restore`, `POST /v1/cluster/token`) on `/internal/v1/api/` mTLS forwarding, and made cluster join tokens single-use with configurable TTL (`cluster.join_token_ttl`, default `24h`, Raft Protocol `27`).
+- **Authorization & Mixed-Cluster Hardening**:
+  - Removed display-name fallback ownership matching for unmigrated legacy branches (admin-only).
+  - Returned `503 cluster_upgrading` with pending revocation flushing on `POST /v1/auth/logout` when cluster protocol is below `24`.
+  - Added real-time principal resolution (`PrincipalResolver`), branch extend policy (`BranchExtendPolicy`), branch sharing (`BranchSharer`), `BranchTTLCap`, creation race protection, and `base.upload?base` authorization alignment.
 
 ### Changed
 
-- **1.0 API / CLI / OpenAPI / MCP Contract Unification (`W-22`)**:
-  - Updated `api/openapi.yaml` to `1.0.0`, unified `next_cursor: null` across all list endpoints, separated `branch.pause` / `branch.resume` and dotted checkpoint/snapshot delete action names (preserving legacy action aliases for compatibility), mapped `ErrUnsupportedEngine` to `409 feature_not_supported`, unified MCP branch arguments on `branch` (keeping `name` as a deprecated alias), and fixed `branch create --runtime -o json` double JSON output and `base` name validation.
-  - Fixed `base mask` cluster forwarding and port reservation bugs, and temporarily hid `base mask` from the 1.0 CLI, public API, Web Console, and MCP surfaces (preserving internal interfaces and cluster forwarding for `refresh` follow-up).
-- **Documentation Sync (`W-25`)**: Updated `SECURITY.md` (`db-branch-admin` group), `README.md`, `SUPPORT.md`, `CHANGELOG.md`, and `docs/` for 1.0 GA consistency, removing stale Beta/Draft notices, broken references, and implementation mismatches, and added automated documentation verification tests in `scripts/docs_test.go`.
+- **1.0 API / CLI / OpenAPI / MCP Contract Unification**:
+  - Updated `api/openapi.yaml` to `1.0.0`, unified `next_cursor: null` across all list endpoints (`/v1/backups`, `/v1/auth/methods`, `/v1/public/bases`, `/v1/modules`, etc.), separated `branch.pause` / `branch.resume` and dotted checkpoint/snapshot delete action names (`branch.checkpoint.delete`, `base.snapshot.delete`) while preserving legacy action aliases for compatibility.
+  - Mapped `ErrUnsupportedEngine` to `409 feature_not_supported`, unified MCP branch arguments on `branch` (keeping `name` as a deprecated alias), and fixed `branch create --runtime -o json` double JSON output and `base` name validation.
+  - Fixed `base mask` cluster forwarding and port reservation bugs, and temporarily hid `base mask` from the 1.0 CLI, public API, Web Console, and MCP surfaces (preserving internal interfaces).
+- **Documentation Sync**: Updated `SECURITY.md` (`db-branch-admin` group), `README.md`, `SUPPORT.md`, `CHANGELOG.md`, and `docs/` for 1.0 GA consistency (clarifying Ubuntu 24.04 / 26.04 LTS support), and added automated documentation verification tests in `scripts/docs_test.go`.
 
 ### Fixed
 
-- **MySQL Admin SQL Binlog Isolation (`F-06`)**: Executed MySQL administrative SQL (`CreateUser`, `fixup`, etc.) with `sql_log_bin = 0` so administrative statements do not pollute `history` module binlogs.
-- **Debian Maintainer Scripts (`F-07`)**: Branched `postinst`, `prerm`, `postrm`, and `db-branch-proxysql` scripts by `$1` lifecycle action so `upgrade` does not stop `db-branch.service` in `prerm`, missing `config.toml` does not fail upgrades, and `purge` removes package-generated configuration while preserving `/var/lib/db-branch` and ZFS datasets.
-- **Web Console GA Fixes (`W-23`)**: Subscribed to `setting.updated` / `module.updated` SSE events and handled 401 session expiration cleanly, fixed `Extend` buttons adding to remaining TTL instead of shortening it, restored `Branches` navigation and action-based button gating for Maintainer roles, aligned plan feature labels with `pkg/ext/license`, fixed `must_change_password` reloads on Portal/Admin, and fixed RFC 3986 scheme URL password masking.
+- **Web Console Localization & GA Fixes**:
+  - Completed 100% Japanese localization across the Web Console (error-code-based translation with unknown-error fallback, tour, dialogs, `ja-JP` date/time formatting, and mobile 390px layout fixes including the `Client file` tab).
+  - Subscribed to `setting.updated` / `module.updated` SSE events, handled `401` session expiration cleanly, fixed `Extend` buttons adding to remaining TTL instead of shortening it, restored `Branches` navigation and action-based button gating for Maintainer roles, aligned plan feature labels with `pkg/ext/license`, fixed `must_change_password` reloads on Portal/Admin, fixed RFC 3986 scheme URL password masking, unified `license` spelling, and displayed detailed Japanese `403` messages.
+- **MySQL Admin SQL Binlog Isolation**: Executed MySQL administrative SQL (`CreateUser`, `fixup`, etc.) with `sql_log_bin = 0` so administrative statements do not pollute `history` module binlogs.
+- **Debian Maintainer Scripts**: Branched `postinst`, `prerm`, `postrm`, and `db-branch-proxysql` scripts by `$1` lifecycle action so `upgrade` does not stop `db-branch.service` in `prerm`, missing `config.toml` does not fail upgrades, and `purge` removes package-generated configuration while preserving `/var/lib/db-branch` and ZFS datasets.
 
 ## [0.3.1] - 2026-11-24
 
