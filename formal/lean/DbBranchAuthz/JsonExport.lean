@@ -57,6 +57,12 @@ def Endpoint.toString : Endpoint → String
   | .authLogout             => "auth_logout"
   | .authPassword           => "auth_password"
   | .authReset              => "auth_reset"
+  | .userList               => "user_list"
+  | .userCreate             => "user_create"
+  | .userGet                => "user_get"
+  | .userPatch              => "user_patch"
+  | .userResetPassword      => "user_reset_password"
+  | .userDelete             => "user_delete"
   | .branchList             => "branch_list"
   | .branchGet              => "branch_get"
   | .branchDSN              => "branch_dsn"
@@ -162,6 +168,7 @@ def DenyReason.toString : DenyReason → String
 def allEndpoints : List Endpoint :=
   [ .healthz, .readyz, .tlsPem, .authMethods
   , .authLogin, .authSession, .authLogout, .authPassword, .authReset
+  , .userList, .userCreate, .userGet, .userPatch, .userResetPassword, .userDelete
   , .branchList, .branchGet, .branchDSN, .branchQuery, .branchCreate
   , .branchReset, .branchDelete, .branchExtend, .branchPause, .branchResume
   , .branchCheckpointRead, .branchCheckpointCreate, .branchCheckpointDelete
@@ -193,6 +200,7 @@ def allSessStates : List SessState :=
 
 def sessionCheckEndpoints : List Endpoint :=
   [ .healthz, .readyz, .tlsPem, .authMethods, .authLogin, .authSession, .authLogout, .authPassword, .authReset
+  , .userList, .userCreate, .userGet, .userPatch, .userResetPassword, .userDelete
   , .branchList, .branchGet, .branchCreate, .branchDelete
   , .settingRead, .settingWrite, .clusterToken, .backupRestore
   , .accountTokenCreate, .baseLoadPath, .baseLoadUpload

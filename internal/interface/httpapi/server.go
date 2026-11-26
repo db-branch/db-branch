@@ -405,6 +405,13 @@ func (s *Server) routes(mux router, local bool) {
 	r("PUT /v1/auth/password", "auth.password", s.changePassword)
 	r("POST /v1/auth/reset", "auth.reset", s.resetPassword(local))
 
+	r("GET /v1/users", "user.read", s.listUsers)
+	r("POST /v1/users", "user.write", s.createUser)
+	r("GET /v1/users/{id}", "user.read", s.getUser)
+	r("PATCH /v1/users/{id}", "user.write", s.updateUser)
+	r("DELETE /v1/users/{id}", "user.write", s.deleteUser)
+	r("POST /v1/users/{id}/reset-password", "user.write", s.resetUserPassword)
+
 	r("GET /v1/backups", "backup.read", s.listBackups)
 	r("POST /v1/backups", "backup.create", s.takeBackup)
 	r("POST /v1/backups/restore", "backup.restore", s.restoreBackup(local))
@@ -414,7 +421,30 @@ func (s *Server) routes(mux router, local bool) {
 const sessionCookie = "dbb_session"
 
 func (s *Server) resolvePrincipal(ctx context.Context, p ext.Principal) (ext.Principal, error) {
-	if s.Ext.PrincipalResolver == nil || p.ID == "" || p.ID == LocalPrincipal.ID || p.ID == Anonymous.ID {
+	if p.ID == "" || p.ID == LocalPrincipal.ID || p.ID == Anonymous.ID {
+		return p, nil
+	}
+	if s.Auth != nil && s.Auth.Users != nil && (p.ID == domain.AdminUserID || strings.HasPrefix(p.ID, domain.UserIDPrefix)) {
+		u, err := s.Auth.Users.GetUser(ctx, p.ID)
+		switch {
+		case err == nil:
+			if u.Disabled {
+				return ext.Principal{}, ext.ErrUnauthenticated
+			}
+			p.Name = u.DisplayName()
+		case errors.Is(err, domain.ErrNotFound):
+			if p.ID == domain.AdminUserID {
+				if s.Auth.Protocol == nil || s.Auth.Protocol() >= domain.ProtocolUsers {
+					return ext.Principal{}, ext.ErrUnauthenticated
+				}
+			} else if s.Ext.PrincipalResolver == nil {
+				return ext.Principal{}, ext.ErrUnauthenticated
+			}
+		default:
+			return ext.Principal{}, err
+		}
+	}
+	if s.Ext.PrincipalResolver == nil {
 		return p, nil
 	}
 	return s.Ext.PrincipalResolver.ResolvePrincipal(ctx, p)
@@ -561,6 +591,7 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 // fail maps a use case error onto the error envelope.
 func fail(w http.ResponseWriter, err error) {
 	var rl *auth.RateLimitedError
+	var erl *ext.RateLimitedError
 	var tm *tooManyCreations
 	switch {
 	case errors.As(err, &tm):
@@ -569,14 +600,17 @@ func fail(w http.ResponseWriter, err error) {
 	case errors.As(err, &rl):
 		w.Header().Set("Retry-After", strconv.Itoa(int(rl.RetryAfter.Seconds())+1))
 		writeError(w, http.StatusTooManyRequests, "rate_limited", err.Error())
-	case errors.Is(err, domain.ErrClusterUpgrading):
+	case errors.As(err, &erl):
+		w.Header().Set("Retry-After", strconv.Itoa(int(erl.RetryAfter.Seconds())+1))
+		writeError(w, http.StatusTooManyRequests, "rate_limited", err.Error())
+	case errors.Is(err, domain.ErrClusterUpgrading), errors.Is(err, ext.ErrClusterUpgrading):
 		writeError(w, http.StatusServiceUnavailable, "cluster_upgrading", err.Error())
 	case errors.Is(err, domain.ErrNoLeader):
 		w.Header().Set("Retry-After", "2")
 		writeError(w, http.StatusServiceUnavailable, "no_leader", err.Error())
-	case errors.Is(err, domain.ErrNotFound), errors.Is(err, operation.ErrNotFound):
+	case errors.Is(err, domain.ErrNotFound), errors.Is(err, operation.ErrNotFound), errors.Is(err, ext.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", err.Error())
-	case errors.Is(err, domain.ErrAlreadyExists):
+	case errors.Is(err, domain.ErrAlreadyExists), errors.Is(err, ext.ErrAlreadyExists):
 		writeError(w, http.StatusConflict, "already_exists", err.Error())
 	case errors.Is(err, domain.ErrInUse):
 		writeError(w, http.StatusConflict, "in_use", err.Error())
@@ -598,7 +632,7 @@ func fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "checkpoints_unavailable", err.Error())
 	case errors.Is(err, domain.ErrUpgradeRefused):
 		writeError(w, http.StatusUnprocessableEntity, "upgrade_not_allowed", err.Error())
-	case errors.Is(err, domain.ErrConflict):
+	case errors.Is(err, domain.ErrConflict), errors.Is(err, ext.ErrConflict):
 		writeError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, domain.ErrRuntimeNotInstalled):
 		writeError(w, http.StatusNotFound, "runtime_not_installed", err.Error())
@@ -607,7 +641,7 @@ func fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, domain.ErrRuntimeInstalled):
 		writeError(w, http.StatusConflict, "already_exists", err.Error())
 	case errors.Is(err, domain.ErrInvalidName), errors.Is(err, domain.ErrInvalidRuntime), errors.Is(err, domain.ErrInvalidTTL), errors.Is(err, domain.ErrInvalidRouteUser),
-		errors.Is(err, domain.ErrInvalidModule), errors.Is(err, domain.ErrInvalidRefresh), errors.Is(err, domain.ErrInvalidReplicas), errors.Is(err, domain.ErrInvalidAnonymous), errors.Is(err, domain.ErrInvalidUpdate), errors.Is(err, domain.ErrInvalidMergeSource), errors.Is(err, settings.ErrInvalid), errors.Is(err, token.ErrInvalid):
+		errors.Is(err, domain.ErrInvalidModule), errors.Is(err, domain.ErrInvalidRefresh), errors.Is(err, domain.ErrInvalidReplicas), errors.Is(err, domain.ErrInvalidAnonymous), errors.Is(err, domain.ErrInvalidUpdate), errors.Is(err, domain.ErrInvalidMergeSource), errors.Is(err, settings.ErrInvalid), errors.Is(err, token.ErrInvalid), errors.Is(err, ext.ErrInvalid):
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.Is(err, ext.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden", err.Error())
@@ -615,7 +649,7 @@ func fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", err.Error())
 	case errors.Is(err, auth.ErrNoSession):
 		writeError(w, http.StatusUnauthorized, "unauthenticated", err.Error())
-	case errors.Is(err, auth.ErrWeakPassword):
+	case errors.Is(err, auth.ErrWeakPassword), errors.Is(err, ext.ErrWeakPassword):
 		writeError(w, http.StatusBadRequest, "weak_password", err.Error())
 	default:
 		internalError(w, err)

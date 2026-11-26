@@ -20,6 +20,7 @@ import (
 	"github.com/hashicorp/raft"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/infrastructure/authfile"
 	"github.com/db-branch/db-branch/internal/infrastructure/clusterpki"
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/infrastructure/filestore"
@@ -372,6 +373,13 @@ func (c *clusterRuntime) importSingleNodeState(ctx context.Context, log *slog.Lo
 			record("token "+t.ID, c.store.PutToken(ctx, t))
 		}
 	}
+	cred, credErr := authfile.Store{Path: filepath.Join(c.cfg.DataDir, "auth.json")}.Load()
+	usersToImport := mergeSingleNodeUsers(snap.Users, cred, credErr == nil)
+	for _, u := range usersToImport {
+		if _, exists := existing.Users[u.ID]; !exists {
+			record("user "+u.ID, c.store.InsertUser(ctx, u))
+		}
+	}
 	mods := make([]string, 0, len(snap.ModuleData))
 	for mod := range snap.ModuleData {
 		mods = append(mods, mod)
@@ -419,6 +427,7 @@ func (c *clusterRuntime) importSingleNodeState(ctx context.Context, log *slog.Lo
 	log.Info("imported single-node state into the cluster",
 		"bases", len(snap.Bases), "branches", len(snap.Branches),
 		"settings_scopes", len(snap.Settings), "tokens", len(snap.Tokens),
+		"users", len(usersToImport),
 		"modules", len(snap.Modules), "refreshes", len(snap.BaseRefreshes))
 	return nil
 }

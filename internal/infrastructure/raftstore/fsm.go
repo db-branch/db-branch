@@ -39,6 +39,8 @@ type State struct {
 	Settings map[string]map[string]string `json:"settings,omitempty"`
 	// Tokens are API tokens by id (hashes only).
 	Tokens map[string]domain.APIToken `json:"tokens,omitempty"`
+	// Users are the OSS/core console user accounts by immutable ID ("admin", "user:<email>").
+	Users map[string]domain.User `json:"users,omitempty"`
 	// ModuleData are modules' records by module and key.
 	ModuleData map[string]map[string][]byte `json:"module_data,omitempty"`
 	// BaseRefreshes are the base refresh schedules by base name. They are
@@ -77,6 +79,7 @@ type Command struct {
 	Module    *domain.ModuleSpec   `json:"module,omitempty"`
 	Settings  map[string]string    `json:"settings,omitempty"`
 	Token     *domain.APIToken     `json:"token,omitempty"`
+	User      *domain.User         `json:"user,omitempty"`
 	Name      string               `json:"name,omitempty"`
 	Key       string               `json:"key,omitempty"`
 	Value     []byte               `json:"value,omitempty"`
@@ -181,7 +184,11 @@ type BranchOwner struct {
 // when a service token is scoped to specific bases or a team. Older nodes drop
 // those fields, so restricted service tokens wait for protocol 29 everywhere
 // (domain.ProtocolServiceTokenRestrictions).
-const Protocol = 29
+//
+// 30: multi-user OSS accounts: State.Users and insert_user / put_user /
+// delete_user commands replicate console user accounts across the cluster
+// (domain.ProtocolUsers).
+const Protocol = domain.ProtocolUsers
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a
@@ -209,6 +216,9 @@ var opProtocol = map[string]int{
 	"revoke_session":       domain.ProtocolSessionRevocation,
 	"set_join_token":       domain.ProtocolJoinToken,
 	"consume_join_secret":  domain.ProtocolJoinToken,
+	"insert_user":          domain.ProtocolUsers,
+	"put_user":             domain.ProtocolUsers,
+	"delete_user":          domain.ProtocolUsers,
 }
 
 // Needs returns the protocol the command requires (0 for unknown commands).
@@ -368,6 +378,10 @@ func RecordRollout(ev domain.RolloutEvent) Command {
 func PutToken(t domain.APIToken) Command { return Command{Op: "put_token", Token: &t} }
 func DeleteToken(id string) Command      { return Command{Op: "delete_token", Name: id} }
 
+func InsertUser(u domain.User) Command { return Command{Op: "insert_user", User: &u} }
+func PutUser(u domain.User) Command    { return Command{Op: "put_user", User: &u} }
+func DeleteUser(id string) Command     { return Command{Op: "delete_user", Name: id} }
+
 func PutModuleData(module, key string, value []byte) Command {
 	return Command{Op: "put_module_data", Name: module, Key: key, Value: value}
 }
@@ -460,6 +474,10 @@ func (c Command) complete() bool {
 		return c.Name != ""
 	case "put_token":
 		return c.Token != nil
+	case "insert_user", "put_user":
+		return c.User != nil && c.User.ID != ""
+	case "delete_user":
+		return c.Name != ""
 	case "put_module_data", "delete_module_data":
 		return c.Name != "" && c.Key != ""
 	case "set_base_refresh":
@@ -540,6 +558,38 @@ func (f *FSM) apply(c Command) error {
 		s.Tokens[tok.ID] = tok
 	case "delete_token":
 		delete(s.Tokens, c.Name)
+	case "insert_user":
+		if s.Users == nil {
+			s.Users = map[string]domain.User{}
+		}
+		if _, ok := s.Users[c.User.ID]; ok {
+			return fmt.Errorf("user %s: %w", c.User.ID, domain.ErrAlreadyExists)
+		}
+		s.Users[c.User.ID] = c.User.Clone()
+	case "put_user":
+		if s.Users == nil {
+			s.Users = map[string]domain.User{}
+		}
+		if old, existed := s.Users[c.User.ID]; existed && old.ActiveWithPassword() && !c.User.ActiveWithPassword() {
+			if err := domain.EnsureActivePasswordUserAfterUpdate(s.Users, *c.User, false); err != nil {
+				return err
+			}
+		}
+		s.Users[c.User.ID] = c.User.Clone()
+	case "delete_user":
+		cur, ok := s.Users[c.Name]
+		if !ok {
+			return fmt.Errorf("user %s: %w", c.Name, domain.ErrNotFound)
+		}
+		if len(s.Users) <= 1 {
+			return fmt.Errorf("%w: cannot delete the last user", domain.ErrConflict)
+		}
+		if cur.ActiveWithPassword() {
+			if err := domain.EnsureActivePasswordUserAfterDelete(s.Users, c.Name, false); err != nil {
+				return err
+			}
+		}
+		delete(s.Users, c.Name)
 	case "put_module_data":
 		if s.ModuleData == nil {
 			s.ModuleData = map[string]map[string][]byte{}
@@ -759,6 +809,12 @@ func (f *FSM) State() State {
 		v.OwnerRoles = append([]string(nil), v.OwnerRoles...)
 		v.Bases = append([]string(nil), v.Bases...)
 		out.Tokens[k] = v
+	}
+	for k, v := range f.state.Users {
+		if out.Users == nil {
+			out.Users = map[string]domain.User{}
+		}
+		out.Users[k] = v.Clone()
 	}
 	for m, v := range f.state.ModuleData {
 		if out.ModuleData == nil {

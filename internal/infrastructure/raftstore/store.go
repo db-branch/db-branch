@@ -60,6 +60,7 @@ var (
 	_ domain.BranchOwnerMigrator = (*Store)(nil)
 	_ domain.NodeStore           = (*Store)(nil)
 	_ domain.ModuleStore         = (*Store)(nil)
+	_ domain.UserStore           = (*Store)(nil)
 	_ operation.Store            = (*Store)(nil)
 	_ domain.UpdateStore         = (*Store)(nil)
 	_ membership.Members         = (*Store)(nil)
@@ -614,6 +615,40 @@ func (s *Store) DeleteToken(ctx context.Context, id string) error {
 		return fmt.Errorf("token %s: %w", id, domain.ErrNotFound)
 	}
 	return s.Apply(ctx, DeleteToken(id))
+}
+
+// ListUsers returns all users sorted by ID.
+func (s *Store) ListUsers(context.Context) ([]domain.User, error) {
+	var out []domain.User
+	for _, u := range s.fsm.State().Users {
+		out = append(out, u.Clone())
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// GetUser returns the user with ID id.
+func (s *Store) GetUser(_ context.Context, id string) (domain.User, error) {
+	u, ok := s.fsm.State().Users[id]
+	if !ok {
+		return domain.User{}, fmt.Errorf("user %s: %w", id, domain.ErrNotFound)
+	}
+	return u.Clone(), nil
+}
+
+// InsertUser creates a new user atomically in Raft.
+func (s *Store) InsertUser(ctx context.Context, u domain.User) error {
+	return s.Apply(ctx, InsertUser(u))
+}
+
+// PutUser replaces or creates a user atomically in Raft.
+func (s *Store) PutUser(ctx context.Context, u domain.User) error {
+	return s.Apply(ctx, PutUser(u))
+}
+
+// DeleteUser removes a user atomically in Raft.
+func (s *Store) DeleteUser(ctx context.Context, id string) error {
+	return s.Apply(ctx, DeleteUser(id))
 }
 
 func (s *Store) ListModuleData(_ context.Context, module string) (map[string][]byte, error) {

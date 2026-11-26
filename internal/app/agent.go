@@ -19,6 +19,7 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/authfile"
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/infrastructure/execx"
+	"github.com/db-branch/db-branch/internal/infrastructure/filestore"
 	"github.com/db-branch/db-branch/internal/infrastructure/nodesys"
 	"github.com/db-branch/db-branch/internal/infrastructure/raftstore"
 	"github.com/db-branch/db-branch/internal/infrastructure/sysmetrics"
@@ -49,8 +50,16 @@ type AgentOptions struct {
 }
 
 func authService(cfg config.Config) *auth.Service {
+	creds := authfile.Store{Path: filepath.Join(cfg.DataDir, "auth.json")}
+	users := &filestore.Store{
+		Path: filepath.Join(cfg.DataDir, "state.json"),
+		LegacyAdminActive: func() bool {
+			c, err := creds.Load()
+			return err == nil && len(c.Hash) > 0
+		},
+	}
 	return &auth.Service{
-		Store: authfile.Store{Path: filepath.Join(cfg.DataDir, "auth.json")}, Hasher: authfile.Argon2{}, Clock: time.Now,
+		Store: creds, Users: users, Hasher: authfile.Argon2{}, Clock: time.Now,
 		// Logouts survive a restart (a cluster replaces this with its own list).
 		Revocations: authfile.NewRevocations(filepath.Join(cfg.DataDir, "revoked-sessions.json")),
 	}
@@ -170,9 +179,15 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		// Every change, wherever it was made, reaches this node's subscribers
 		// through the replicated store.
 		ops.Store, ops.Bus = cl.store, nil
-		// One console password for the whole cluster.
-		// A logout on one node holds on all of them.
-		srv.Auth = &auth.Service{Store: raftstore.AdminStore{Store: cl.store}, Hasher: authfile.Argon2{}, Clock: time.Now, Revocations: raftstore.SessionRevocations{Store: cl.store}}
+		// Shared console users and sessions across the cluster.
+		srv.Auth = &auth.Service{
+			Store:       raftstore.AdminStore{Store: cl.store},
+			Users:       cl.store,
+			Hasher:      authfile.Argon2{},
+			Clock:       time.Now,
+			Protocol:    cl.store.ClusterProtocol,
+			Revocations: raftstore.SessionRevocations{Store: cl.store},
+		}
 		cl.flushRevocations = srv.Auth.FlushRevocations
 		srv.OnRuntimesChanged = cl.beatNow
 		cl.runtimes = func(ctx context.Context) []string {
@@ -249,6 +264,16 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	}})
 	var tokens *token.Service
 	if svc, err := a.Branches(); err == nil {
+		if cl == nil {
+			if fs, ok := svc.Store.(*filestore.Store); ok {
+				credStore := srv.Auth.Store
+				fs.LegacyAdminActive = func() bool {
+					c, cerr := credStore.Load()
+					return cerr == nil && len(c.Hash) > 0
+				}
+				srv.Auth.Users = fs
+			}
+		}
 		wireModuleHooks(svc, srv.Ext)
 		if st, ok := svc.Store.(domain.TokenStore); ok {
 			tokens = &token.Service{Store: st, Clock: time.Now}
@@ -256,9 +281,10 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 				tokens.Settle = 2 * time.Second // a token made on another node may not have arrived yet
 			}
 			srv.Tokens, srv.TokenAuth = tokens, tokens
+			srv.Auth.RevokeTokens = tokens.RevokeByOwner
 		}
 	}
-	startModules(runCtx, a, cfg, node, mods, srv.BranchHost(), srv.ModuleAPI, tokens, log)
+	startModules(runCtx, a, cfg, node, mods, srv.BranchHost(), srv.ModuleAPI, newUserHost(srv.Auth, tokens, log), log)
 	if cl != nil {
 		cl.modules = srv.Modules
 		cl.checkpoints = svcCheckpoints(a)
@@ -427,6 +453,9 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 		if err := cl.adoptPassword(authService(cfg).Store); err != nil {
 			log.Error("sharing the console password with the cluster", "err", err)
 		}
+	}
+	if cl == nil || cl.store.IsLeader() {
+		migrateAdminUserIfEmpty(runCtx, srv.Auth, log)
 	}
 	if err := ops.Recover(runCtx); err != nil {
 		log.Error("recovering operations", "err", err)

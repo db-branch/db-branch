@@ -519,4 +519,17 @@ export const ja: Record<string, string> = {
   "The server did not shut down cleanly.": "前回の停止が正常に完了していません。",
   "This upgrade path is not allowed.": "このアップグレード経路は許可されていません。",
   "The password is too weak. Use at least 12 characters.": "パスワードが短すぎるか脆弱です。12 文字以上にしてください。",
+
+  // Users page sentences
+  "Console users who can sign in and manage bases and branches.": "コンソールにサインインして Base や Branch を管理できるユーザーです。",
+  "No users.": "ユーザーはまだいません。",
+  "Display name (optional; defaults to email).": "表示名（省略時はメールアドレス）。",
+  "Leave empty to generate a random initial password (shown once).": "空欄にするとランダムな初期パスワードを自動生成します（1 回のみ表示）。",
+  "Require password change at first sign-in": "初回サインイン時にパスワード変更を求める",
+  "Reset password for {id}?": "{id} のパスワードを再設定しますか？",
+  "Generates a new random password, signs the user out of existing sessions, and requires a password change on next sign-in.":
+    "新しいランダムパスワードを発行し、既存セッションを終了させ、次回サインイン時にパスワード変更を求めます。",
+  "Removes the user account and revokes all active sessions and personal API tokens.":
+    "このユーザーを削除し、有効なセッションと個人用 API トークンをすべて失効させます。",
+  "Shown only once for {id}. Share it securely with the user.": "{id} 用のパスワードです（1 回のみ表示）。安全な方法で本人に共有してください。",
 };

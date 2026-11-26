@@ -4,8 +4,8 @@ import { planLabel } from "./modules";
 describe("TestModules_プラン機能表記がlicense仕様と一致する", () => {
   it("Lite/Team/Business に diff (beta) を含めず、Business に history を含む", () => {
     expect(planLabel("lite")).toBe("Lite · history");
-    expect(planLabel("team")).toBe("Team · users, roles, teams, history");
-    expect(planLabel("business")).toBe("Business · users, roles, teams, SSO, audit, history");
+    expect(planLabel("team")).toBe("Team · roles, teams, history");
+    expect(planLabel("business")).toBe("Business · roles, teams, SSO, audit, history");
     expect(planLabel("lite")).not.toContain("diff");
     expect(planLabel("team")).not.toContain("diff");
     expect(planLabel("business")).not.toContain("masking");

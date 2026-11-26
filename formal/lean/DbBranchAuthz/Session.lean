@@ -153,4 +153,80 @@ def deleteExternalUser (sys : AuthSystem) (user : String) : AuthSystem :=
   { activeUsers := sys.activeUsers.filter (· != user)
   , tokens := revokeTokensByOwner sys.tokens user }
 
+/-! ## F-14 Multi-user OSS model (`internal/domain/user.go`, `internal/usecase/auth`, `httpapi`) -/
+
+structure CoreUserRecord where
+  id          : String
+  disabled    : Bool
+  hasPassword : Bool
+  mustChange  : Bool
+  sessionGen  : Nat
+  deriving DecidableEq, Repr
+
+structure UserSessionCookie where
+  userID : String
+  uGen   : Nat
+  expiry : Nat
+  deriving DecidableEq, Repr
+
+structure MultiUserState where
+  clock  : Nat
+  users  : List CoreUserRecord
+  tokens : List APIToken
+  deriving DecidableEq, Repr
+
+def activePasswordCount (users : List CoreUserRecord) : Nat :=
+  (users.filter (fun u => !u.disabled && u.hasPassword)).length
+
+/-- Validates a user-bound session cookie (`p.UGen != nil`) and principal resolution:
+    rejected immediately if deleted, disabled, expired, or `UGen ≠ SessionGen`. -/
+def validateMultiUserSession (st : MultiUserState) (tok : UserSessionCookie) : Bool :=
+  match st.users.find? (fun u => u.id == tok.userID) with
+  | none => false
+  | some u =>
+    !u.disabled && tok.uGen == u.sessionGen && st.clock < tok.expiry
+
+/-- Personal tokens also pass `resolvePrincipal` against `UserStore` before `guard`:
+    deleted or disabled core users are immediately rejected even before token removal. -/
+def authenticateMultiUserToken (st : MultiUserState) (tid : Nat) : Bool :=
+  match st.tokens.find? (fun t => t.id == tid) with
+  | none => false
+  | some t =>
+    let tokOK := !t.revoked && (!t.hasExpiry || st.clock < t.expiry)
+    if t.owner == "" then
+      tokOK
+    else
+      match st.users.find? (fun u => u.id == t.owner) with
+      | none => false
+      | some u => !u.disabled && tokOK
+
+/-- Last-active-password-user guard (`EnsureActivePasswordUserAfterUpdate` when disabling). -/
+def disableCoreUser (st : MultiUserState) (uid : String) : Option MultiUserState :=
+  match st.users.find? (fun u => u.id == uid) with
+  | none => none
+  | some target =>
+    if target.disabled then
+      some st
+    else
+      let rem := st.users.filter (fun u => u.id != uid && !u.disabled && u.hasPassword)
+      if rem.length == 0 then
+        none
+      else
+        let nextUsers := st.users.map (fun u =>
+          if u.id == uid then { u with disabled := true, sessionGen := u.sessionGen + 1 } else u)
+        some { st with users := nextUsers, tokens := revokeTokensByOwner st.tokens uid }
+
+/-- Last-active-password-user guard (`EnsureActivePasswordUserAfterDelete`). -/
+def deleteCoreUser (st : MultiUserState) (uid : String) : Option MultiUserState :=
+  match st.users.find? (fun u => u.id == uid) with
+  | none => none
+  | some _ =>
+    let rem := st.users.filter (fun u => u.id != uid && !u.disabled && u.hasPassword)
+    if rem.length == 0 then
+      none
+    else
+      some { st with
+        users := st.users.filter (fun u => u.id != uid)
+      , tokens := revokeTokensByOwner st.tokens uid }
+
 end DbBranchAuthz.Session

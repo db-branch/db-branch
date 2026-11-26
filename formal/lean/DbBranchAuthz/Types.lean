@@ -61,6 +61,12 @@ inductive Endpoint where
   | authLogout
   | authPassword
   | authReset
+  | userList
+  | userCreate
+  | userGet
+  | userPatch
+  | userResetPassword
+  | userDelete
   | branchList
   | branchGet
   | branchDSN

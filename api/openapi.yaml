@@ -32,7 +32,7 @@ info:
 
     **Token scopes.** A `branches` token (the default) is governed by an explicit allowlist: it may create, use, checkpoint, fork, merge, upgrade and delete branches, list/get bases (`base.read`, `base.public`), runtimes (`runtime.read`), operations (`operation.read`), events (`event.read`), capabilities (`capability.read`), Prometheus metrics (`metrics.read`), own preferences/tokens (`account.preference.read`, `account.token.read`) and use MCP (`mcp.use`). It cannot change bases, runtimes, settings or tokens, and cannot read settings, tokens, route users, backups, base refresh sources, cluster topology, modules, licenses, updates or extension module APIs (`/v1/ext/<module>/...`). A `full` token may do everything an admin can. Each operation lists the scopes that may call it in `x-dbb-token-scopes`.
 
-    **Actions and roles.** Which calls are allowed is decided per request by an action name such as `branch.create` or `base.delete`, given for every operation in `x-dbb-action`. The built-in login is a single admin who may do everything. People other than admins (signed in through a paid module) may read all branches but change, connect to and query only their own, except `open` branches, which anyone may connect to and query; the module's roles decide the rest. The local socket and `full` tokens count as admin.
+    **Actions and roles.** Which calls are allowed is decided per request by an action name such as `branch.create` or `base.delete`, given for every operation in `x-dbb-action`. Every built-in OSS user (`admin` and `user:<email>`) acts as an admin who may do everything. People with restricted roles (signed in through the paid `auth` module) may read all branches but change, connect to and query only their own, except `open` branches, which anyone may connect to and query; the module's roles decide the rest. The local socket and `full` tokens count as admin.
 
     **Without credentials** only a few calls work: creating a branch from a public snapshot, reading and connecting to an `open` branch, reading an operation, and listing public bases (operations marked as allowing anonymous access). `/healthz`, `/readyz`, `/tls.pem`, `POST /v1/auth/login` and `GET /v1/auth/methods` need no login at all.
 
@@ -121,6 +121,9 @@ security:
   - session: []
   - localSocket: []
 tags:
+  - name: users
+    x-displayName: Users
+    description: Core console user accounts (`admin` and `user:<email>`).
   - name: branches
     x-displayName: Branches
     description: 'A branch is a writable clone of a base snapshot with a database server of its own. It is ready in seconds and costs only the space of what changes. Branches have an owner and an access mode: `private` (own password; owner and admins) or `open` (the cluster''s shared password; anyone may connect and query). A branch expires at `expires_at` and is deleted automatically. Status: `provisioning`, `ready`, `resetting`, `restoring`, `upgrading`, `deleting`, `failed`, `lost` (its node is gone; see recreate).'
@@ -2379,6 +2382,222 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403':
           description: socket_only.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/users:
+    get:
+      tags: [users]
+      operationId: listUsers
+      summary: List console user accounts
+      x-dbb-action: user.read
+      x-dbb-token-scopes: [full]
+      description: |-
+        Lists core console user accounts (`admin` and `user:<email>`), sorted by ID.
+
+        **Action:** `user.read`. Needs a console session of an admin, the local socket, or a `full` token.
+      responses:
+        '200':
+          description: List of users.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UserList'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+    post:
+      tags: [users]
+      operationId: createUser
+      summary: Create a console user account
+      x-dbb-action: user.write
+      x-dbb-token-scopes: [full]
+      description: |-
+        Creates an email-identified console user (`user:<email>`). When `password` is omitted, generates a 24-character initial password returned once in `initial_password` with `must_change_password: true`.
+
+        **Action:** `user.write`. Needs a console session of an admin, the local socket, or a `full` token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateUserRequest'}
+      responses:
+        '201':
+          description: User created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CreateUserResponse'}
+        '400':
+          description: invalid_request or weak_password.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409':
+          description: already_exists.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/users/{id}:
+    get:
+      tags: [users]
+      operationId: getUser
+      summary: Get a console user account
+      x-dbb-action: user.read
+      x-dbb-token-scopes: [full]
+      description: |-
+        Returns a core console user account by ID (`admin` or `user:<email>`) or email.
+
+        **Action:** `user.read`. Needs a console session of an admin, the local socket, or a `full` token.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: User ID (`admin` or `user:<email>`) or email address.
+          schema: {type: string}
+      responses:
+        '200':
+          description: User details.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/User'}
+        '400':
+          description: invalid_request.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: not_found.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+    patch:
+      tags: [users]
+      operationId: updateUser
+      summary: Update a console user account
+      x-dbb-action: user.write
+      x-dbb-token-scopes: [full]
+      description: |-
+        Updates a core user's display name, disabled state, password, or `must_change_password` flag. Disabling revokes sessions and personal API tokens; disabling self or the last active password user is rejected.
+
+        **Action:** `user.write`. Needs a console session of an admin, the local socket, or a `full` token.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: User ID (`admin` or `user:<email>`) or email address.
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateUserRequest'}
+      responses:
+        '200':
+          description: Updated user.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/User'}
+        '400':
+          description: invalid_request (e.g. self-disable) or weak_password.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: not_found.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: conflict (last active password user cannot be disabled).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+    delete:
+      tags: [users]
+      operationId: deleteUser
+      summary: Delete a console user account
+      x-dbb-action: user.write
+      x-dbb-token-scopes: [full]
+      description: |-
+        Deletes a core user account and revokes all of their personal API tokens and sessions. Deleting self or the last active password user is rejected.
+
+        **Action:** `user.write`. Needs a console session of an admin, the local socket, or a `full` token.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: User ID (`admin` or `user:<email>`) or email address.
+          schema: {type: string}
+      responses:
+        '204': {description: User deleted. No content.}
+        '400':
+          description: invalid_request (e.g. self-delete).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: not_found.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: conflict (last active password user cannot be deleted).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/users/{id}/reset-password:
+    post:
+      tags: [users]
+      operationId: resetUserPassword
+      summary: Reset a console user's password
+      x-dbb-action: user.write
+      x-dbb-token-scopes: [full]
+      description: |-
+        Generates a new random 24-character password for the user, ends their active console sessions, and sets `must_change_password` (default `true`).
+
+        **Action:** `user.write`. Needs a console session of an admin, the local socket, or a `full` token.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: User ID (`admin` or `user:<email>`) or email address.
+          schema: {type: string}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                must_change_password: {type: boolean, default: true}
+              additionalProperties: false
+      responses:
+        '200':
+          description: User with new one-time password.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ResetUserPasswordResponse'}
+        '400':
+          description: invalid_request.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404':
+          description: not_found.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -4885,6 +5104,55 @@ components:
       required: [password, default_branch]
       additionalProperties: false
       example: {password: <password>, default_branch: prod}
+    User:
+      type: object
+      properties:
+        id: {type: string}
+        email: {type: string}
+        name: {type: string}
+        kind: {type: string, enum: [admin, user]}
+        disabled: {type: boolean}
+        must_change_password: {type: boolean}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+      required: [id, email, name, kind, disabled, must_change_password, created_at, updated_at]
+    UserList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/User'}
+        next_cursor: {type: 'null', description: 'Always null: lists are not paginated.'}
+      required: [items, next_cursor]
+    CreateUserRequest:
+      type: object
+      properties:
+        email: {type: string, format: email}
+        name: {type: string}
+        password: {type: string, minLength: 12, maxLength: 256}
+        must_change_password: {type: boolean}
+      required: [email]
+      additionalProperties: false
+    CreateUserResponse:
+      type: object
+      properties:
+        user: {$ref: '#/components/schemas/User'}
+        initial_password: {type: string}
+      required: [user]
+    UpdateUserRequest:
+      type: object
+      properties:
+        name: {type: string}
+        disabled: {type: boolean}
+        password: {type: string, minLength: 12, maxLength: 256}
+        must_change_password: {type: boolean}
+      additionalProperties: false
+    ResetUserPasswordResponse:
+      type: object
+      properties:
+        user: {$ref: '#/components/schemas/User'}
+        password: {type: string}
+      required: [user, password]
     Setting:
       type: object
       properties:
@@ -5203,6 +5471,7 @@ components:
         modules: {type: integer}
         module_data: {type: integer}
         route_users: {type: integer}
+        users: {type: integer}
         runtimes: {type: integer}
         admin: {type: boolean}
         skipped_bases:
@@ -5219,6 +5488,7 @@ components:
         - modules
         - module_data
         - route_users
+        - users
         - runtimes
         - admin
         - skipped_bases

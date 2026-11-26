@@ -194,7 +194,7 @@ func TestProtocol_すべてのコマンドに必要な版があり最新の版�
 	for _, op := range []string{"put_base", "delete_base", "put_branch", "delete_branch", "put_node", "delete_node",
 		"set_join_secret", "insert_base", "insert_branch", "put_operation", "set_admin", "init_admin", "add_replica",
 		"add_runtime", "remove_runtime", "put_route_user", "delete_route_user", "put_module", "delete_module", "put_settings", "put_token", "delete_token",
-		"put_module_data", "delete_module_data", "start_trial", "set_base_refresh", "record_base_refresh_run", "clear_base_refresh", "set_base_replica_nodes", "remove_replica", "set_base_anonymous", "init_service_ids", "init_cluster_id", "migrate_branch_owner", "revoke_session"} {
+		"put_module_data", "delete_module_data", "start_trial", "set_base_refresh", "record_base_refresh_run", "clear_base_refresh", "set_base_replica_nodes", "remove_replica", "set_base_anonymous", "init_service_ids", "init_cluster_id", "migrate_branch_owner", "revoke_session", "insert_user", "put_user", "delete_user"} {
 		n := raftstore.Command{Op: op}.Needs()
 		if n < 1 || n > raftstore.Protocol {
 			t.Errorf("%s needs %d", op, n)

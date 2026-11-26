@@ -91,29 +91,84 @@ func (p *modulePlugin) Client(b *goplugin.MuxBroker, c *rpc.Client) (any, error)
 }
 
 // RPCError carries an error across the process boundary as text plus which
-// sentinel it wraps (net/rpc needs exported types).
+// sentinels it wraps (net/rpc needs exported types).
 type RPCError struct {
-	Msg            string
-	Unauth, Forbid bool
+	Msg                                                                      string
+	Unauth, Forbid, StopAuth, Invalid, Exists, NotFound, Conflict, Upgrading bool
+	WeakPassword                                                             bool
+	RetryAfterNs                                                             int64
 }
 
 func toRPC(err error) RPCError {
 	if err == nil {
 		return RPCError{}
 	}
-	return RPCError{Msg: err.Error(), Unauth: errors.Is(err, ext.ErrUnauthenticated), Forbid: errors.Is(err, ext.ErrForbidden)}
+	out := RPCError{
+		Msg:          err.Error(),
+		Unauth:       errors.Is(err, ext.ErrUnauthenticated),
+		Forbid:       errors.Is(err, ext.ErrForbidden),
+		StopAuth:     errors.Is(err, ext.ErrStopAuth),
+		Invalid:      errors.Is(err, ext.ErrInvalid),
+		Exists:       errors.Is(err, ext.ErrAlreadyExists),
+		NotFound:     errors.Is(err, ext.ErrNotFound),
+		Conflict:     errors.Is(err, ext.ErrConflict),
+		Upgrading:    errors.Is(err, ext.ErrClusterUpgrading),
+		WeakPassword: errors.Is(err, ext.ErrWeakPassword),
+	}
+	var rl *ext.RateLimitedError
+	if errors.As(err, &rl) && rl != nil {
+		out.RetryAfterNs = int64(rl.RetryAfter)
+	}
+	return out
 }
 
+type rpcJoinedError struct {
+	msg  string
+	errs []error
+}
+
+func (e rpcJoinedError) Error() string { return e.msg }
+func (e rpcJoinedError) Unwrap() []error { return e.errs }
+
 func (e RPCError) err() error {
-	switch {
-	case e.Msg == "":
+	if e.Msg == "" {
 		return nil
-	case e.Unauth:
-		return fmt.Errorf("%w: %s", ext.ErrUnauthenticated, strings.TrimPrefix(e.Msg, ext.ErrUnauthenticated.Error()+": "))
-	case e.Forbid:
-		return fmt.Errorf("%w: %s", ext.ErrForbidden, strings.TrimPrefix(e.Msg, ext.ErrForbidden.Error()+": "))
 	}
-	return errors.New(e.Msg)
+	var sentinels []error
+	if e.Unauth {
+		sentinels = append(sentinels, ext.ErrUnauthenticated)
+	}
+	if e.Forbid {
+		sentinels = append(sentinels, ext.ErrForbidden)
+	}
+	if e.StopAuth {
+		sentinels = append(sentinels, ext.ErrStopAuth)
+	}
+	if e.Invalid {
+		sentinels = append(sentinels, ext.ErrInvalid)
+	}
+	if e.Exists {
+		sentinels = append(sentinels, ext.ErrAlreadyExists)
+	}
+	if e.NotFound {
+		sentinels = append(sentinels, ext.ErrNotFound)
+	}
+	if e.Conflict {
+		sentinels = append(sentinels, ext.ErrConflict)
+	}
+	if e.Upgrading {
+		sentinels = append(sentinels, ext.ErrClusterUpgrading)
+	}
+	if e.WeakPassword {
+		sentinels = append(sentinels, ext.ErrWeakPassword)
+	}
+	if e.RetryAfterNs > 0 {
+		sentinels = append(sentinels, &ext.RateLimitedError{RetryAfter: time.Duration(e.RetryAfterNs)})
+	}
+	if len(sentinels) == 0 {
+		return errors.New(e.Msg)
+	}
+	return rpcJoinedError{msg: e.Msg, errs: sentinels}
 }
 
 type rpcServer struct {
@@ -174,6 +229,8 @@ type StartArgs struct {
 	BranchesID uint32
 	// APIID is the broker stream of the agent's ModuleAPI (0: none).
 	APIID uint32
+	// UsersID is the broker stream of the agent's UserStore (0: none).
+	UsersID uint32
 }
 
 func (s *rpcServer) Start(a StartArgs, out *RPCError) error {
@@ -201,6 +258,14 @@ func (s *rpcServer) Start(a StartArgs, out *RPCError) error {
 			return nil
 		}
 		h.API = &apiRemote{c: rpc.NewClient(aconn)}
+	}
+	if a.UsersID != 0 {
+		uconn, err := s.broker.Dial(a.UsersID)
+		if err != nil {
+			*out = toRPC(err)
+			return nil
+		}
+		h.Users = &userRemote{c: rpc.NewClient(uconn)}
 	}
 	*out = toRPC(s.m.Starter.Start(context.Background(), h))
 	return nil
@@ -615,6 +680,10 @@ func (r *Remote) Start(_ context.Context, h ext.Host) error {
 	if h.API != nil {
 		args.APIID = r.broker.NextId()
 		go r.broker.AcceptAndServe(args.APIID, &APIServer{A: h.API})
+	}
+	if h.Users != nil {
+		args.UsersID = r.broker.NextId()
+		go r.broker.AcceptAndServe(args.UsersID, &UserHostServer{U: h.Users})
 	}
 	var out RPCError
 	if err := r.c.Call("Plugin.Start", args, &out); err != nil {

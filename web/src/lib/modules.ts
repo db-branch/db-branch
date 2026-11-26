@@ -4,8 +4,8 @@
 // the plan that replaced them).
 const plans: Record<string, [string, string]> = {
   lite: ["Lite", "history"],
-  team: ["Team", "users, roles, teams, history"],
-  business: ["Business", "users, roles, teams, SSO, audit, history"],
+  team: ["Team", "roles, teams, history"],
+  business: ["Business", "roles, teams, SSO, audit, history"],
 };
 
 export function planLabel(plan?: string): string {

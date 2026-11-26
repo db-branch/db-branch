@@ -20,6 +20,7 @@ type RestoreSummary struct {
 	ModuleData      int       `json:"module_data"`
 	RouteUsers      int       `json:"route_users"`
 	Runtimes        int       `json:"runtimes"`
+	Users           int       `json:"users"`
 	Admin           bool      `json:"admin"`
 	SkippedBases    []string  `json:"skipped_bases"`
 	SkippedBranches []string  `json:"skipped_branches"`

@@ -8,7 +8,7 @@ import { hooks, moduleFrame } from "./lib/hooks";
 import { chooseLanguage, language, remembered, setLanguage, t } from "./lib/i18n";
 import { GoContext } from "./lib/gocontext";
 import { disconnect, useLive } from "./lib/live";
-import { activeId, ADMIN, ancestorsOf, buildNav, expandFor, legacyRedirect, loadOpen, reconcileOpen, resolveRoute, saveOpen } from "./lib/nav";
+import { activeId, ADMIN, ancestorsOf, buildNav, expandFor, legacyRedirect, loadOpen, reconcileOpen, resolveRoute, saveOpen, usersRedirect } from "./lib/nav";
 import { Bases } from "./pages/Bases";
 import { BaseDetailPage } from "./pages/BaseDetailPage";
 import { BranchDetail } from "./pages/BranchDetail";
@@ -17,14 +17,16 @@ import { Cluster } from "./pages/Cluster";
 import { Modules } from "./pages/Modules";
 import { Settings } from "./pages/Settings";
 import { Storage } from "./pages/Storage";
+import { Users } from "./pages/Users";
 
-const pages = { branches: Branches, bases: Bases, storage: Storage, cluster: Cluster, settings: Settings } as const;
+const pages = { branches: Branches, bases: Bases, storage: Storage, cluster: Cluster, users: Users, settings: Settings } as const;
 type Page = keyof typeof pages;
 
 // Who sees each page: maintainers get branches, bases and the cluster;
-// settings are for admins.
-const pageAction: Record<Page, string> = { branches: "branch.read", bases: "base.read", storage: "cluster.read", cluster: "cluster.read", settings: "setting.write" };
-export const visiblePages = () => (Object.keys(pages) as Page[]).filter((p) => isAdmin() || can(pageAction[p]));
+// settings and users are for admins.
+const pageAction: Record<Page, string> = { branches: "branch.read", bases: "base.read", storage: "cluster.read", cluster: "cluster.read", users: "user.read", settings: "setting.write" };
+export const visiblePages = (hideUsers = false) =>
+  (Object.keys(pages) as Page[]).filter((p) => !(hideUsers && p === "users") && (isAdmin() || can(pageAction[p])));
 
 // The admin console lives under /admin (see lib/nav.ts); main.tsx imports it from here.
 export { ADMIN };
@@ -83,7 +85,7 @@ export function App() {
       </main>
     );
   if (state === "login" || !session)
-    return <Login onDone={enter} defaultUser="admin" hint={t("Forgot the admin password? sudo db-branch admin reset-password")} initialError={ssoError} />;
+    return <Login onDone={enter} defaultUser="" hint={t("Forgot the admin password? sudo db-branch admin reset-password")} initialError={ssoError} />;
   if (!managesBases()) return <NotAdmin session={session} onLogout={() => setState("login")} />;
   return (
     <Shell
@@ -216,9 +218,16 @@ function Shell({ session, onLogout }: { session: Session; onLogout: () => void }
   const { data: mods } = useLive(() => (canSettings ? api.modules() : Promise.resolve(undefined)), ["module"]);
   // A module's pages for those allowed its API (e.g. maintainers: auth's Users).
   const modPages = caps && (caps.pages ?? []).filter((p) => isAdmin() || can(`ext.${p.module}.read`));
+  const authPage = modPages?.find((p) => p.module === "auth");
   const enabled = canSettings ? mods?.items.filter((m) => m.wanted).map((m) => m.name) : [];
-  const ctx = { pages: visiblePages(), canSettings, enabled, modPages };
-  const route = resolveRoute(path, ctx);
+  const ctx = { pages: visiblePages(!!authPage), canSettings, enabled, modPages };
+  const authRedirect = usersRedirect(path, modPages);
+  useEffect(() => {
+    if (!authRedirect) return;
+    history.replaceState(null, "", authRedirect);
+    setPath(authRedirect);
+  }, [authRedirect]);
+  const route = resolveRoute(authRedirect ?? path, ctx);
   const nav = buildNav(ctx);
 
   const [open, setOpen] = useState(() => expandFor(loadOpen(), ancestorsOf(route)));

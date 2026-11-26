@@ -187,3 +187,85 @@ func (h *hostRemote) SharesBranches(_ context.Context, p ext.Principal, owner st
 	out, err := h.call(HostCall{Op: "shares-branches", Principal: p, Owner: owner})
 	return err == nil && out.Allowed
 }
+
+// UserHostCall is one UserStore operation over RPC.
+type UserHostCall struct {
+	Op                       string
+	ID, Client, Username, PW string
+	Create                   ext.UserCreate
+	Update                   ext.UserUpdate
+}
+
+// UserHostReply is its result.
+type UserHostReply struct {
+	User  ext.User
+	Users []ext.User
+	Err   RPCError
+}
+
+// UserHostServer serves the agent's UserStore to a module (agent side).
+type UserHostServer struct{ U ext.UserStore }
+
+// Call runs one UserStore operation.
+func (s *UserHostServer) Call(c UserHostCall, out *UserHostReply) error {
+	ctx, u := context.Background(), s.U
+	var err error
+	switch c.Op {
+	case "list":
+		out.Users, err = u.ListUsers(ctx)
+	case "get":
+		out.User, err = u.GetUser(ctx, c.ID)
+	case "create":
+		out.User, err = u.CreateUser(ctx, c.Create)
+	case "update":
+		out.User, err = u.UpdateUser(ctx, c.ID, c.Update)
+	case "delete":
+		err = u.DeleteUser(ctx, c.ID)
+	case "verify":
+		out.User, err = u.VerifyPassword(ctx, c.Client, c.Username, c.PW)
+	default:
+		err = fmt.Errorf("unknown user host operation %q", c.Op)
+	}
+	out.Err = toRPC(err)
+	return nil
+}
+
+type userRemote struct{ c *rpc.Client }
+
+func (u *userRemote) call(c UserHostCall) (UserHostReply, error) {
+	var out UserHostReply
+	if err := u.c.Call("Plugin.Call", c, &out); err != nil {
+		return out, errors.Join(errors.New("the agent did not answer"), err)
+	}
+	return out, out.Err.err()
+}
+
+func (u *userRemote) ListUsers(context.Context) ([]ext.User, error) {
+	out, err := u.call(UserHostCall{Op: "list"})
+	return out.Users, err
+}
+
+func (u *userRemote) GetUser(_ context.Context, id string) (ext.User, error) {
+	out, err := u.call(UserHostCall{Op: "get", ID: id})
+	return out.User, err
+}
+
+func (u *userRemote) CreateUser(_ context.Context, in ext.UserCreate) (ext.User, error) {
+	out, err := u.call(UserHostCall{Op: "create", Create: in})
+	return out.User, err
+}
+
+func (u *userRemote) UpdateUser(_ context.Context, id string, in ext.UserUpdate) (ext.User, error) {
+	out, err := u.call(UserHostCall{Op: "update", ID: id, Update: in})
+	return out.User, err
+}
+
+func (u *userRemote) DeleteUser(_ context.Context, id string) error {
+	_, err := u.call(UserHostCall{Op: "delete", ID: id})
+	return err
+}
+
+func (u *userRemote) VerifyPassword(_ context.Context, client, username, password string) (ext.User, error) {
+	out, err := u.call(UserHostCall{Op: "verify", Client: client, Username: username, PW: password})
+	return out.User, err
+}
