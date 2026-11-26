@@ -75,6 +75,37 @@ sudo db-branch init --pool <zpool>
 
 The repository signing key fingerprint is `3F404C4E5D49FA653F8385692C6E89E341D4D7A5`. `db-branch init` prints the initial admin password once.
 
+### Client CLI (macOS / Linux / Windows)
+
+To manage branches on a remote db-branch server or cluster from your laptop or CI runner without installing the server:
+
+```sh
+# macOS / Linux (quick install with SHA-256 verification)
+curl -fsSL https://raw.githubusercontent.com/db-branch/db-branch/main/scripts/install-client.sh | sh
+
+# macOS / Linux (Homebrew)
+brew install db-branch/tap/db-branch
+```
+
+```powershell
+# Windows (PowerShell quick install with SHA-256 verification)
+irm https://raw.githubusercontent.com/db-branch/db-branch/main/scripts/install-client.ps1 | iex
+
+# Windows (Scoop)
+scoop bucket add db-branch https://github.com/db-branch/scoop-bucket
+scoop install db-branch
+```
+
+Then sign in to your server over HTTPS and connect to a branch:
+
+```sh
+db-branch login --server https://<server>:7080
+db-branch branch create try --base prod --ttl 1h
+db-branch connect try --exec auto
+```
+
+See [docs/client-cli.md](docs/client-cli.md) for profiles, self-signed TLS fingerprint pinning (TOFU), CI environment variables, and GUI connection exports.
+
 ## First branch
 
 ```sh
