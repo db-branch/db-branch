@@ -7,6 +7,8 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+
+	"golang.org/x/term"
 )
 
 const maxInputLineBytes = 16 * 1024
@@ -37,27 +39,43 @@ func readLine(r io.Reader) (string, error) {
 }
 
 func termReadSecret(r io.Reader) (string, error) {
-	return termReadSecretWith(r, disableEcho)
+	return termReadSecretWith(r, term.IsTerminal, term.GetState, term.Restore, term.ReadPassword)
 }
 
-func termReadSecretWith(r io.Reader, noEcho func(*os.File) (func(), bool)) (string, error) {
+func termReadSecretWith(
+	r io.Reader,
+	isTerminal func(int) bool,
+	getState func(int) (*term.State, error),
+	restore func(int, *term.State) error,
+	readPassword func(int) ([]byte, error),
+) (string, error) {
 	if f, ok := r.(*os.File); ok && f != nil {
-		if restore, ok := noEcho(f); ok {
-			defer restore()
-			sigCh := make(chan os.Signal, 1)
-			signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-			done := make(chan struct{})
-			defer func() {
-				signal.Stop(sigCh)
-				close(done)
-			}()
-			go func() {
-				select {
-				case <-sigCh:
-					restore()
-				case <-done:
-				}
-			}()
+		fd := int(f.Fd())
+		if isTerminal(fd) {
+			if oldState, err := getState(fd); err == nil {
+				sigCh := make(chan os.Signal, 1)
+				signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+				done := make(chan struct{})
+				defer func() {
+					signal.Stop(sigCh)
+					close(done)
+				}()
+				go func() {
+					select {
+					case <-sigCh:
+						_ = restore(fd, oldState)
+					case <-done:
+					}
+				}()
+			}
+			b, err := readPassword(fd)
+			if err != nil {
+				return "", err
+			}
+			if len(b) > maxInputLineBytes {
+				return "", errors.New("input line exceeds maximum length")
+			}
+			return strings.TrimRight(string(b), "\r"), nil
 		}
 	}
 	return readLine(r)

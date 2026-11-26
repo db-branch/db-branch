@@ -218,4 +218,25 @@ describe("generateClientOutput", () => {
       expect(ja[spec.hintKey]).toBeTruthy();
     }
   });
+
+  it("generates standard deterministic UUID v5 identifiers and strips XML control characters", () => {
+    const out1 = generateClientOutput("datagrip", mysql, "alice-feat");
+    const out2 = generateClientOutput("datagrip", mysql, "alice-feat");
+    const uuidMatch = out1.file?.content.match(/uuid="([^"]+)"/);
+    expect(uuidMatch?.[1]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(out1.file?.content).toBe(out2.file?.content);
+
+    const wb = generateClientOutput("workbench", mysql, "alice-feat");
+    const wbId = wb.file?.content.match(/id="([^"]+)"/);
+    expect(wbId?.[1]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+
+    const ctrlConn = connectionFrom("mysql://u%00ser:pw@192.0.2.10:40001/db%07name");
+    const navOut = generateClientOutput("navicat", ctrlConn, "br\x1bname");
+    expect(navOut.file?.content).not.toMatch(/[\x00-\x08\x0b\x0c\x0e-\x1f]/);
+
+    // Cross-language RFC 4122 UUID v5 vector matching Go uuid.NewSHA1(uuid.NameSpaceURL, ...).
+    const vecConn = connectionFrom("mysql://alice:pw@192.0.2.10:40001/");
+    const vecOut = generateClientOutput("datagrip", vecConn, "alice");
+    expect(vecOut.file?.content).toContain('uuid="070efc39-c71a-54ec-b5c7-5c66660f4b2e"');
+  });
 });

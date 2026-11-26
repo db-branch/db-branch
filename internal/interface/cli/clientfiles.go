@@ -7,13 +7,17 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 var dbeaverLocalKey = []byte{
@@ -33,26 +37,133 @@ func sanitizeFilename(name string) string {
 }
 
 func deterministicUUID(seed string) string {
-	words := [4]uint32{0x811c9dc5, 0x01000193, 0x9e3779b9, 0x85ebca6b}
-	for i := 0; i < len(seed); i++ {
-		c := uint32(seed[i])
-		for j := range words {
-			words[j] = (words[j] ^ (c + uint32(j)*31)) * 0x01000193
-		}
-	}
-	h := fmt.Sprintf("%08x%08x%08x%08x", words[0], words[1], words[2], words[3])
-	return fmt.Sprintf("%s-%s-4%s-8%s-%s", h[0:8], h[8:12], h[13:16], h[17:20], h[20:32])
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(seed)).String()
 }
 
-var xmlReplacer = strings.NewReplacer(
-	"&", "&amp;",
-	"<", "&lt;",
-	">", "&gt;",
-	`"`, "&quot;",
-	"'", "&apos;",
-)
+func marshalXML(header string, v any) ([]byte, error) {
+	body, err := xml.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, len(header)+len(body)+1)
+	out = append(out, header...)
+	out = append(out, body...)
+	out = append(out, '\n')
+	return out, nil
+}
 
-func xmlEscape(s string) string { return xmlReplacer.Replace(s) }
+type dbeaverMetaArchive struct {
+	XMLName   xml.Name             `xml:"archive"`
+	Version   string               `xml:"version,attr"`
+	Source    dbeaverMetaSource    `xml:"source"`
+	Libraries struct{}             `xml:"libraries"`
+	Projects  []dbeaverMetaProject `xml:"projects>project"`
+}
+
+type dbeaverMetaSource struct {
+	Time    string `xml:"time,attr"`
+	Address string `xml:"address,attr"`
+	Host    string `xml:"host,attr"`
+}
+
+type dbeaverMetaProject struct {
+	Name        string                `xml:"name,attr"`
+	Description string                `xml:"description,attr"`
+	Resources   []dbeaverMetaResource `xml:"resource"`
+}
+
+type dbeaverMetaResource struct {
+	Name      string                `xml:"name,attr"`
+	Resources []dbeaverMetaResource `xml:"resource,omitempty"`
+}
+
+type dbeaverProjectDesc struct {
+	XMLName   xml.Name `xml:"projectDescription"`
+	Name      string   `xml:"name"`
+	Comment   string   `xml:"comment"`
+	Projects  struct{} `xml:"projects"`
+	BuildSpec struct{} `xml:"buildSpec"`
+	Natures   []string `xml:"natures>nature"`
+}
+
+type dataGripProject struct {
+	XMLName   xml.Name          `xml:"project"`
+	Version   string            `xml:"version,attr"`
+	Component dataGripComponent `xml:"component"`
+}
+
+type dataGripComponent struct {
+	Name           string             `xml:"name,attr"`
+	Format         string             `xml:"format,attr"`
+	MultifileModel string             `xml:"multifile-model,attr"`
+	DataSource     dataGripDataSource `xml:"data-source"`
+}
+
+type dataGripDataSource struct {
+	Source      string `xml:"source,attr"`
+	Name        string `xml:"name,attr"`
+	UUID        string `xml:"uuid,attr"`
+	DriverRef   string `xml:"driver-ref"`
+	Synchronize bool   `xml:"synchronize"`
+	JDBCDriver  string `xml:"jdbc-driver"`
+	JDBCURL     string `xml:"jdbc-url"`
+	UserName    string `xml:"user-name"`
+	WorkingDir  string `xml:"working-dir"`
+}
+
+type navicatConnections struct {
+	XMLName    xml.Name          `xml:"Connections"`
+	Ver        string            `xml:"Ver,attr"`
+	Connection navicatConnection `xml:"Connection"`
+}
+
+type navicatConnection struct {
+	ConnectionName string `xml:"ConnectionName,attr"`
+	ConnType       string `xml:"ConnType,attr"`
+	Host           string `xml:"Host,attr"`
+	Port           int    `xml:"Port,attr"`
+	Database       string `xml:"Database,attr"`
+	UserName       string `xml:"UserName,attr"`
+	SSH            string `xml:"SSH,attr"`
+	SavePassword   string `xml:"SavePassword,attr"`
+}
+
+type workbenchData struct {
+	XMLName   xml.Name      `xml:"data"`
+	GRTFormat string        `xml:"grt_format,attr"`
+	List      workbenchList `xml:"value"`
+}
+
+type workbenchList struct {
+	Type              string           `xml:"type,attr"`
+	ContentType       string           `xml:"content-type,attr"`
+	ContentStructName string           `xml:"content-struct-name,attr"`
+	Connection        workbenchConnObj `xml:"value"`
+}
+
+type workbenchConnObj struct {
+	Type           string `xml:"type,attr"`
+	StructName     string `xml:"struct-name,attr"`
+	ID             string `xml:"id,attr"`
+	StructChecksum string `xml:"struct-checksum,attr"`
+	Items          []any
+}
+
+type workbenchLink struct {
+	XMLName    xml.Name `xml:"link"`
+	Type       string   `xml:"type,attr"`
+	StructName string   `xml:"struct-name,attr"`
+	Key        string   `xml:"key,attr"`
+	Text       string   `xml:",chardata"`
+}
+
+type workbenchValue struct {
+	XMLName  xml.Name         `xml:"value"`
+	Type     string           `xml:"type,attr"`
+	Key      string           `xml:"key,attr"`
+	Text     string           `xml:",chardata"`
+	Children []workbenchValue `xml:"value,omitempty"`
+}
 
 func fileStem(conn branchConnection) string {
 	stem := sanitizeFilename(conn.Branch)
@@ -106,7 +217,7 @@ func buildTablePlusURL(conn branchConnection, includePassword bool) string {
 		conn.Engine, encodeURIComponent(conn.User), pwPart, formatHostPort(conn.Host, conn.Port), dbPart)
 }
 
-func encryptDBeaverCredentials(plaintextJSON string) []byte {
+func encryptDBeaverCredentials(plaintextJSON string) ([]byte, error) {
 	raw := []byte(plaintextJSON)
 	pad := aes.BlockSize - (len(raw) % aes.BlockSize)
 	padded := make([]byte, len(raw)+pad)
@@ -115,12 +226,17 @@ func encryptDBeaverCredentials(plaintextJSON string) []byte {
 		padded[i] = byte(pad)
 	}
 	iv := make([]byte, aes.BlockSize)
-	_, _ = rand.Read(iv)
-	blk, _ := aes.NewCipher(dbeaverLocalKey)
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return nil, err
+	}
+	blk, err := aes.NewCipher(dbeaverLocalKey)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]byte, aes.BlockSize+len(padded))
 	copy(out[:aes.BlockSize], iv)
 	cipher.NewCBCEncrypter(blk, iv).CryptBlocks(out[aes.BlockSize:], padded)
-	return out
+	return out, nil
 }
 
 func buildDBeaverDBP(conn branchConnection, includePassword bool) ([]byte, error) {
@@ -166,42 +282,43 @@ func buildDBeaverDBP(conn branchConnection, includePassword bool) ([]byte, error
 	if includePassword {
 		credEntry["password"] = conn.Password
 	}
-	credJSON, _ := json.Marshal(map[string]any{
+	credJSON, err := json.Marshal(map[string]any{
 		connID: map[string]any{"#connection": credEntry},
 	})
-	encCreds := encryptDBeaverCredentials(string(credJSON))
+	if err != nil {
+		return nil, err
+	}
+	encCreds, err := encryptDBeaverCredentials(string(credJSON))
+	if err != nil {
+		return nil, err
+	}
 
-	metaXML := strings.Join([]string{
-		`<?xml version="1.0" encoding="UTF-8"?>`,
-		`<archive version="1">`,
-		`  <source time="0" address="127.0.0.1" host="localhost"/>`,
-		`  <libraries/>`,
-		`  <projects>`,
-		fmt.Sprintf(`    <project name="%s" description="">`, xmlEscape(proj)),
-		`      <resource name=".project"/>`,
-		`      <resource name=".dbeaver">`,
-		`        <resource name="data-sources.json"/>`,
-		`        <resource name="credentials-config.json"/>`,
-		`      </resource>`,
-		`    </project>`,
-		`  </projects>`,
-		`</archive>`,
-		"",
-	}, "\n")
+	metaXML, err := marshalXML(xml.Header, dbeaverMetaArchive{
+		Version: "1",
+		Source:  dbeaverMetaSource{Time: "0", Address: "127.0.0.1", Host: "localhost"},
+		Projects: []dbeaverMetaProject{{
+			Name:        proj,
+			Description: "",
+			Resources: []dbeaverMetaResource{
+				{Name: ".project"},
+				{Name: ".dbeaver", Resources: []dbeaverMetaResource{
+					{Name: "data-sources.json"},
+					{Name: "credentials-config.json"},
+				}},
+			},
+		}},
+	})
+	if err != nil {
+		return nil, err
+	}
 
-	projectXML := strings.Join([]string{
-		`<?xml version="1.0" encoding="UTF-8"?>`,
-		`<projectDescription>`,
-		fmt.Sprintf(`  <name>%s</name>`, xmlEscape(proj)),
-		`  <comment></comment>`,
-		`  <projects/>`,
-		`  <buildSpec/>`,
-		`  <natures>`,
-		`    <nature>org.jkiss.dbeaver.DBeaverNature</nature>`,
-		`  </natures>`,
-		`</projectDescription>`,
-		"",
-	}, "\n")
+	projectXML, err := marshalXML(xml.Header, dbeaverProjectDesc{
+		Name:    proj,
+		Natures: []string{"org.jkiss.dbeaver.DBeaverNature"},
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
@@ -211,8 +328,8 @@ func buildDBeaverDBP(conn branchConnection, includePassword bool) ([]byte, error
 		data []byte
 		dir  bool
 	}{
-		{"meta.xml", []byte(metaXML), false},
-		{prefix + "/.project", []byte(projectXML), false},
+		{"meta.xml", metaXML, false},
+		{prefix + "/.project", projectXML, false},
 		{prefix + "/.dbeaver/", nil, true},
 		{prefix + "/.dbeaver/data-sources.json", dsJSON, false},
 		{prefix + "/.dbeaver/credentials-config.json", encCreds, false},
@@ -296,26 +413,32 @@ func generateClientFile(conn branchConnection, format string, includePassword bo
 		if !ok {
 			return clientFilePayload{}, fmt.Errorf("datagrip format does not support engine %q", conn.Engine)
 		}
-		uuid := deterministicUUID(fmt.Sprintf("datagrip:%s:%s:%d:%s", name, conn.Host, conn.Port, conn.User))
-		xml := strings.Join([]string{
-			`<?xml version="1.0" encoding="UTF-8"?>`,
-			`<project version="4">`,
-			`  <component name="DataSourceManagerImpl" format="xml" multifile-model="true">`,
-			fmt.Sprintf(`    <data-source source="LOCAL" name="%s" uuid="%s">`, xmlEscape(name), uuid),
-			fmt.Sprintf(`      <driver-ref>%s</driver-ref>`, drv[0]),
-			`      <synchronize>true</synchronize>`,
-			fmt.Sprintf(`      <jdbc-driver>%s</jdbc-driver>`, drv[1]),
-			fmt.Sprintf(`      <jdbc-url>%s</jdbc-url>`, xmlEscape(jdbcBaseURL(conn))),
-			fmt.Sprintf(`      <user-name>%s</user-name>`, xmlEscape(conn.User)),
-			`      <working-dir>$ProjectFileDir$</working-dir>`,
-			`    </data-source>`,
-			`  </component>`,
-			`</project>`,
-			"",
-		}, "\n")
+		id := deterministicUUID(fmt.Sprintf("datagrip:%s:%s:%d:%s", name, conn.Host, conn.Port, conn.User))
+		xmlData, err := marshalXML(xml.Header, dataGripProject{
+			Version: "4",
+			Component: dataGripComponent{
+				Name:           "DataSourceManagerImpl",
+				Format:         "xml",
+				MultifileModel: "true",
+				DataSource: dataGripDataSource{
+					Source:      "LOCAL",
+					Name:        name,
+					UUID:        id,
+					DriverRef:   drv[0],
+					Synchronize: true,
+					JDBCDriver:  drv[1],
+					JDBCURL:     jdbcBaseURL(conn),
+					UserName:    conn.User,
+					WorkingDir:  "$ProjectFileDir$",
+				},
+			},
+		})
+		if err != nil {
+			return clientFilePayload{}, err
+		}
 		return clientFilePayload{
 			defaultName: "dataSources-" + stem + ".xml",
-			data:        []byte(xml),
+			data:        xmlData,
 			hint:        "Save or merge into .idea/dataSources.xml in DataGrip / JetBrains.",
 			extraNote:   "JDBC URL: " + buildJDBCURL(conn, includePassword),
 			warnPW:      includePassword,
@@ -327,17 +450,25 @@ func generateClientFile(conn branchConnection, format string, includePassword bo
 		if !ok {
 			return clientFilePayload{}, fmt.Errorf("navicat format does not support engine %q", conn.Engine)
 		}
-		xml := strings.Join([]string{
-			`<?xml version="1.0" encoding="UTF-8"?>`,
-			`<Connections Ver="1.5">`,
-			fmt.Sprintf(`  <Connection ConnectionName="%s" ConnType="%s" Host="%s" Port="%d" Database="%s" UserName="%s" SSH="false" SavePassword="false"/>`,
-				xmlEscape(name), ct, xmlEscape(conn.Host), conn.Port, xmlEscape(conn.Database), xmlEscape(conn.User)),
-			`</Connections>`,
-			"",
-		}, "\n")
+		xmlData, err := marshalXML(xml.Header, navicatConnections{
+			Ver: "1.5",
+			Connection: navicatConnection{
+				ConnectionName: name,
+				ConnType:       ct,
+				Host:           conn.Host,
+				Port:           conn.Port,
+				Database:       conn.Database,
+				UserName:       conn.User,
+				SSH:            "false",
+				SavePassword:   "false",
+			},
+		})
+		if err != nil {
+			return clientFilePayload{}, err
+		}
 		return clientFilePayload{
 			defaultName: stem + ".ncx",
-			data:        []byte(xml),
+			data:        xmlData,
 			hint:        "Import via File -> Import Connections in Navicat.",
 		}, nil
 
@@ -376,32 +507,45 @@ func generateClientFile(conn branchConnection, format string, includePassword bo
 			return clientFilePayload{}, fmt.Errorf("workbench format only supports mysql/mariadb (got %q)", conn.Engine)
 		}
 		id := deterministicUUID(fmt.Sprintf("workbench:%s:%s:%d:%s", name, conn.Host, conn.Port, conn.User))
-		xml := strings.Join([]string{
-			`<?xml version="1.0"?>`,
-			`<data grt_format="2.0">`,
-			`  <value type="list" content-type="object" content-struct-name="db.mgmt.Connection">`,
-			fmt.Sprintf(`    <value type="object" struct-name="db.mgmt.Connection" id="%s" struct-checksum="0x96ba47d8">`, id),
-			`      <link type="object" struct-name="db.mgmt.Driver" key="driver">com.mysql.rdbms.mysql.driver.native</link>`,
-			fmt.Sprintf(`      <value type="string" key="hostIdentifier">%s</value>`, xmlEscape("Mysql@"+formatHostPort(conn.Host, conn.Port))),
-			`      <value type="int" key="isDefault">0</value>`,
-			`      <value type="dict" key="modules"/>`,
-			`      <value type="dict" key="parameterValues">`,
-			fmt.Sprintf(`        <value type="string" key="defaultSchema">%s</value>`, xmlEscape(conn.Database)),
-			fmt.Sprintf(`        <value type="string" key="hostName">%s</value>`, xmlEscape(conn.Host)),
-			fmt.Sprintf(`        <value type="string" key="name">%s</value>`, xmlEscape(name)),
-			fmt.Sprintf(`        <value type="int" key="port">%d</value>`, conn.Port),
-			fmt.Sprintf(`        <value type="string" key="userName">%s</value>`, xmlEscape(conn.User)),
-			`        <value type="string" key="useSSL">IF_AVAILABLE</value>`,
-			`      </value>`,
-			`      <link type="object" struct-name="db.mgmt.ServerInstance" key="serverInstance"/>`,
-			`    </value>`,
-			`  </value>`,
-			`</data>`,
-			"",
-		}, "\n")
+		xmlData, err := marshalXML("<?xml version=\"1.0\"?>\n", workbenchData{
+			GRTFormat: "2.0",
+			List: workbenchList{
+				Type:              "list",
+				ContentType:       "object",
+				ContentStructName: "db.mgmt.Connection",
+				Connection: workbenchConnObj{
+					Type:           "object",
+					StructName:     "db.mgmt.Connection",
+					ID:             id,
+					StructChecksum: "0x96ba47d8",
+					Items: []any{
+						workbenchLink{Type: "object", StructName: "db.mgmt.Driver", Key: "driver", Text: "com.mysql.rdbms.mysql.driver.native"},
+						workbenchValue{Type: "string", Key: "hostIdentifier", Text: "Mysql@" + formatHostPort(conn.Host, conn.Port)},
+						workbenchValue{Type: "int", Key: "isDefault", Text: "0"},
+						workbenchValue{Type: "dict", Key: "modules"},
+						workbenchValue{
+							Type: "dict",
+							Key:  "parameterValues",
+							Children: []workbenchValue{
+								{Type: "string", Key: "defaultSchema", Text: conn.Database},
+								{Type: "string", Key: "hostName", Text: conn.Host},
+								{Type: "string", Key: "name", Text: name},
+								{Type: "int", Key: "port", Text: strconv.Itoa(conn.Port)},
+								{Type: "string", Key: "userName", Text: conn.User},
+								{Type: "string", Key: "useSSL", Text: "IF_AVAILABLE"},
+							},
+						},
+						workbenchLink{Type: "object", StructName: "db.mgmt.ServerInstance", Key: "serverInstance"},
+					},
+				},
+			},
+		})
+		if err != nil {
+			return clientFilePayload{}, err
+		}
 		return clientFilePayload{
 			defaultName: stem + "-workbench-connections.xml",
-			data:        []byte(xml),
+			data:        xmlData,
 			hint:        "Rename/merge into connections.xml in your MySQL Workbench config folder.",
 		}, nil
 

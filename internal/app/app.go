@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"os/user"
@@ -100,6 +101,19 @@ func loadNode(cfg config.Config) (node, error) {
 	return n, nil
 }
 
+func artifactHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 15 * time.Minute,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   15 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		},
+	}
+}
+
 // New wires everything for cfg.
 func New(cfg config.Config) (*App, error) {
 	nd, err := loadNode(cfg)
@@ -131,7 +145,7 @@ func New(cfg config.Config) (*App, error) {
 		Config: cfg,
 		Runtimes: runtime.Service{
 			Catalog: cat,
-			Cache:   artifact.Cache{Dir: filepath.Join(cfg.DataDir, "artifacts"), Client: http.DefaultClient},
+			Cache:   artifact.Cache{Dir: filepath.Join(cfg.DataDir, "artifacts"), Client: artifactHTTPClient()},
 			Store:   store,
 			Arch:    goruntime.GOARCH,
 			Distro:  distro,

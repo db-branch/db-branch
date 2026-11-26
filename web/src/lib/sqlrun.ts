@@ -27,11 +27,13 @@ export function splitStatements(text: string, engine?: string): string[] {
   const out: string[] = [];
   let start = 0;
   let code = false; // the current statement has something other than comments
+  let inCondComment = false;
   const push = (end: number) => {
     const part = text.slice(start, end).trim();
     if (part && code) out.push(part);
     start = end + 1;
     code = false;
+    inCondComment = false;
   };
   let i = 0;
   while (i < text.length) {
@@ -50,13 +52,27 @@ export function splitStatements(text: string, engine?: string): string[] {
         } else i++;
       }
       i++;
-    } else if (two === "--" || (c === "#" && engine !== "postgres" && (engine === "mysql" || (text[i + 1] !== ">" && text[i + 1] !== "-")))) {
+    } else if (inCondComment && two === "*/") {
+      inCondComment = false;
+      i += 2;
+    } else if (
+      (two === "--" && (engine !== "mysql" || i + 2 === text.length || /[\s\x00-\x1f]/.test(text[i + 2]))) ||
+      (c === "#" && engine !== "postgres" && (engine === "mysql" || (text[i + 1] !== ">" && text[i + 1] !== "-")))
+    ) {
       const nl = text.indexOf("\n", i);
       i = nl < 0 ? text.length : nl;
-    } else if (two === "/*") {
+    } else if (!inCondComment && two === "/*") {
       if (engine === "mysql") {
-        const end = text.indexOf("*/", i + 2);
-        i = end < 0 ? text.length : end + 2;
+        if (text.startsWith("/*!", i)) {
+          inCondComment = true;
+          i += 3;
+          for (let d = 0; d < 5 && i < text.length && text[i] >= "0" && text[i] <= "9"; d++) {
+            i++;
+          }
+        } else {
+          const end = text.indexOf("*/", i + 2);
+          i = end < 0 ? text.length : end + 2;
+        }
       } else {
         let depth = 1;
         i += 2;
@@ -79,7 +95,7 @@ export function splitStatements(text: string, engine?: string): string[] {
         const end = text.indexOf(m[0], i + m[0].length);
         i = end < 0 ? text.length : end + m[0].length;
       } else i++;
-    } else if (c === ";") {
+    } else if (c === ";" && !inCondComment) {
       push(i);
       i++;
     } else {

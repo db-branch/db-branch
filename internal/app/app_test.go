@@ -2,12 +2,14 @@ package app_test
 
 import (
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"testing"
 
 	"github.com/db-branch/db-branch/internal/app"
+	"github.com/db-branch/db-branch/internal/infrastructure/artifact"
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 )
 
@@ -102,5 +104,23 @@ func TestNew_ノードファイルが読めなければエラーにする(t *tes
 	_ = os.MkdirAll(filepath.Join(c.DataDir, "node.json", "x"), 0o755)
 	if _, err := app.New(c); err == nil {
 		t.Fatal("want error")
+	}
+}
+
+func TestNew_アーティファクト取得クライアントはDefaultClientではなくタイムアウトを持つ(t *testing.T) {
+	a, err := app.New(cfg(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache, ok := a.Runtimes.Cache.(artifact.Cache)
+	if !ok {
+		t.Fatalf("unexpected Cache type: %T", a.Runtimes.Cache)
+	}
+	hc := cache.Client
+	if hc == nil || hc == http.DefaultClient {
+		t.Fatalf("artifact HTTP client must not be nil or http.DefaultClient: %v", hc)
+	}
+	if hc.Timeout <= 0 || hc.Transport == nil {
+		t.Fatalf("artifact HTTP client missing timeout or transport: Timeout=%v Transport=%v", hc.Timeout, hc.Transport)
 	}
 }

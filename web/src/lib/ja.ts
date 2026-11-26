@@ -532,4 +532,6 @@ export const ja: Record<string, string> = {
   "Removes the user account and revokes all active sessions and personal API tokens.":
     "このユーザーを削除し、有効なセッションと個人用 API トークンをすべて失効させます。",
   "Shown only once for {id}. Share it securely with the user.": "{id} 用のパスワードです（1 回のみ表示）。安全な方法で本人に共有してください。",
+  "Random number generation is unavailable in this browser; cannot encrypt credentials.":
+    "このブラウザでは乱数生成を利用できないため、認証情報を暗号化できません。",
 };
