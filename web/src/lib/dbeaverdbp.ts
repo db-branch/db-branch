@@ -1,6 +1,8 @@
 // Minimal synchronous PKZIP (store-only) + DBeaver AES-128-CBC credentials
 // builder so .dbp archives can be generated in the browser without external
 // dependencies and imported by both DBeaver and Chat2DB.
+import { LocalizedError } from "./errors";
+import { t } from "./i18n";
 
 const DBEAVER_LOCAL_KEY = new Uint8Array([
   0xba, 0xbb, 0x4a, 0x9f, 0x77, 0x4a, 0xb8, 0x53,
@@ -76,10 +78,11 @@ function aes128EncryptBlock(block: Uint8Array, rk: Uint8Array, out: Uint8Array, 
 }
 
 function randomIv(): Uint8Array {
-  const iv = new Uint8Array(16);
-  if (typeof globalThis.crypto?.getRandomValues === "function") {
-    globalThis.crypto.getRandomValues(iv);
+  if (typeof globalThis.crypto?.getRandomValues !== "function") {
+    throw new LocalizedError(t("Random number generation is unavailable in this browser; cannot encrypt credentials."));
   }
+  const iv = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(iv);
   return iv;
 }
 
@@ -105,11 +108,16 @@ export function encryptDBeaverCredentials(plaintextJson: string, iv: Uint8Array 
 
 export function xmlEscape(s: string): string {
   return s
+    // Replace characters forbidden by XML 1.0 (0x00-0x08, 0x0B-0x0C, 0x0E-0x1F, 0xFFFE-0xFFFF) with U+FFFD, matching Go encoding/xml.
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]/g, "\ufffd")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
+    .replace(/'/g, "&apos;")
+    .replace(/\t/g, "&#x9;")
+    .replace(/\n/g, "&#xA;")
+    .replace(/\r/g, "&#xD;");
 }
 
 const CRC_TABLE = (() => {

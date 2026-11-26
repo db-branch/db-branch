@@ -53,17 +53,85 @@ export function sanitizeFilename(name: string): string {
   return cleaned || "branch";
 }
 
-// Deterministic UUID v4-shaped identifier so generated XML files remain stable across renders/tests.
-function deterministicUuid(seed: string): string {
-  const words = [0x811c9dc5, 0x01000193, 0x9e3779b9, 0x85ebca6b];
-  for (let i = 0; i < seed.length; i++) {
-    const c = seed.charCodeAt(i);
-    for (let j = 0; j < words.length; j++) {
-      words[j] = Math.imul(words[j] ^ (c + j * 31), 0x01000193) >>> 0;
+// RFC 4122 NameSpace_URL (6ba7b811-9dad-11d1-80b4-00c04fd430c8).
+const UUID_NAMESPACE_URL = new Uint8Array([0x6b, 0xa7, 0xb8, 0x11, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8]);
+
+function rotl32(v: number, n: number): number {
+  return ((v << n) | (v >>> (32 - n))) >>> 0;
+}
+
+function sha1(data: Uint8Array): Uint8Array {
+  const bitLen = data.length * 8;
+  const paddedLen = Math.ceil((data.length + 9) / 64) * 64;
+  const msg = new Uint8Array(paddedLen);
+  msg.set(data);
+  msg[data.length] = 0x80;
+  const dv = new DataView(msg.buffer);
+  dv.setUint32(paddedLen - 8, Math.floor(bitLen / 0x100000000), false);
+  dv.setUint32(paddedLen - 4, bitLen >>> 0, false);
+
+  let h0 = 0x67452301;
+  let h1 = 0xefcdab89;
+  let h2 = 0x98badcfe;
+  let h3 = 0x10325476;
+  let h4 = 0xc3d2e1f0;
+  const w = new Uint32Array(80);
+
+  for (let off = 0; off < paddedLen; off += 64) {
+    for (let i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4, false);
+    for (let i = 16; i < 80; i++) w[i] = rotl32(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+
+    let a = h0, b = h1, c = h2, d = h3, e = h4;
+    for (let i = 0; i < 80; i++) {
+      let f: number, k: number;
+      if (i < 20) {
+        f = (b & c) | (~b & d);
+        k = 0x5a827999;
+      } else if (i < 40) {
+        f = b ^ c ^ d;
+        k = 0x6ed9eba1;
+      } else if (i < 60) {
+        f = (b & c) | (b & d) | (c & d);
+        k = 0x8f1bbcdc;
+      } else {
+        f = b ^ c ^ d;
+        k = 0xca62c1d6;
+      }
+      const temp = (rotl32(a, 5) + f + e + k + w[i]) >>> 0;
+      e = d;
+      d = c;
+      c = rotl32(b, 30);
+      b = a;
+      a = temp;
     }
+    h0 = (h0 + a) >>> 0;
+    h1 = (h1 + b) >>> 0;
+    h2 = (h2 + c) >>> 0;
+    h3 = (h3 + d) >>> 0;
+    h4 = (h4 + e) >>> 0;
   }
-  const hex = words.map((w) => w.toString(16).padStart(8, "0")).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+
+  const out = new Uint8Array(20);
+  const ov = new DataView(out.buffer);
+  ov.setUint32(0, h0, false);
+  ov.setUint32(4, h1, false);
+  ov.setUint32(8, h2, false);
+  ov.setUint32(12, h3, false);
+  ov.setUint32(16, h4, false);
+  return out;
+}
+
+// Deterministic RFC 4122 UUID v5 (SHA-1) matching Go's uuid.NewSHA1(uuid.NameSpaceURL, seed).
+function deterministicUuid(seed: string): string {
+  const seedBytes = new TextEncoder().encode(seed);
+  const input = new Uint8Array(UUID_NAMESPACE_URL.length + seedBytes.length);
+  input.set(UUID_NAMESPACE_URL, 0);
+  input.set(seedBytes, UUID_NAMESPACE_URL.length);
+  const hash = sha1(input).subarray(0, 16);
+  hash[6] = (hash[6] & 0x0f) | 0x50;
+  hash[8] = (hash[8] & 0x3f) | 0x80;
+  const hex = Array.from(hash, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
 // connectionForProxy adapts a direct branch Connection to target its ProxySQL endpoint.

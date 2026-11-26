@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Branch } from "../api";
-import { BranchesTable } from "./Branches";
+import { BranchesTable, parseTTL } from "./Branches";
 
 const branch = (over: Partial<Branch> = {}): Branch => ({
   name: "alice-dev",
@@ -41,5 +41,16 @@ describe("BranchesTable", () => {
     expect(html).toContain("3h ago");
     expect(html).toContain("12 MiB");
     expect(html).toContain("—");
+  });
+});
+
+describe("parseTTL", () => {
+  it("rejects all zero durations and accepts positive durations including days", () => {
+    for (const bad of ["", "0h", "0m", "0s", "0h0m", "0.0h", "0d", "00d", "abc"]) {
+      expect(parseTTL(bad)).toBeNull();
+    }
+    expect(parseTTL("2d")).toBe("48h");
+    expect(parseTTL("0h1m")).toBe("0h1m");
+    expect(parseTTL("1.5h")).toBe("1.5h");
   });
 });

@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -32,14 +33,16 @@ type CA struct {
 	keyPEM  []byte
 }
 
-func serial() *big.Int {
-	n, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
-	return n
+func serial(rng io.Reader) (*big.Int, error) {
+	return rand.Int(rng, new(big.Int).Lsh(big.NewInt(1), 127))
 }
 
-func keyPEM(k *ecdsa.PrivateKey) []byte {
-	der, _ := x509.MarshalECPrivateKey(k)
-	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+func keyPEM(k *ecdsa.PrivateKey) ([]byte, error) {
+	der, err := x509.MarshalECPrivateKey(k)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), nil
 }
 
 func writeFiles(dir string, files map[string][]byte) error {
@@ -58,14 +61,47 @@ func writeFiles(dir string, files map[string][]byte) error {
 	return nil
 }
 
+func issueCert(rng io.Reader, tmpl, parent *x509.Certificate, signer *ecdsa.PrivateKey) (certPEM, kp []byte, cert *x509.Certificate, key *ecdsa.PrivateKey, err error) {
+	key, err = ecdsa.GenerateKey(elliptic.P256(), rng)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	sn, err := serial(rng)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	tmpl.SerialNumber = sn
+	if parent == nil {
+		parent = tmpl
+		signer = key
+	}
+	der, err := x509.CreateCertificate(rng, tmpl, parent, &key.PublicKey, signer)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	kp, err = keyPEM(key)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	cert, err = x509.ParseCertificate(der)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), kp, cert, key, nil
+}
+
 // InitCA creates a new CA in dir. It refuses to overwrite an existing one.
 func InitCA(dir string) (*CA, error) {
+	return initCA(dir, rand.Reader)
+}
+
+func initCA(dir string, rng io.Reader) (*CA, error) {
 	if _, err := os.Stat(filepath.Join(dir, "ca.pem")); err == nil {
 		return nil, fmt.Errorf("a cluster CA already exists in %s", dir)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
 	}
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	tmpl := &x509.Certificate{
-		SerialNumber:          serial(),
 		Subject:               pkix.Name{CommonName: "db-branch cluster CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().AddDate(20, 0, 0),
@@ -73,9 +109,15 @@ func InitCA(dir string) (*CA, error) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}
-	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	ca, _ := ParseCA(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), keyPEM(key))
-	return ca, ca.Save(dir)
+	certPEM, kp, cert, key, err := issueCert(rng, tmpl, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	ca := &CA{cert: cert, key: key, certPEM: certPEM, keyPEM: kp}
+	if err := ca.Save(dir); err != nil {
+		return nil, err
+	}
+	return ca, nil
 }
 
 // ParseCA reads a CA from PEM data (as handed to a joining node).
@@ -140,15 +182,17 @@ type NodeCert struct {
 
 // IssueNode creates and saves a certificate for a node, valid as both client and server.
 func (ca *CA) IssueNode(dir, name string, hosts []string) (*NodeCert, error) {
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	return ca.issueNode(dir, name, hosts, rand.Reader)
+}
+
+func (ca *CA) issueNode(dir, name string, hosts []string, rng io.Reader) (*NodeCert, error) {
 	tmpl := &x509.Certificate{
-		SerialNumber: serial(),
-		Subject:      pkix.Name{CommonName: name},
-		DNSNames:     []string{name},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().AddDate(10, 0, 0),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		Subject:     pkix.Name{CommonName: name},
+		DNSNames:    []string{name},
+		NotBefore:   time.Now().Add(-time.Hour),
+		NotAfter:    time.Now().AddDate(10, 0, 0),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 	}
 	for _, h := range hosts {
 		if ip := net.ParseIP(h); ip != nil {
@@ -157,9 +201,11 @@ func (ca *CA) IssueNode(dir, name string, hosts []string) (*NodeCert, error) {
 			tmpl.DNSNames = append(tmpl.DNSNames, h)
 		}
 	}
-	der, _ := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	if err := writeFiles(dir, map[string][]byte{"node.pem": certPEM, "node-key.pem": keyPEM(key)}); err != nil {
+	certPEM, kp, _, _, err := issueCert(rng, tmpl, ca.cert, ca.key)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeFiles(dir, map[string][]byte{"node.pem": certPEM, "node-key.pem": kp}); err != nil {
 		return nil, err
 	}
 	return LoadNode(dir, ca)

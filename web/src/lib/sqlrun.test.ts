@@ -97,5 +97,22 @@ describe("TestSplitStatements_PostgreSQLのJSONBシャープ演算子と末尾�
     expect(splitStatements("/* only /* nested; */ comment; */", "postgres")).toEqual([]);
     expect(splitStatements("/* a /* b */ SELECT 1; SELECT 2", "mysql")).toEqual(["/* a /* b */ SELECT 1", "SELECT 2"]);
   });
+
+  it("keeps MySQL conditional comments /*! ... */ and ignores -- without trailing whitespace in MySQL", () => {
+    expect(splitStatements("/*!40101 SET NAMES utf8mb4 */; SELECT 1;", "mysql")).toEqual([
+      "/*!40101 SET NAMES utf8mb4 */",
+      "SELECT 1",
+    ]);
+    expect(splitStatements("/*!50000 SELECT 1 */;", "mysql")).toEqual(["/*!50000 SELECT 1 */"]);
+    expect(splitStatements("/*!50000 SELECT '*/' */; SELECT 2;", "mysql")).toEqual([
+      "/*!50000 SELECT '*/' */",
+      "SELECT 2",
+    ]);
+    expect(splitStatements("/*!50000 */", "mysql")).toEqual([]);
+    expect(splitStatements("/*!50000 /* nested? */; SELECT 1;", "mysql")).toEqual(["/*!50000 /* nested? */", "SELECT 1"]);
+    expect(splitStatements("/*!40101 SET NAMES utf8mb4 */; SELECT 1;", "postgres")).toEqual(["SELECT 1"]);
+    expect(splitStatements("SELECT 1--2; SELECT 3", "mysql")).toEqual(["SELECT 1--2", "SELECT 3"]);
+    expect(splitStatements("SELECT 1--2; SELECT 3", "postgres")).toEqual(["SELECT 1--2; SELECT 3"]);
+  });
 });
 

@@ -11,10 +11,12 @@ export const ttlChoices: [string, string][] = [
   ["168h", "7 days"],
 ];
 
-// hours reads a Go-style duration such as "4h" or "1h30m".
+// hours reads a Go-style duration such as "4h", "1h30m", "1.5h", or "30s".
 export function hours(d: string): number {
-  const m = d.match(/^(?:(\d+)h)?(?:(\d+)m)?/);
-  return m ? Number(m[1] ?? 0) + Number(m[2] ?? 0) / 60 : 0;
+  if (!d) return 0;
+  const m = d.match(/^(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?$/);
+  if (!m || (!m[1] && !m[2] && !m[3])) return 0;
+  return Number(m[1] ?? 0) + Number(m[2] ?? 0) / 60 + Number(m[3] ?? 0) / 3600;
 }
 
 const MIN = 60_000;

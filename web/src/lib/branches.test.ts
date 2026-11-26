@@ -97,7 +97,12 @@ describe("hours", () => {
   it("1h30m のような期間を時間にする", () => {
     expect(hours("4h")).toBe(4);
     expect(hours("1h30m")).toBe(1.5);
+    expect(hours("1.5h")).toBe(1.5);
+    expect(hours("30s")).toBeCloseTo(30 / 3600);
+    expect(hours("1h30m18s")).toBeCloseTo(1 + 30 / 60 + 18 / 3600);
     expect(hours("")).toBe(0);
+    expect(hours("bad")).toBe(0);
+    expect(hours("1h extra")).toBe(0);
   });
 });
 

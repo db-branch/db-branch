@@ -177,11 +177,14 @@ const ttls: [string, string][] = [
 ];
 
 // parseTTL accepts what Go's time.ParseDuration does, plus days ("2d").
-function parseTTL(v: string): string | null {
+export function parseTTL(v: string): string | null {
   const t = v.trim().toLowerCase();
   const d = t.match(/^(\d+)\s*d$/);
-  if (d) return `${Number(d[1]) * 24}h`;
-  return /^(\d+(\.\d+)?(h|m|s))+$/.test(t) && !/^0+(h|m|s)$/.test(t) ? t : null;
+  if (d) {
+    const days = Number(d[1]);
+    return days > 0 ? `${days * 24}h` : null;
+  }
+  return /^(\d+(\.\d+)?(h|m|s))+$/.test(t) && /[1-9]/.test(t) ? t : null;
 }
 
 function CreateBranch({ bases, onClose }: { bases: Base[]; onClose: () => void }) {

@@ -5,6 +5,7 @@ go 1.27.3
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/go-sql-driver/mysql v1.10.2
+	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/hashicorp/raft v1.8.0
@@ -14,6 +15,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.59.0
 	golang.org/x/sys v0.50.0
+	golang.org/x/term v0.48.0
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1

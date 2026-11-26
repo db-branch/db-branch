@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { buildDBeaverDbp, buildZip, encryptDBeaverCredentials } from "./dbeaverdbp";
+import { describe, expect, it, vi } from "vitest";
+import { buildDBeaverDbp, buildZip, encryptDBeaverCredentials, xmlEscape } from "./dbeaverdbp";
 
 const DBEAVER_LOCAL_KEY = new Uint8Array([0xba, 0xbb, 0x4a, 0x9f, 0x77, 0x4a, 0xb8, 0x53, 0xc9, 0x6c, 0x2d, 0x65, 0x3d, 0xfe, 0x54, 0x4a]);
 const td = new TextDecoder();
@@ -53,6 +53,23 @@ describe("encryptDBeaverCredentials", () => {
 
     expect(encrypted.subarray(0, 16)).toEqual(iv);
     expect(await decryptDBeaver(encrypted)).toBe(plain);
+  });
+
+  it("throws instead of falling back to an all-zero IV when crypto.getRandomValues is unavailable", () => {
+    vi.stubGlobal("crypto", undefined);
+    try {
+      expect(() => encryptDBeaverCredentials("{}")).toThrow(/Random number generation is unavailable|乱数生成/i);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("xmlEscape", () => {
+  it("escapes XML special characters and strips/replaces forbidden XML 1.0 control characters", () => {
+    const out = xmlEscape(`a&b<c>"d"'e'\x00\x07\x0b\x0c\x1f\ufffe\uffff\t\n\r`);
+    expect(out).not.toMatch(/[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]/);
+    expect(out).toContain("a&amp;b&lt;c&gt;&quot;d&quot;&apos;e&apos;");
   });
 });
 

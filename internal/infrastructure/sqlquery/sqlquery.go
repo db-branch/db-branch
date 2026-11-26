@@ -110,6 +110,7 @@ type sqlToken struct {
 func scanSQLTokens(q, engine string) []sqlToken {
 	var out []sqlToken
 	depth := 0
+	inCondComment := false
 	i := 0
 	for i < len(q) {
 		c := q[i]
@@ -117,7 +118,12 @@ func scanSQLTokens(q, engine string) []sqlToken {
 			i++
 			continue
 		}
-		if strings.HasPrefix(q[i:], "--") || (c == '#' && engine != "postgres") {
+		if inCondComment && strings.HasPrefix(q[i:], "*/") {
+			inCondComment = false
+			i += 2
+			continue
+		}
+		if (strings.HasPrefix(q[i:], "--") && isLineCommentDash(q, i, engine)) || (c == '#' && engine != "postgres") {
 			if nl := strings.IndexByte(q[i:], '\n'); nl >= 0 {
 				i += nl + 1
 			} else {
@@ -125,7 +131,15 @@ func scanSQLTokens(q, engine string) []sqlToken {
 			}
 			continue
 		}
-		if strings.HasPrefix(q[i:], "/*") {
+		if !inCondComment && strings.HasPrefix(q[i:], "/*") {
+			if engine == "mysql" && strings.HasPrefix(q[i:], "/*!") {
+				inCondComment = true
+				i += 3
+				for d := 0; d < 5 && i < len(q) && q[i] >= '0' && q[i] <= '9'; d++ {
+					i++
+				}
+				continue
+			}
 			i = skipBlockComment(q, i, engine != "mysql")
 			continue
 		}
@@ -164,6 +178,13 @@ func scanSQLTokens(q, engine string) []sqlToken {
 		i++
 	}
 	return out
+}
+
+func isLineCommentDash(q string, i int, engine string) bool {
+	if engine != "mysql" {
+		return true
+	}
+	return i+2 >= len(q) || q[i+2] <= ' '
 }
 
 func isWordChar(c byte) bool {
