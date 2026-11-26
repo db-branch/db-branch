@@ -1,0 +1,30 @@
+{
+  "version": "__VERSION__",
+  "description": "Instant database branches on ZFS clones (remote CLI client)",
+  "homepage": "https://db-branch.com",
+  "license": "Apache-2.0",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/db-branch/db-branch/releases/download/v__VERSION__/db-branch___VERSION___windows_amd64.zip",
+      "hash": "__SHA_WINDOWS_AMD64__"
+    },
+    "arm64": {
+      "url": "https://github.com/db-branch/db-branch/releases/download/v__VERSION__/db-branch___VERSION___windows_arm64.zip",
+      "hash": "__SHA_WINDOWS_ARM64__"
+    }
+  },
+  "bin": "db-branch.exe",
+  "checkver": {
+    "github": "https://github.com/db-branch/db-branch"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/db-branch/db-branch/releases/download/v$version/db-branch_$version_windows_amd64.zip"
+      },
+      "arm64": {
+        "url": "https://github.com/db-branch/db-branch/releases/download/v$version/db-branch_$version_windows_arm64.zip"
+      }
+    }
+  }
+}
