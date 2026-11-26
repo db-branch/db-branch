@@ -11,6 +11,7 @@ the indexes before committing the result (see the catalog package comment).
 usage: scripts/pgdg-catalog.py [--majors 19 18 17] [--no-download]
 """
 import argparse
+import functools
 import gzip
 import hashlib
 import json
@@ -38,12 +39,88 @@ def index(suite, arch):
     return pkgs
 
 
-def vkey(v):
-    return [int(x) for x in re.findall(r"\d+", v)]
+def _isdigit(c):
+    return "0" <= c <= "9"
+
+
+def _char_order(c):
+    if c == "~":
+        return -1
+    if ("A" <= c <= "Z") or ("a" <= c <= "z"):
+        return ord(c)
+    return ord(c) + 256
+
+
+def _split_epoch(v):
+    if ":" in v:
+        e, rest = v.split(":", 1)
+        if not re.fullmatch(r"[0-9]+", e):
+            raise ValueError(f"invalid Debian epoch in {v!r}")
+        return int(e), rest
+    return 0, v
+
+
+def _split_rev(v):
+    if "-" in v:
+        return v.rsplit("-", 1)
+    return v, ""
+
+
+def _upstream(v):
+    return _split_rev(_split_epoch(v)[1])[0]
+
+
+def _part_cmp(a, b):
+    ia, ib = 0, 0
+    la, lb = len(a), len(b)
+    while ia < la or ib < lb:
+        while (ia < la and not _isdigit(a[ia])) or (ib < lb and not _isdigit(b[ib])):
+            ca = _char_order(a[ia]) if ia < la and not _isdigit(a[ia]) else 0
+            cb = _char_order(b[ib]) if ib < lb and not _isdigit(b[ib]) else 0
+            if ca != cb:
+                return -1 if ca < cb else 1
+            if ia < la and not _isdigit(a[ia]):
+                ia += 1
+            if ib < lb and not _isdigit(b[ib]):
+                ib += 1
+        ja = ia
+        while ja < la and _isdigit(a[ja]):
+            ja += 1
+        jb = ib
+        while jb < lb and _isdigit(b[jb]):
+            jb += 1
+        na = int(a[ia:ja]) if ja > ia else 0
+        nb = int(b[ib:jb]) if jb > ib else 0
+        if na != nb:
+            return -1 if na < nb else 1
+        ia, ib = ja, jb
+    return 0
+
+
+def deb_cmp(a, b):
+    """Compare two Debian package versions per Debian Policy section 5.6.12."""
+    ea, ra = _split_epoch(a)
+    eb, rb = _split_epoch(b)
+    if ea != eb:
+        return -1 if ea < eb else 1
+    ua, deba = _split_rev(ra)
+    ub, debb = _split_rev(rb)
+    c = _part_cmp(ua, ub)
+    if c != 0:
+        return c
+    return _part_cmp(deba, debb)
+
+
+vkey = functools.cmp_to_key(deb_cmp)
 
 
 def newest(pkgs, name, major=None):
-    c = [p for p in pkgs.get(name, []) if major is None or p["Version"].split(".")[0] == major]
+    c = []
+    for p in pkgs.get(name, []):
+        up = _upstream(p["Version"])
+        if "~" in up or (major is not None and up.split(".")[0] != major):
+            continue
+        c.append(p)
     if not c:
         raise SystemExit(f"{name} {major}: not in the index")
     return max(c, key=lambda p: vkey(p["Version"]))
@@ -83,7 +160,7 @@ def main():
             for d in DISTROS:
                 pk = idx[(d, arch)]
                 srv = newest(pk, f"postgresql-{major}", major)
-                v = srv["Version"].split("-")[0]
+                v = _upstream(srv["Version"])
                 if version not in (None, v):
                     raise SystemExit(f"postgres {major}: {d}/{arch} is at {v}, others at {version}")
                 version = v
