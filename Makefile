@@ -8,9 +8,25 @@ endif
 LDFLAGS := -s -w -X main.version=$(VERSION)
 COVER_MIN := 95
 
-.PHONY: all build test cover vet integration deb deb-oss deb-proxysql apt-repo clean web web-test demo
+.PHONY: all build client-build client-release-archives test cover vet integration deb deb-oss deb-proxysql apt-repo clean web web-test demo
 
 all: vet cover build
+
+# Builds the standalone cross-platform client CLI (no server/web dependencies).
+CLIENT_GOOS := $(or $(GOOS),$(shell go env GOOS))
+client-build:
+	@mkdir -p bin
+	CGO_ENABLED=0 GOOS=$(CLIENT_GOOS) GOARCH=$(GOARCH) go build -trimpath -ldflags '$(LDFLAGS)' \
+		-o bin/db-branch-client$(if $(filter windows,$(CLIENT_GOOS)),.exe,) ./cmd/db-branch-client
+
+# Packages client CLI release archives and SHA256SUMS into dist/client/.
+client-release-archives:
+	@rm -rf dist/client && mkdir -p dist/client
+	@for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do \
+		os=$${target%/*}; arch=$${target#*/}; \
+		scripts/package-client.sh "$(VERSION)" "$$os" "$$arch" dist/client; \
+	done
+	@cd dist/client && (command -v sha256sum >/dev/null && sha256sum *.tar.gz *.zip || shasum -a 256 *.tar.gz *.zip) > SHA256SUMS
 
 # Builds the console into web/dist, which build embeds. Needs Node.js.
 web:

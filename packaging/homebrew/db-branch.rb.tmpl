@@ -1,0 +1,38 @@
+class DbBranch < Formula
+  desc "Instant database branches on ZFS clones (remote CLI client)"
+  homepage "https://db-branch.com"
+  version "__VERSION__"
+  license "Apache-2.0"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/db-branch/db-branch/releases/download/v__VERSION__/db-branch___VERSION___darwin_arm64.tar.gz"
+      sha256 "__SHA_DARWIN_ARM64__"
+    end
+
+    on_intel do
+      url "https://github.com/db-branch/db-branch/releases/download/v__VERSION__/db-branch___VERSION___darwin_amd64.tar.gz"
+      sha256 "__SHA_DARWIN_AMD64__"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "https://github.com/db-branch/db-branch/releases/download/v__VERSION__/db-branch___VERSION___linux_arm64.tar.gz"
+      sha256 "__SHA_LINUX_ARM64__"
+    end
+
+    on_intel do
+      url "https://github.com/db-branch/db-branch/releases/download/v__VERSION__/db-branch___VERSION___linux_amd64.tar.gz"
+      sha256 "__SHA_LINUX_AMD64__"
+    end
+  end
+
+  def install
+    bin.install "db-branch"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/db-branch version")
+  end
+end
