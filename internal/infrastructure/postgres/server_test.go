@@ -525,19 +525,21 @@ func TestRemove_ユニットを止めて設定を消す(t *testing.T) {
 }
 
 func TestFixup_binとlibを版ごとの場所へつなぐ(t *testing.T) {
-	dir := t.TempDir()
-	_ = os.MkdirAll(filepath.Join(dir, "usr/lib/postgresql/18/bin"), 0o755)
-	_ = os.MkdirAll(filepath.Join(dir, "usr/lib/x86_64-linux-gnu"), 0o755)
-	if err := postgres.Fixup(dir); err != nil {
-		t.Fatal(err)
-	}
-	for link, want := range map[string]string{"bin": "usr/lib/postgresql/18/bin", "lib": "usr/lib/x86_64-linux-gnu"} {
-		if got, _ := os.Readlink(filepath.Join(dir, link)); got != want {
-			t.Errorf("%s -> %s", link, got)
+	for _, major := range []string{"18", "19"} {
+		dir := t.TempDir()
+		_ = os.MkdirAll(filepath.Join(dir, "usr/lib/postgresql", major, "bin"), 0o755)
+		_ = os.MkdirAll(filepath.Join(dir, "usr/lib/x86_64-linux-gnu"), 0o755)
+		if err := postgres.Fixup(dir); err != nil {
+			t.Fatal(err)
 		}
-	}
-	if err := postgres.Fixup(dir); err == nil {
-		t.Error("links exist already: want error")
+		for link, want := range map[string]string{"bin": "usr/lib/postgresql/" + major + "/bin", "lib": "usr/lib/x86_64-linux-gnu"} {
+			if got, _ := os.Readlink(filepath.Join(dir, link)); got != want {
+				t.Errorf("pg %s: %s -> %s", major, link, got)
+			}
+		}
+		if err := postgres.Fixup(dir); err == nil {
+			t.Errorf("pg %s: links exist already: want error", major)
+		}
 	}
 	if err := postgres.Fixup(t.TempDir()); err == nil {
 		t.Error("not a postgres runtime: want error")

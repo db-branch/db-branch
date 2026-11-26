@@ -232,7 +232,8 @@ func TestParse_ディストリビューション別の定義の誤りを断る(t
 
 func TestDefault_同梱のPostgreSQLは対応する全ディストリビューションとアーキテクチャで揃う(t *testing.T) {
 	c, _ := catalog.Default()
-	for _, v := range []string{"postgres@18.6", "postgres@17.11"} {
+	wantVersions := []string{"postgres@19.0", "postgres@18.7", "postgres@17.12"}
+	for _, v := range wantVersions {
 		for _, arch := range []string{"amd64", "arm64"} {
 			for distro, tag := range map[string]string{"ubuntu-24.04": "pgdg24.04", "ubuntu-26.04": "pgdg26.04"} {
 				parts, err := c.Lookup(ref(v), arch+"/"+distro)
@@ -247,7 +248,12 @@ func TestDefault_同梱のPostgreSQLは対応する全ディストリビュー�
 			}
 		}
 	}
-	if _, err := c.Lookup(ref("postgres@18.6"), "amd64/ubuntu-22.04"); !errors.Is(err, domain.ErrUnsupportedDistro) {
+	gotAvail := c.Available(domain.Postgres, "amd64/ubuntu-24.04")
+	wantAvail := []domain.RuntimeRef{ref("postgres@19.0"), ref("postgres@18.7"), ref("postgres@17.12")}
+	if !reflect.DeepEqual(gotAvail, wantAvail) {
+		t.Errorf("Available(postgres, amd64/ubuntu-24.04) = %v, want %v", gotAvail, wantAvail)
+	}
+	if _, err := c.Lookup(ref("postgres@19.0"), "amd64/ubuntu-22.04"); !errors.Is(err, domain.ErrUnsupportedDistro) {
 		t.Errorf("22.04: %v", err)
 	}
 }

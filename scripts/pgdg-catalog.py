@@ -8,7 +8,7 @@ downloaded files against the index, and writes one artifact set per distro.
 MySQL entries are kept as they are. Verify the PGDG InRelease signature of
 the indexes before committing the result (see the catalog package comment).
 
-usage: scripts/pgdg-catalog.py [--majors 18 17] [--no-download]
+usage: scripts/pgdg-catalog.py [--majors 19 18 17] [--no-download]
 """
 import argparse
 import gzip
@@ -53,21 +53,21 @@ def check(p, download):
     if not download:
         return
     h, n = hashlib.sha256(), 0
-    with urllib.request.urlopen(f"{BASE}/{p["Filename"]}") as r:
+    with urllib.request.urlopen(f"{BASE}/{p['Filename']}") as r:
         while chunk := r.read(1 << 20):
             h.update(chunk)
             n += len(chunk)
     if h.hexdigest() != p["SHA256"] or n != int(p["Size"]):
-        raise SystemExit(f"{p["Filename"]}: downloaded file does not match the index")
+        raise SystemExit(f"{p['Filename']}: downloaded file does not match the index")
 
 
 def part(p):
-    return {"url": f"{BASE}/{p["Filename"]}", "sha256": p["SHA256"], "size": int(p["Size"])}
+    return {"url": f"{BASE}/{p['Filename']}", "sha256": p["SHA256"], "size": int(p["Size"])}
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--majors", nargs="+", default=["18", "17"])
+    ap.add_argument("--majors", nargs="+", default=["19", "18", "17"])
     ap.add_argument("--no-download", action="store_true")
     a = ap.parse_args()
     with open(CATALOG) as f:

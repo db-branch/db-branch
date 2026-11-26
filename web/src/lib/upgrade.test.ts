@@ -9,6 +9,7 @@ describe("which runtimes a Branch may move to (the server's rules)", () => {
     expect(upgradeProblem("mysql@8.4.13", "mysql@9.4.0")).toBe("");
     expect(upgradeProblem("mysql@8.4.9", "mysql@8.4.13")).toBe("");
     expect(upgradeProblem("postgres@17.2", "postgres@17.11")).toBe("");
+    expect(upgradeProblem("postgres@19.0", "postgres@19.1")).toBe("");
   });
   it("refuses a skipped long-term-support series, a downgrade, the same version and another engine", () => {
     expect(upgradeProblem("mysql@8.0.46", "mysql@9.4.0")).toContain("8.4");
@@ -28,6 +29,7 @@ describe("which runtimes a Branch may move to (the server's rules)", () => {
   });
   it("refuses a PostgreSQL major upgrade", () => {
     expect(upgradeProblem("postgres@17.11", "postgres@18.6")).toContain("not supported yet");
+    expect(upgradeProblem("postgres@18.7", "postgres@19.0")).toContain("not supported yet");
     expect(upgradeProblem("postgres@9.6.1", "postgres@10.1")).toContain("not supported yet");
   });
   it("lists the installed targets, oldest first, leaving out the ones it cannot reach", () => {

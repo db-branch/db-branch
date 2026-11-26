@@ -176,9 +176,9 @@ func TestCheckUpgradePath_PostgreSQLは同じメジャーの中だけ許す(t *t
 		from, to string
 		ok       bool
 	}{
-		{"17.2", "17.5", true}, {"9.6.1", "9.6.5", true},
-		{"17.2", "18.1", false}, {"9.5.1", "9.6.1", false},
-		{"17.5", "17.2", false}, {"17.2", "17.2", false},
+		{"17.2", "17.5", true}, {"19.0", "19.1", true}, {"9.6.1", "9.6.5", true},
+		{"17.2", "18.1", false}, {"18.7", "19.0", false}, {"9.5.1", "9.6.1", false},
+		{"17.5", "17.2", false}, {"19.1", "19.0", false}, {"17.2", "17.2", false},
 	} {
 		err := p.CheckUpgradePath(ctx, c.from, c.to)
 		if (err == nil) != c.ok || (err != nil && !errors.Is(err, domain.ErrUpgradeRefused)) {

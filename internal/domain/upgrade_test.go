@@ -44,6 +44,9 @@ func TestCheckUpgradePath_許す道と断る道を見分ける(t *testing.T) {
 		{"postgres@17.2", "postgres@17.5", ""},
 		{"postgres@17.5", "postgres@17.2", "downgrade"},
 		{"postgres@17.2", "postgres@18.1", "not supported yet"},
+		{"postgres@18.7", "postgres@19.0", "postgres@18.7 to postgres@19.0, pg_upgrade) are not supported yet"},
+		{"postgres@19.0", "postgres@19.1", ""},
+		{"postgres@19.1", "postgres@19.0", "downgrade"},
 		{"postgres@9.6.1", "postgres@10.1", "not supported yet"},
 		{"postgres@9.6.1", "postgres@9.6.5", ""},
 	}
