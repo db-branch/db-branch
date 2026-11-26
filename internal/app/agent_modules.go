@@ -733,6 +733,11 @@ func (s authUserDeleteStore) Delete(ctx context.Context, key string) error {
 	if err := s.Store.Delete(ctx, key); err != nil {
 		return err
 	}
+	s.revokeIfUser(ctx, key)
+	return nil
+}
+
+func (s authUserDeleteStore) revokeIfUser(ctx context.Context, key string) {
 	if email, ok := strings.CutPrefix(key, "user/"); ok {
 		email = strings.ToLower(strings.TrimSpace(email))
 		if email != "" {
@@ -741,7 +746,54 @@ func (s authUserDeleteStore) Delete(ctx context.Context, key string) error {
 			}
 		}
 	}
-	return nil
+}
+
+func (s authUserDeleteStore) Get(ctx context.Context, key string) ([]byte, bool, error) {
+	if a, ok := s.Store.(ext.AtomicStore); ok {
+		return a.Get(ctx, key)
+	}
+	all, err := s.Store.List(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	v, ok := all[key]
+	return v, ok, nil
+}
+
+func (s authUserDeleteStore) PutIfAbsent(ctx context.Context, key string, value []byte) (bool, error) {
+	if a, ok := s.Store.(ext.AtomicStore); ok {
+		return a.PutIfAbsent(ctx, key, value)
+	}
+	all, err := s.Store.List(ctx)
+	if err != nil {
+		return false, err
+	}
+	if _, exists := all[key]; exists {
+		return false, nil
+	}
+	return true, s.Store.Put(ctx, key, value)
+}
+
+func (s authUserDeleteStore) Take(ctx context.Context, key string) ([]byte, bool, error) {
+	if a, ok := s.Store.(ext.AtomicStore); ok {
+		v, ok, err := a.Take(ctx, key)
+		if err == nil && ok {
+			s.revokeIfUser(ctx, key)
+		}
+		return v, ok, err
+	}
+	all, err := s.Store.List(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	v, ok := all[key]
+	if !ok {
+		return nil, false, nil
+	}
+	if err := s.Delete(ctx, key); err != nil {
+		return nil, false, err
+	}
+	return v, true, nil
 }
 
 // attachMaskers makes the masker modules available by name, governed by

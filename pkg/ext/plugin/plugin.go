@@ -286,6 +286,19 @@ type StorePutArgs struct {
 	Value []byte
 }
 
+// StoreGetReply is the RPC reply of Store.Get and Store.Take.
+type StoreGetReply struct {
+	Value []byte
+	OK    bool
+	Err   RPCError
+}
+
+// StoreBoolReply is the RPC reply of Store.PutIfAbsent.
+type StoreBoolReply struct {
+	OK  bool
+	Err RPCError
+}
+
 func (r *remoteStore) List(context.Context) (map[string][]byte, error) {
 	var out StoreListReply
 	if err := r.c.Call("Plugin.List", struct{}{}, &out); err != nil {
@@ -310,6 +323,66 @@ func (r *remoteStore) Delete(_ context.Context, key string) error {
 	return out.err()
 }
 
+func isMissingRPCMethod(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "can't find method")
+}
+
+func (r *remoteStore) Get(ctx context.Context, key string) ([]byte, bool, error) {
+	var out StoreGetReply
+	if err := r.c.Call("Plugin.Get", StorePutArgs{Key: key}, &out); err != nil {
+		if isMissingRPCMethod(err) {
+			all, lerr := r.List(ctx)
+			if lerr != nil {
+				return nil, false, lerr
+			}
+			v, ok := all[key]
+			return v, ok, nil
+		}
+		return nil, false, err
+	}
+	return out.Value, out.OK, out.Err.err()
+}
+
+func (r *remoteStore) PutIfAbsent(ctx context.Context, key string, value []byte) (bool, error) {
+	var out StoreBoolReply
+	if err := r.c.Call("Plugin.PutIfAbsent", StorePutArgs{Key: key, Value: value}, &out); err != nil {
+		if isMissingRPCMethod(err) {
+			all, lerr := r.List(ctx)
+			if lerr != nil {
+				return false, lerr
+			}
+			if _, exists := all[key]; exists {
+				return false, nil
+			}
+			return true, r.Put(ctx, key, value)
+		}
+		return false, err
+	}
+	return out.OK, out.Err.err()
+}
+
+func (r *remoteStore) Take(ctx context.Context, key string) ([]byte, bool, error) {
+	var out StoreGetReply
+	if err := r.c.Call("Plugin.Take", StorePutArgs{Key: key}, &out); err != nil {
+		if isMissingRPCMethod(err) {
+			all, lerr := r.List(ctx)
+			if lerr != nil {
+				return nil, false, lerr
+			}
+			v, ok := all[key]
+			if !ok {
+				return nil, false, nil
+			}
+			if derr := r.Delete(ctx, key); derr != nil {
+				return nil, false, derr
+			}
+			return v, true, nil
+		}
+		return nil, false, err
+	}
+	return out.Value, out.OK, out.Err.err()
+}
+
 // StoreServer serves a module's Store to it (the agent side).
 type StoreServer struct{ S ext.Store }
 
@@ -326,6 +399,67 @@ func (s *StoreServer) Put(a StorePutArgs, out *RPCError) error {
 
 func (s *StoreServer) Delete(a StorePutArgs, out *RPCError) error {
 	*out = toRPC(s.S.Delete(context.Background(), a.Key))
+	return nil
+}
+
+func (s *StoreServer) Get(a StorePutArgs, out *StoreGetReply) error {
+	if aStore, ok := s.S.(ext.AtomicStore); ok {
+		v, found, err := aStore.Get(context.Background(), a.Key)
+		out.Value, out.OK, out.Err = v, found, toRPC(err)
+		return nil
+	}
+	recs, err := s.S.List(context.Background())
+	if err != nil {
+		out.Err = toRPC(err)
+		return nil
+	}
+	v, found := recs[a.Key]
+	out.Value, out.OK = v, found
+	return nil
+}
+
+func (s *StoreServer) PutIfAbsent(a StorePutArgs, out *StoreBoolReply) error {
+	if aStore, ok := s.S.(ext.AtomicStore); ok {
+		okPut, err := aStore.PutIfAbsent(context.Background(), a.Key, a.Value)
+		out.OK, out.Err = okPut, toRPC(err)
+		return nil
+	}
+	recs, err := s.S.List(context.Background())
+	if err != nil {
+		out.Err = toRPC(err)
+		return nil
+	}
+	if _, exists := recs[a.Key]; exists {
+		return nil
+	}
+	if err := s.S.Put(context.Background(), a.Key, a.Value); err != nil {
+		out.Err = toRPC(err)
+		return nil
+	}
+	out.OK = true
+	return nil
+}
+
+func (s *StoreServer) Take(a StorePutArgs, out *StoreGetReply) error {
+	if aStore, ok := s.S.(ext.AtomicStore); ok {
+		v, found, err := aStore.Take(context.Background(), a.Key)
+		out.Value, out.OK, out.Err = v, found, toRPC(err)
+		return nil
+	}
+	recs, err := s.S.List(context.Background())
+	if err != nil {
+		out.Err = toRPC(err)
+		return nil
+	}
+	v, found := recs[a.Key]
+	if !found {
+		return nil
+	}
+	if err := s.S.Delete(context.Background(), a.Key); err != nil {
+		out.Err = toRPC(err)
+		return nil
+	}
+	out.Value, out.OK = v, true
 	return nil
 }
 

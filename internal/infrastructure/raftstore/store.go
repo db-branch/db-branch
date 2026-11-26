@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
@@ -25,6 +26,25 @@ import (
 type Forwarder interface {
 	// Forward returns the Raft log index the leader committed c at.
 	Forward(ctx context.Context, apiAddr string, c Command) (uint64, error)
+}
+
+// ModuleDataOpRequest describes an atomic or linearizable module-data operation.
+type ModuleDataOpRequest struct {
+	Op     string `json:"op"`
+	Module string `json:"module"`
+	Key    string `json:"key"`
+	Value  []byte `json:"value,omitempty"`
+}
+
+// ModuleDataOpResponse is the result of a ModuleDataOpRequest.
+type ModuleDataOpResponse struct {
+	Value []byte `json:"value,omitempty"`
+	OK    bool   `json:"ok"`
+}
+
+// ModuleDataForwarder forwards atomic module-data operations to the leader.
+type ModuleDataForwarder interface {
+	ModuleDataOp(ctx context.Context, apiAddr string, req ModuleDataOpRequest) (ModuleDataOpResponse, error)
 }
 
 // Options configures a Raft-backed store.
@@ -52,14 +72,16 @@ type Store struct {
 	fsm  *FSM
 	opts Options
 	// bolt is closed after Raft shuts down so the file lock is released.
-	bolt io.Closer
+	bolt  io.Closer
+	modMu sync.Mutex
 }
 
 var (
-	_ domain.Store               = (*Store)(nil)
-	_ domain.BranchOwnerMigrator = (*Store)(nil)
-	_ domain.NodeStore           = (*Store)(nil)
-	_ domain.ModuleStore         = (*Store)(nil)
+	_ domain.Store                 = (*Store)(nil)
+	_ domain.BranchOwnerMigrator   = (*Store)(nil)
+	_ domain.NodeStore             = (*Store)(nil)
+	_ domain.ModuleStore           = (*Store)(nil)
+	_ domain.AtomicModuleDataStore = (*Store)(nil)
 	_ domain.UserStore           = (*Store)(nil)
 	_ operation.Store            = (*Store)(nil)
 	_ domain.UpdateStore         = (*Store)(nil)
@@ -252,21 +274,11 @@ func (s *Store) ApplyAt(ctx context.Context, c Command) (uint64, error) {
 		return 0, fmt.Errorf("%w: %s needs cluster protocol %d, the cluster is at %d", domain.ErrClusterUpgrading, c.Op, need, have)
 	}
 	if s.IsLeader() {
-		data, err := c.Encode()
-		if err != nil {
-			return 0, err
+		if c.Op == "put_module_data" || c.Op == "delete_module_data" {
+			s.modMu.Lock()
+			defer s.modMu.Unlock()
 		}
-		f := s.raft.Apply(data, 10*time.Second)
-		if err := f.Error(); err != nil {
-			if errors.Is(err, raft.ErrNotLeader) || errors.Is(err, raft.ErrLeadershipLost) {
-				return 0, fmt.Errorf("%w: %v", domain.ErrNoLeader, err)
-			}
-			return 0, err
-		}
-		if err, ok := f.Response().(error); ok {
-			return 0, err
-		}
-		return f.Index(), nil
+		return s.applyLeader(c)
 	}
 	id, _ := s.Leader()
 	if id == "" || s.opts.Forwarder == nil {
@@ -277,6 +289,24 @@ func (s *Store) ApplyAt(ctx context.Context, c Command) (uint64, error) {
 		return 0, fmt.Errorf("%w: leader %s has not registered its API address yet", domain.ErrNoLeader, id)
 	}
 	return s.opts.Forwarder.Forward(ctx, node.Address, c)
+}
+
+func (s *Store) applyLeader(c Command) (uint64, error) {
+	data, err := c.Encode()
+	if err != nil {
+		return 0, err
+	}
+	f := s.raft.Apply(data, 10*time.Second)
+	if err := f.Error(); err != nil {
+		if errors.Is(err, raft.ErrNotLeader) || errors.Is(err, raft.ErrLeadershipLost) {
+			return 0, fmt.Errorf("%w: %v", domain.ErrNoLeader, err)
+		}
+		return 0, err
+	}
+	if err, ok := f.Response().(error); ok {
+		return 0, err
+	}
+	return f.Index(), nil
 }
 
 // waitApplied waits (a bounded time) until this node has applied idx. The
@@ -665,6 +695,144 @@ func (s *Store) PutModuleData(ctx context.Context, module, key string, value []b
 
 func (s *Store) DeleteModuleData(ctx context.Context, module, key string) error {
 	return s.Apply(ctx, DeleteModuleData(module, key))
+}
+
+func barrierTimeout(ctx context.Context) time.Duration {
+	timeout := 5 * time.Second
+	if dl, ok := ctx.Deadline(); ok {
+		if rem := time.Until(dl); rem < timeout {
+			if rem <= 0 {
+				return time.Millisecond
+			}
+			return rem
+		}
+	}
+	return timeout
+}
+
+// ModuleDataOp executes a linearizable get, put_if_absent, or take on the Raft leader.
+func (s *Store) ModuleDataOp(ctx context.Context, req ModuleDataOpRequest) (ModuleDataOpResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return ModuleDataOpResponse{}, err
+	}
+	if s.IsLeader() {
+		return s.leaderModuleDataOp(ctx, req)
+	}
+	id, _ := s.Leader()
+	if id == "" || s.opts.Forwarder == nil {
+		return ModuleDataOpResponse{}, domain.ErrNoLeader
+	}
+	addr, ok := s.fsm.NodeAddress(id)
+	if !ok {
+		return ModuleDataOpResponse{}, fmt.Errorf("%w: leader %s has not registered its API address yet", domain.ErrNoLeader, id)
+	}
+	mf, ok := s.opts.Forwarder.(ModuleDataForwarder)
+	if !ok {
+		return ModuleDataOpResponse{}, domain.ErrNoLeader
+	}
+	resp, err := mf.ModuleDataOp(ctx, addr, req)
+	if errors.Is(err, domain.ErrUnsupported) {
+		return s.legacyModuleDataOp(ctx, req)
+	}
+	return resp, err
+}
+
+func (s *Store) leaderModuleDataOp(ctx context.Context, req ModuleDataOpRequest) (ModuleDataOpResponse, error) {
+	s.modMu.Lock()
+	defer s.modMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return ModuleDataOpResponse{}, err
+	}
+	if err := s.raft.Barrier(barrierTimeout(ctx)).Error(); err != nil {
+		if errors.Is(err, raft.ErrNotLeader) || errors.Is(err, raft.ErrLeadershipLost) {
+			return ModuleDataOpResponse{}, fmt.Errorf("%w: %v", domain.ErrNoLeader, err)
+		}
+		return ModuleDataOpResponse{}, err
+	}
+	val, exists := s.fsm.ModuleValue(req.Module, req.Key)
+	switch req.Op {
+	case "get":
+		if !exists {
+			return ModuleDataOpResponse{}, nil
+		}
+		return ModuleDataOpResponse{Value: val, OK: true}, nil
+	case "put_if_absent":
+		if req.Key == "" || len(req.Key) > domain.MaxModuleKey || len(req.Value) > domain.MaxModuleValue {
+			return ModuleDataOpResponse{}, fmt.Errorf("%w: key 1..%d bytes, value up to %d bytes", domain.ErrModuleDataTooLarge, domain.MaxModuleKey, domain.MaxModuleValue)
+		}
+		if exists {
+			return ModuleDataOpResponse{OK: false}, nil
+		}
+		recs, total := s.fsm.ModuleUsage(req.Module)
+		if recs+1 > domain.MaxModuleRecords || total+len(req.Key)+len(req.Value) > domain.MaxModuleTotal {
+			return ModuleDataOpResponse{}, fmt.Errorf("%w: a module keeps up to %d records and %d bytes", domain.ErrModuleDataTooLarge, domain.MaxModuleRecords, domain.MaxModuleTotal)
+		}
+		if _, err := s.applyLeader(PutModuleData(req.Module, req.Key, req.Value)); err != nil {
+			return ModuleDataOpResponse{}, err
+		}
+		return ModuleDataOpResponse{OK: true}, nil
+	case "take":
+		if !exists {
+			return ModuleDataOpResponse{}, nil
+		}
+		if _, err := s.applyLeader(DeleteModuleData(req.Module, req.Key)); err != nil {
+			return ModuleDataOpResponse{}, err
+		}
+		return ModuleDataOpResponse{Value: val, OK: true}, nil
+	default:
+		return ModuleDataOpResponse{}, fmt.Errorf("unknown module data op %q", req.Op)
+	}
+}
+
+func (s *Store) legacyModuleDataOp(ctx context.Context, req ModuleDataOpRequest) (ModuleDataOpResponse, error) {
+	all, err := s.ListModuleData(ctx, req.Module)
+	if err != nil {
+		return ModuleDataOpResponse{}, err
+	}
+	val, exists := all[req.Key]
+	switch req.Op {
+	case "get":
+		if !exists {
+			return ModuleDataOpResponse{}, nil
+		}
+		return ModuleDataOpResponse{Value: append([]byte(nil), val...), OK: true}, nil
+	case "put_if_absent":
+		if req.Key == "" || len(req.Key) > domain.MaxModuleKey || len(req.Value) > domain.MaxModuleValue {
+			return ModuleDataOpResponse{}, fmt.Errorf("%w: key 1..%d bytes, value up to %d bytes", domain.ErrModuleDataTooLarge, domain.MaxModuleKey, domain.MaxModuleValue)
+		}
+		if exists {
+			return ModuleDataOpResponse{OK: false}, nil
+		}
+		if err := s.PutModuleData(ctx, req.Module, req.Key, req.Value); err != nil {
+			return ModuleDataOpResponse{}, err
+		}
+		return ModuleDataOpResponse{OK: true}, nil
+	case "take":
+		if !exists {
+			return ModuleDataOpResponse{}, nil
+		}
+		if err := s.DeleteModuleData(ctx, req.Module, req.Key); err != nil {
+			return ModuleDataOpResponse{}, err
+		}
+		return ModuleDataOpResponse{Value: append([]byte(nil), val...), OK: true}, nil
+	default:
+		return ModuleDataOpResponse{}, fmt.Errorf("unknown module data op %q", req.Op)
+	}
+}
+
+func (s *Store) GetModuleData(ctx context.Context, module, key string) ([]byte, bool, error) {
+	resp, err := s.ModuleDataOp(ctx, ModuleDataOpRequest{Op: "get", Module: module, Key: key})
+	return resp.Value, resp.OK, err
+}
+
+func (s *Store) PutIfAbsentModuleData(ctx context.Context, module, key string, value []byte) (bool, error) {
+	resp, err := s.ModuleDataOp(ctx, ModuleDataOpRequest{Op: "put_if_absent", Module: module, Key: key, Value: value})
+	return resp.OK, err
+}
+
+func (s *Store) TakeModuleData(ctx context.Context, module, key string) ([]byte, bool, error) {
+	resp, err := s.ModuleDataOp(ctx, ModuleDataOpRequest{Op: "take", Module: module, Key: key})
+	return resp.Value, resp.OK, err
 }
 
 func (s *Store) GetBaseRefresh(_ context.Context, base domain.Name) (domain.BaseRefresh, error) {

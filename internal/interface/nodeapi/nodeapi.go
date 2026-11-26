@@ -42,6 +42,7 @@ type Store interface {
 	SetJoinSecretHash(ctx context.Context, hash string) error
 	ConsumeJoinSecret(ctx context.Context, hash string, now time.Time) error
 	State() raftstore.State
+	ModuleDataOp(ctx context.Context, req raftstore.ModuleDataOpRequest) (raftstore.ModuleDataOpResponse, error)
 }
 
 // Server answers other nodes.
@@ -80,6 +81,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /internal/v1/join", s.join)
 	mux.HandleFunc("POST /internal/v1/apply", member(s.apply))
 	mux.HandleFunc("POST /internal/v1/voters", member(s.addMember))
+	mux.HandleFunc("POST /internal/v1/moduledata", member(s.moduleDataOp))
 	if s.Artifact != nil {
 		mux.HandleFunc("GET /internal/v1/artifacts/{engine}/{version}", member(s.artifact))
 	}
@@ -169,6 +171,8 @@ func reply(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusPreconditionFailed)
 	case errors.Is(err, raftstore.ErrInvalidJoinSecret), errors.Is(err, raftstore.ErrExpiredJoinSecret):
 		http.Error(w, err.Error(), http.StatusForbidden)
+	case errors.Is(err, domain.ErrModuleDataTooLarge):
+		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -193,7 +197,11 @@ type joinResponse struct {
 // a few hundred bytes), refusing more than maxSmallBody: /join takes
 // requests without a certificate.
 func decodeSmall(w http.ResponseWriter, r *http.Request, v any) bool {
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSmallBody)).Decode(v); err != nil {
+	return decodeLimit(w, r, v, maxSmallBody)
+}
+
+func decodeLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(v); err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
@@ -205,7 +213,10 @@ func decodeSmall(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-const maxSmallBody = 64 << 10
+const (
+	maxSmallBody      = 64 << 10
+	maxModuleOpBody   = 256 << 10 // accommodates base64-encoded 64 KiB module values plus JSON framing
+)
 
 func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	var in joinRequest
@@ -402,6 +413,24 @@ func (s *Server) addMember(w http.ResponseWriter, r *http.Request) {
 	reply(w, s.Client.AddMember(r.Context(), leader.Address, in.ID, in.RaftAddress))
 }
 
+func (s *Server) moduleDataOp(w http.ResponseWriter, r *http.Request) {
+	if !s.Store.IsLeader() {
+		reply(w, domain.ErrNoLeader)
+		return
+	}
+	var in raftstore.ModuleDataOpRequest
+	if !decodeLimit(w, r, &in, maxModuleOpBody) {
+		return
+	}
+	resp, err := s.Store.ModuleDataOp(r.Context(), in)
+	if err != nil {
+		reply(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 // Client calls other nodes with this node's member certificate.
 type Client struct {
 	http *http.Client
@@ -446,6 +475,12 @@ func (c *Client) post(ctx context.Context, addr, path string, in, out any) error
 	case resp.StatusCode == http.StatusConflict:
 		_, _ = msg.ReadFrom(resp.Body)
 		return fmt.Errorf("%s: %w", bytes.TrimSpace(msg.Bytes()), domain.ErrAlreadyExists)
+	case resp.StatusCode == http.StatusRequestEntityTooLarge:
+		_, _ = msg.ReadFrom(resp.Body)
+		return fmt.Errorf("%w: %s", domain.ErrModuleDataTooLarge, bytes.TrimSpace(msg.Bytes()))
+	case resp.StatusCode == http.StatusNotFound:
+		_, _ = msg.ReadFrom(resp.Body)
+		return fmt.Errorf("%w: %s", domain.ErrUnsupported, bytes.TrimSpace(msg.Bytes()))
 	case resp.StatusCode >= 300:
 		_, _ = msg.ReadFrom(resp.Body)
 		return fmt.Errorf("%s%s: %s: %s", addr, path, resp.Status, bytes.TrimSpace(msg.Bytes()))
@@ -471,6 +506,13 @@ func (c *Client) Forward(ctx context.Context, apiAddr string, cmd raftstore.Comm
 // (an older leader adds a voter instead; the route keeps its old name).
 func (c *Client) AddMember(ctx context.Context, apiAddr, id, raftAddr string) error {
 	return c.post(ctx, apiAddr, "/internal/v1/voters", voterRequest{ID: id, RaftAddress: raftAddr}, nil)
+}
+
+// ModuleDataOp forwards an atomic module-data operation to the leader's node API.
+func (c *Client) ModuleDataOp(ctx context.Context, apiAddr string, req raftstore.ModuleDataOpRequest) (raftstore.ModuleDataOpResponse, error) {
+	var out raftstore.ModuleDataOpResponse
+	err := c.post(ctx, apiAddr, "/internal/v1/moduledata", req, &out)
+	return out, err
 }
 
 // JoinInfo is what a member hands a joining node.

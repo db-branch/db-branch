@@ -9,6 +9,7 @@ import (
 
 	"github.com/db-branch/db-branch/internal/infrastructure/filestore"
 	"github.com/db-branch/db-branch/internal/usecase/moduledata"
+	"github.com/db-branch/db-branch/pkg/ext"
 )
 
 var ctx = context.Background()
@@ -111,4 +112,98 @@ func Test初期化前や読めないときは失敗を返す(t *testing.T) {
 	if err := moduledata.For(failing{}, "auth").Put(ctx, "k", nil); err == nil {
 		t.Error("list failure during put")
 	}
+}
+
+func TestAtomicStore_GetとPutIfAbsentとTakeが動く(t *testing.T) {
+	s, ok := moduledata.For(mem{}, "auth").(ext.AtomicStore)
+	if !ok {
+		t.Fatal("moduledata.For must implement ext.AtomicStore")
+	}
+	if _, _, err := s.Take(ctx, "missing"); err != nil {
+		t.Fatalf("missing Take: %v", err)
+	}
+	if ok, err := s.PutIfAbsent(ctx, "k", []byte("v1")); err != nil || !ok {
+		t.Fatalf("first PutIfAbsent: ok=%v err=%v", ok, err)
+	}
+	if ok, err := s.PutIfAbsent(ctx, "k", []byte("v2")); err != nil || ok {
+		t.Fatalf("second PutIfAbsent: ok=%v err=%v", ok, err)
+	}
+	if v, ok, err := s.Get(ctx, "k"); err != nil || !ok || string(v) != "v1" {
+		t.Fatalf("Get: v=%q ok=%v err=%v", v, ok, err)
+	}
+	if v, ok, err := s.Take(ctx, "k"); err != nil || !ok || string(v) != "v1" {
+		t.Fatalf("first Take: v=%q ok=%v err=%v", v, ok, err)
+	}
+	if _, ok, err := s.Take(ctx, "k"); err != nil || ok {
+		t.Fatalf("second Take: ok=%v err=%v", ok, err)
+	}
+	if _, err := s.PutIfAbsent(ctx, "", []byte("v")); !errors.Is(err, moduledata.ErrTooLarge) {
+		t.Errorf("empty key PutIfAbsent: %v, want ErrTooLarge", err)
+	}
+	if _, err := s.PutIfAbsent(ctx, "big", make([]byte, moduledata.MaxValue+1)); !errors.Is(err, moduledata.ErrTooLarge) {
+		t.Errorf("oversized value PutIfAbsent: %v, want ErrTooLarge", err)
+	}
+
+	nilStore := moduledata.For(nil, "auth").(ext.AtomicStore)
+	if _, _, err := nilStore.Get(ctx, "k"); !errors.Is(err, moduledata.ErrUnavailable) {
+		t.Error("nil Get")
+	}
+	if _, err := nilStore.PutIfAbsent(ctx, "k", nil); !errors.Is(err, moduledata.ErrUnavailable) {
+		t.Error("nil PutIfAbsent")
+	}
+	if _, _, err := nilStore.Take(ctx, "k"); !errors.Is(err, moduledata.ErrUnavailable) {
+		t.Error("nil Take")
+	}
+	failStore := moduledata.For(failing{}, "auth").(ext.AtomicStore)
+	if _, _, err := failStore.Get(ctx, "k"); err == nil {
+		t.Error("failing Get")
+	}
+	if _, _, err := failStore.Take(ctx, "k"); err == nil {
+		t.Error("failing Take")
+	}
+
+	am := &atomicMem{mem: mem{}}
+	as := moduledata.For(am, "auth").(ext.AtomicStore)
+	if ok, err := as.PutIfAbsent(ctx, "a", []byte("1")); err != nil || !ok {
+		t.Fatalf("atomic PutIfAbsent: %v %v", ok, err)
+	}
+	if v, ok, err := as.Get(ctx, "a"); err != nil || !ok || string(v) != "1" {
+		t.Fatalf("atomic Get: %q %v %v", v, ok, err)
+	}
+	if v, ok, err := as.Take(ctx, "a"); err != nil || !ok || string(v) != "1" {
+		t.Fatalf("atomic Take: %q %v %v", v, ok, err)
+	}
+	// When an atomic backend also refuses ListModuleData (not needed for atomic PutIfAbsent), bounds + PutIfAbsent still work.
+	if _, err := as.PutIfAbsent(ctx, "", []byte("v")); !errors.Is(err, moduledata.ErrTooLarge) {
+		t.Errorf("atomic empty key: %v", err)
+	}
+	// Trigger non-atomic checkWrite error (over record limit) on PutIfAbsent.
+	many := moduledata.For(mem{}, "auth").(ext.AtomicStore)
+	for i := 0; i < moduledata.MaxRecords; i++ {
+		_, _ = many.PutIfAbsent(ctx, itoa(i), nil)
+	}
+	if _, err := many.PutIfAbsent(ctx, "over", nil); !errors.Is(err, moduledata.ErrTooLarge) {
+		t.Errorf("non-atomic PutIfAbsent over MaxRecords: %v", err)
+	}
+}
+
+type atomicMem struct{ mem }
+
+func (a *atomicMem) GetModuleData(_ context.Context, _ string, key string) ([]byte, bool, error) {
+	v, ok := a.mem[key]
+	return v, ok, nil
+}
+func (a *atomicMem) PutIfAbsentModuleData(_ context.Context, _ string, key string, value []byte) (bool, error) {
+	if _, exists := a.mem[key]; exists {
+		return false, nil
+	}
+	a.mem[key] = value
+	return true, nil
+}
+func (a *atomicMem) TakeModuleData(_ context.Context, _ string, key string) ([]byte, bool, error) {
+	v, ok := a.mem[key]
+	if ok {
+		delete(a.mem, key)
+	}
+	return v, ok, nil
 }

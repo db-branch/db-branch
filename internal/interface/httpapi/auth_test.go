@@ -343,3 +343,28 @@ func TestConsole_クラスタ更新中の503ログアウト後に同一ノード
 		t.Errorf("nodeB session after retry logout = %d, want 401", after.StatusCode)
 	}
 }
+
+func TestLogin_非JSONのContentTypeは拒否してLoginCSRFを防ぐ(t *testing.T) {
+	f := newFixture(t)
+	h := f.srv.Handler(false)
+	for _, ct := range []string{"", "text/plain", "text/plain;charset=UTF-8", "application/x-www-form-urlencoded", "multipart/form-data", "application/json;;;"} {
+		resp, body := send(t, h, "POST", "/v1/auth/login", map[string]any{"username": "admin", "password": "correct horse battery"},
+			func(r *http.Request) {
+				if ct == "" {
+					r.Header.Del("Content-Type")
+				} else {
+					r.Header.Set("Content-Type", ct)
+				}
+			})
+		if resp.StatusCode != http.StatusUnsupportedMediaType || errCode(body) != "unsupported_media_type" {
+			t.Errorf("Content-Type %q: got %d %v, want 415 unsupported_media_type", ct, resp.StatusCode, body)
+		}
+	}
+	for _, ct := range []string{"application/json; charset=utf-8", "APPLICATION/JSON"} {
+		resp, _ := send(t, h, "POST", "/v1/auth/login", map[string]any{"username": "admin", "password": "wrong-password"},
+			func(r *http.Request) { r.Header.Set("Content-Type", ct) })
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("valid Content-Type %q: got %d, want 401", ct, resp.StatusCode)
+		}
+	}
+}

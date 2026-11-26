@@ -69,6 +69,7 @@ info:
     | 409 | `checkpoints_unavailable` | The node holding the branch cannot take checkpoints |
     | 409 | `not_routable`, `no_proxy`, `not_clustered`, `auto_renew_off`, `not_renewable`, `in_progress` | The feature is not set up or not applicable here |
     | 411 / 413 / 507 | `length_required`, `too_large`, `no_space` | Upload problems |
+    | 415 | `unsupported_media_type` | `Content-Type` is not `application/json` |
     | 422 | `runtime_unavailable` | The runtime version is not offered |
     | 422 | `upgrade_not_allowed` | The branch upgrade is not one db-branch does |
     | 422 | `query_failed` | The SQL statement failed |
@@ -2248,6 +2249,11 @@ paths:
               schema: {$ref: '#/components/schemas/Error'}
         '401':
           description: 'invalid_credentials: wrong user name or password.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '415':
+          description: 'unsupported_media_type: Content-Type must be application/json.'
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}

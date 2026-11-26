@@ -638,6 +638,111 @@ func TestStore_モジュールのデータを記録し消せる(t *testing.T) {
 	}
 }
 
+func TestStore_モジュールデータの線形化取得と条件付き登録と1回限り取得(t *testing.T) {
+	c := newCluster(t, 1)
+	l := c.leader(t)
+	if _, ok, err := l.GetModuleData(ctx, "auth", "missing"); err != nil || ok {
+		t.Fatalf("missing GetModuleData: ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := l.TakeModuleData(ctx, "auth", "missing"); err != nil || ok {
+		t.Fatalf("missing TakeModuleData: ok=%v err=%v", ok, err)
+	}
+	if ok, err := l.PutIfAbsentModuleData(ctx, "auth", "k1", []byte("v1")); err != nil || !ok {
+		t.Fatalf("first PutIfAbsentModuleData: ok=%v err=%v", ok, err)
+	}
+	if ok, err := l.PutIfAbsentModuleData(ctx, "auth", "k1", []byte("v2")); err != nil || ok {
+		t.Fatalf("second PutIfAbsentModuleData: ok=%v err=%v", ok, err)
+	}
+	if v, ok, err := l.GetModuleData(ctx, "auth", "k1"); err != nil || !ok || string(v) != "v1" {
+		t.Fatalf("GetModuleData: %q ok=%v err=%v", v, ok, err)
+	}
+	if v, ok, err := l.TakeModuleData(ctx, "auth", "k1"); err != nil || !ok || string(v) != "v1" {
+		t.Fatalf("TakeModuleData 1st: %q ok=%v err=%v", v, ok, err)
+	}
+	if _, ok, err := l.TakeModuleData(ctx, "auth", "k1"); err != nil || ok {
+		t.Fatalf("TakeModuleData 2nd: ok=%v err=%v", ok, err)
+	}
+	if _, err := l.ModuleDataOp(ctx, raftstore.ModuleDataOpRequest{Op: "bad", Module: "auth", Key: "k1"}); err == nil {
+		t.Error("expected error for unknown ModuleDataOp")
+	}
+	// Follower without Forwarder returns ErrNoLeader cleanly.
+	cl2 := newClusterWith(t, 3, false)
+	_ = cl2.leader(t)
+	var follower *raftstore.Store
+	for _, s := range cl2.stores {
+		if !s.IsLeader() {
+			follower = s
+			break
+		}
+	}
+	if _, _, err := follower.GetModuleData(ctx, "auth", "k1"); !errors.Is(err, domain.ErrNoLeader) {
+		t.Errorf("follower without forwarder: %v, want ErrNoLeader", err)
+	}
+
+	// Cancelled context fails fast without blocking, and oversized key/value are rejected.
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, _, err := l.GetModuleData(cancelled, "auth", "k1"); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled GetModuleData: %v, want context.Canceled", err)
+	}
+	if _, err := l.PutIfAbsentModuleData(ctx, "auth", "", []byte("v")); !errors.Is(err, domain.ErrModuleDataTooLarge) {
+		t.Errorf("empty key PutIfAbsentModuleData: %v", err)
+	}
+
+	// Mixed-cluster fallback: a follower whose forwarder gets domain.ErrUnsupported from an old leader falls back cleanly.
+	cl3 := newCluster(t, 3)
+	cl3.registerNodes(t)
+	l3 := cl3.leader(t)
+	var f3 *raftstore.Store
+	for _, s := range cl3.stores {
+		if !s.IsLeader() {
+			f3 = s
+			break
+		}
+	}
+	// Replace f3's behavior indirectly via unsupportedForwarder backed Store.
+	uf := unsupportedModForwarder{directForwarder{cl3}}
+	addrUf, trUf := raft.NewInmemTransport("nodeUf")
+	l3.AddNonvoter("nodeUf", string(addrUf))
+	for _, tr := range cl3.trans {
+		tr.Connect(addrUf, trUf)
+		trUf.Connect(tr.LocalAddr(), tr)
+	}
+	sUf, err := raftstore.Open(raftstore.Options{
+		NodeID: "nodeUf", APIAddr: "apiUf:7070", Transport: trUf, InMemory: true, Forwarder: uf, Fast: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sUf.Close() }()
+	_ = f3
+	eventually(t, func() bool { id, _ := sUf.Leader(); return id != "" && len(sUf.State().Nodes) == len(cl3.stores) })
+	if ok, err := sUf.PutIfAbsentModuleData(ctx, "auth", "leg1", []byte("lv")); err != nil || !ok {
+		t.Fatalf("legacy fallback PutIfAbsent: ok=%v err=%v", ok, err)
+	}
+	if ok, err := sUf.PutIfAbsentModuleData(ctx, "auth", "leg1", []byte("lv2")); err != nil || ok {
+		t.Fatalf("legacy fallback duplicate PutIfAbsent: ok=%v err=%v", ok, err)
+	}
+	if v, ok, err := sUf.GetModuleData(ctx, "auth", "leg1"); err != nil || !ok || string(v) != "lv" {
+		t.Fatalf("legacy fallback Get: %q ok=%v err=%v", v, ok, err)
+	}
+	if v, ok, err := sUf.TakeModuleData(ctx, "auth", "leg1"); err != nil || !ok || string(v) != "lv" {
+		t.Fatalf("legacy fallback Take: %q ok=%v err=%v", v, ok, err)
+	}
+	if _, ok, err := sUf.TakeModuleData(ctx, "auth", "leg1"); err != nil || ok {
+		t.Fatalf("legacy fallback 2nd Take: ok=%v err=%v", ok, err)
+	}
+	if _, err := sUf.ModuleDataOp(ctx, raftstore.ModuleDataOpRequest{Op: "bad", Module: "auth", Key: "leg1"}); err == nil {
+		t.Error("expected error on legacy fallback unknown op")
+	}
+}
+
+type unsupportedModForwarder struct{ directForwarder }
+
+func (unsupportedModForwarder) ModuleDataOp(context.Context, string, raftstore.ModuleDataOpRequest) (raftstore.ModuleDataOpResponse, error) {
+	return raftstore.ModuleDataOpResponse{}, domain.ErrUnsupported
+}
+
 func TestStore_更新スケジュールの保存と実行結果と削除(t *testing.T) {
 	c := newCluster(t, 1)
 	l := c.leader(t)
