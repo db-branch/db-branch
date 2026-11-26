@@ -150,6 +150,9 @@ func (a *App) versionCommand() *cobra.Command {
 		Short: "Print the version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if a.output == "json" {
+				return a.printJSON(map[string]string{"version": a.Version})
+			}
 			_, err := fmt.Fprintf(cmd.OutOrStdout(), "db-branch %s\n", a.Version)
 			return err
 		},

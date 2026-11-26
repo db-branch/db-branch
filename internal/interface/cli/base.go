@@ -32,7 +32,16 @@ type baseView struct {
 }
 
 func (a *App) baseCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "base", Short: "Manage bases that branches are cloned from"}
+	short := "Manage bases that branches are cloned from"
+	if a.ClientOnly {
+		short = "List and inspect bases"
+	}
+	cmd := &cobra.Command{
+		Use:   "base",
+		Short: short,
+		Args:  cobra.NoArgs,
+		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
+	}
 	var noWait bool
 
 	var runtime, dump, node, replicas string
@@ -135,6 +144,10 @@ func (a *App) baseCommand() *cobra.Command {
 				return c.Do(cmd.Context(), method, "/v1/bases/"+n.String()+suffix, nil, nil)
 			}),
 		}
+	}
+	if a.ClientOnly {
+		cmd.AddCommand(list, show)
+		return cmd
 	}
 	// base mask is hidden from the 1.0 CLI surface (DECISIONS.md 8-c).
 	cmd.AddCommand(create, snapshot, list, show,
