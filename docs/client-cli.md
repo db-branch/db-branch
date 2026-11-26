@@ -4,6 +4,30 @@
 
 ## インストール
 
+### ワンライナー（macOS / Linux / Windows、SHA-256 自動検証）
+
+```sh
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/db-branch/db-branch/main/scripts/install-client.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/db-branch/db-branch/main/scripts/install-client.ps1 | iex
+```
+
+`DB_BRANCH_VERSION`（バージョン指定）や `DB_BRANCH_INSTALL_DIR`（配置先ディレクトリ指定）で上書きできます：
+
+```sh
+# macOS / Linux の例
+curl -fsSL https://raw.githubusercontent.com/db-branch/db-branch/main/scripts/install-client.sh | DB_BRANCH_VERSION=v1.0.0 sh
+```
+
+```powershell
+# Windows (PowerShell) の例
+$env:DB_BRANCH_VERSION='v1.0.0'; irm https://raw.githubusercontent.com/db-branch/db-branch/main/scripts/install-client.ps1 | iex
+```
+
 ### Homebrew（macOS / Linux）
 
 ```sh
