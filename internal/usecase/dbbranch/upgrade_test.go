@@ -900,17 +900,22 @@ func TestRecover_統計更新中にエージェントが再起動したらバッ
 	if got := z2.branchNow(t); !got.StatsUpdating || got.StatsWarning != "" {
 		t.Fatalf("on shutdown SIGTERM race = %+v", got)
 	}
-	// Restart with fresh LifecycleCtx recovers and completes stats cleanly.
-	z2.svc.LifecycleCtx = context.Background()
-	z2.server.statsErr = nil
-	z2.server.statsHook = nil
+	// Restart with a fresh Service sharing store/storage recovers and completes stats cleanly.
+	z3 := newZEnv(t)
+	z3.store = z2.store
+	z3.sim = z2.sim
+	z3.wire(z3.svc)
+	z3.svc.Store = crashStore{z2.store, z3.crash}
+	z3.svc.Servers[domain.Postgres] = z3.server
+	z3.svc.Runtimes = z2.svc.Runtimes
+	z3.svc.Pool = z2.svc.Pool
 	done2 := make(chan struct{})
-	z2.svc.OnBranchChanged = func(domain.Name) { close(done2) }
-	if err := z2.svc.Recover(ctx); err != nil {
+	z3.svc.OnBranchChanged = func(domain.Name) { close(done2) }
+	if err := z3.svc.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
 	<-done2
-	if got := z2.branchNow(t); got.StatsUpdating || got.StatsWarning != "" {
+	if got := z3.branchNow(t); got.StatsUpdating || got.StatsWarning != "" {
 		t.Fatalf("after restart recover = %+v", got)
 	}
 }

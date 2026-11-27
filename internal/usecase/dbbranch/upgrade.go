@@ -589,7 +589,8 @@ func (s *Service) startBackgroundStats(br domain.Branch) {
 		return
 	}
 	parentCtx := s.LifecycleCtx
-	if parentCtx == nil {
+	hasLifecycle := parentCtx != nil
+	if !hasLifecycle {
 		parentCtx = context.Background()
 	}
 	ctx, cancel := context.WithCancel(parentCtx)
@@ -608,7 +609,7 @@ func (s *Service) startBackgroundStats(br domain.Branch) {
 	go func() {
 		defer cancel()
 		runErr := su.UpdateMissingStats(ctx, spec)
-		if runErr != nil && s.LifecycleCtx != nil && ctx.Err() == nil {
+		if runErr != nil && hasLifecycle && ctx.Err() == nil {
 			// Give a simultaneous cgroup SIGTERM a brief window to cancel LifecycleCtx
 			// before recording a failure warning instead of leaving recovery intact.
 			timer := time.NewTimer(200 * time.Millisecond)
