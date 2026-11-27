@@ -820,10 +820,13 @@ func TestUpgradeBranch_統計更新に失敗してもBranchはreadyのままで�
 	// Non-MajorUpgrader fallback and missing MissingStatsUpdater are handled gracefully.
 	z2 := newPGUEnv(t)
 	z2.server.upNeedsStats = true
+	done2 := make(chan struct{})
+	z2.svc.OnBranchChanged = func(domain.Name) { close(done2) }
 	z2.svc.Servers[domain.Postgres] = plainUpgrader{z2.server}
 	if _, err := z2.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19}, nil); err != nil {
 		t.Fatal(err)
 	}
+	<-done2
 }
 
 type plainUpgrader struct {
