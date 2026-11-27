@@ -556,6 +556,12 @@ type statsJob struct {
 	cancel context.CancelFunc
 }
 
+func (s *Service) resumeStats(br domain.Branch) {
+	if br.Status == domain.BranchReady && br.StatsUpdating {
+		s.startBackgroundStats(br)
+	}
+}
+
 func (s *Service) cancelStats(n domain.Name) {
 	s.statsMu.Lock()
 	job, ok := s.statsCancels[n]

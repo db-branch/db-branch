@@ -496,7 +496,7 @@ func TestStartMajorUpgraded_エラー処理とストリームとICUロケール(
 	}
 }
 
-func TestCheckUpgrade_9系とdaticulocaleとpostgresDB接続(t *testing.T) {
+func TestCheckUpgrade_9系と旧ICUカラムフォールバック(t *testing.T) {
 	f := newFixture(t)
 	_ = os.MkdirAll(filepath.Join(f.rt, "9.5.1/bin"), 0o755)
 	_ = os.MkdirAll(filepath.Join(f.rt, "9.6.2/bin"), 0o755)
@@ -526,5 +526,11 @@ func TestCheckUpgrade_9系とdaticulocaleとpostgresDB接続(t *testing.T) {
 	}
 	if len(plan.Findings) == 0 || plan.Findings[0].Code != domain.CodeExtensionUpdate {
 		t.Errorf("expected 9.6 extension lookup (hstore update), got %+v", plan.Findings)
+	}
+	_ = os.MkdirAll(filepath.Join(f.rt, "9.6-custom/usr/share/postgresql/9.6/extension"), 0o755)
+	_ = os.WriteFile(filepath.Join(f.rt, "9.6-custom/usr/share/postgresql/9.6/extension/hstore.control"), []byte("default_version = '1.4'\n"), 0o644)
+	planSuffix, err := f.srv.CheckUpgrade(ctx, f.spec, domain.RuntimeRef{Engine: domain.Postgres, Version: "9.6-custom"}, domain.Login{})
+	if err != nil || len(planSuffix.Findings) == 0 || planSuffix.Findings[0].Code != domain.CodeExtensionUpdate {
+		t.Errorf("expected 9.6-custom extension lookup (hstore update), got %+v err=%v", planSuffix.Findings, err)
 	}
 }

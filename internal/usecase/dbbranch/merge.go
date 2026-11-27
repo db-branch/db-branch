@@ -343,6 +343,9 @@ func (s *Service) MergeBranch(ctx context.Context, req MergeBranchRequest, repor
 			restoreErrs = append(restoreErrs, err)
 		} else {
 			restoreErrs = append(restoreErrs, s.clearMergeIntent(wctx, br.Name))
+			if len(restoreErrs) == 0 || restoreErrs[0] == nil {
+				s.resumeStats(br)
+			}
 		}
 		s.collectIfSettled(wctx, br.Name)
 		return res, errors.Join(append([]error{cause}, restoreErrs...)...)
@@ -355,6 +358,9 @@ func (s *Service) MergeBranch(ctx context.Context, req MergeBranchRequest, repor
 	}
 	liveDS := s.branchDataset(br.Name)
 	if !req.DryRun && prevStatus == domain.BranchReady {
+		if br.StatsUpdating {
+			s.cancelStats(br.Name)
+		}
 		spec, err := s.branchSpec(mergeCtx, br, liveDS, false, false)
 		if err != nil {
 			return restoreUntouched(err)
@@ -417,14 +423,18 @@ func (s *Service) MergeBranch(ctx context.Context, req MergeBranchRequest, repor
 		}
 		if !req.DryRun {
 			wctx := context.WithoutCancel(ctx)
+			var startErr error
 			if prevStatus == domain.BranchReady {
-				if serr := s.ensureRunning(wctx, br); serr != nil {
-					res.Error = fmt.Sprintf("%s; restart failed: %v", res.Error, serr)
+				if startErr = s.ensureRunning(wctx, br); startErr != nil {
+					res.Error = fmt.Sprintf("%s; restart failed: %v", res.Error, startErr)
 				}
 			}
 			br.Status = prevStatus
 			if s.saveBranch(wctx, br) == nil {
 				_ = s.clearMergeIntent(wctx, br.Name)
+				if startErr == nil {
+					s.resumeStats(br)
+				}
 			}
 			s.collectIfSettled(wctx, br.Name)
 		}
@@ -492,6 +502,7 @@ func (s *Service) MergeBranch(ctx context.Context, req MergeBranchRequest, repor
 		return res, err
 	}
 	_ = s.clearMergeIntent(finishCtx, br.Name)
+	s.resumeStats(br)
 	res.Status = domain.MergeMerged
 	s.rotateAuto(ctx, br.Name)
 	s.collectIfSettled(ctx, br.Name)
@@ -707,12 +718,16 @@ func (s *Service) rollbackMerge(ctx context.Context, br domain.Branch, in mergeI
 		_ = s.stopBranchImmediate(ctx, br)
 	}
 	br.Status, br.Error = in.PrevStatus, ""
+	if in.PrevStatus != domain.BranchReady {
+		br.StatsUpdating = false
+	}
 	if err := s.saveBranch(ctx, br); err != nil {
 		return err
 	}
 	if err := s.clearMergeIntent(ctx, br.Name); err != nil {
 		return err
 	}
+	s.resumeStats(br)
 	s.collectIfSettled(ctx, br.Name)
 	return nil
 }
@@ -757,12 +772,16 @@ func (s *Service) resumeMerge(ctx context.Context, br domain.Branch) error {
 		_ = s.stopBranchImmediate(ctx, br)
 	}
 	br.Status, br.Error = prev, ""
+	if prev != domain.BranchReady {
+		br.StatsUpdating = false
+	}
 	if err := s.saveBranch(ctx, br); err != nil {
 		return err
 	}
 	if err := s.clearMergeIntent(ctx, br.Name); err != nil {
 		return err
 	}
+	s.resumeStats(br)
 	s.collectIfSettled(ctx, br.Name)
 	return nil
 }

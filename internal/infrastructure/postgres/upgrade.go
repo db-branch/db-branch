@@ -51,6 +51,7 @@ func UpgradeTimeout(relations, largeObjects int64) time.Duration {
 }
 
 func pgMajorStr(v string) string {
+	v, _, _ = strings.Cut(v, "-")
 	major, rest, ok := strings.Cut(v, ".")
 	if n, err := strconv.Atoi(major); err == nil && n < 10 && ok {
 		minor, _, _ := strings.Cut(rest, ".")
@@ -62,6 +63,7 @@ func pgMajorStr(v string) string {
 }
 
 func pgMajorNum(v string) int {
+	v, _, _ = strings.Cut(v, "-")
 	major, _, _ := strings.Cut(v, ".")
 	n, _ := strconv.Atoi(major)
 	return n
