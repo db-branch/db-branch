@@ -22,11 +22,11 @@ OSS（Apache-2.0）の機能で、有償モジュールは要らない。
 | エンジン | 許す | 断る |
 |---|---|---|
 | MySQL | 5.6 → 5.7、5.7 → 8.0、8.0 → 8.4、8.4 → 9.x、同じシリーズ内のパッチ更新（8.4.9 → 8.4.13）、8.0 → 8.1〜8.3 のようなシリーズ内の前進 | シリーズ（5.7、8.0、8.4、9.7）を飛び越す移行（5.6 → 8.0、5.7 → 8.4 など。5.7、8.0 を経由する）（例: 8.0 → 9.x は「先に mysql@8.4.x へ」）、ダウングレード、同じバージョン、別のエンジン |
-| PostgreSQL | 同じメジャー内のマイナー更新（17.2 → 17.5。バイナリの差し替えだけ） | メジャーの更新（`pg_upgrade`）は **not supported yet**、ダウングレード |
+| PostgreSQL | 同じメジャー内のマイナー更新（17.2 → 17.5。バイナリの差し替えだけ）、および古いメジャーから新しいメジャーへの更新（`pg_upgrade`、17 → 19 の飛び越しも可） | ダウングレード、同じバージョン、別のエンジン |
 
 - **ダウングレードはない**。戻すときは、上げる前に自動で取った Checkpoint を復元する（§5）
-- 移行先のランタイムは、その Branch のノードに入っていること。なければ `404 runtime_not_installed` で、`db-branch runtime install mysql@8.4.13` のように入れ方を添えて断る。クラスタでは Branch のあるノードへ転送して、そのノードで確かめる
-- クラスタの全ノードがこの機能を知る版（プロトコル 16）になるまで、`503 cluster_upgrading` で断る（確認だけは使える）
+- 移行先のランタイムは、その Branch のノードに入っていること。PostgreSQL のメジャー更新では、移行元（現在）と移行先の**両方**のランタイムがノードに入っていること。なければ `404 runtime_not_installed` で、`db-branch runtime install postgres@19.0` のように入れ方を添えて断る。クラスタでは Branch のあるノードへ転送して、そのノードで確かめる
+- クラスタの全ノードがこの機能を知る版（MySQL・PostgreSQL マイナー更新はプロトコル 16、PostgreSQL メジャー更新はプロトコル 31）になるまで、`503 cluster_upgrading` で断る（確認だけは使える）
 - Branch が `ready` のときだけ。Checkpoint を使うので、ノード自身の ZFS が要る（確認だけは要らない）
 
 ## 3. 流れ
@@ -34,7 +34,10 @@ OSS（Apache-2.0）の機能で、有償モジュールは要らない。
 1. 検証して、Branch を `upgrading` にする
 2. **事前確認**（サーバーは動いたまま。変更しない）。指摘は `{level: error|warning|info, code, message}` の一覧で返る。`error` があれば止まる（`--force` で進める）
 3. サーバーを**きれいに停止**する（MySQL は `innodb_fast_shutdown=0`）。次に自動の Checkpoint `before-upgrade-<時刻>` を取る。これは古いランタイムを記録する自動の Checkpoint で、新しい 5 件を残し、`branch.max_checkpoints` に数えない
-4. Branch のランタイムを切り替え、**新しいバイナリで起動**する。MySQL 8.0.16 以降は起動時にデータ辞書とシステムテーブルを自分で更新する（`upgrade=AUTO`）。5.7 へ上げるときは、起動のあとに `mysql_upgrade` を流してシステムテーブルを更新し、サーバーを再起動する（5.6 のシステムテーブルのままでは `account_locked` 列や `sys` スキーマがない）。待つ上限は 15 分
+4. Branch のランタイムを切り替え、新しいバイナリで起動する
+   - **MySQL**: 8.0.16 以降は起動時にデータ辞書とシステムテーブルを自分で更新する（`upgrade=AUTO`）。5.7 へ上げるときは、起動のあとに `mysql_upgrade` を流してシステムテーブルを更新し、サーバーを再起動する（5.6 のシステムテーブルのままでは `account_locked` 列や `sys` スキーマがない）。待つ上限は 15 分
+   - **PostgreSQL マイナー更新**: バイナリを差し替えて起動するだけ
+   - **PostgreSQL メジャー更新（`pg_upgrade`）**: 旧クラスタと同じエンコーディング・ロケール・データチェックサムの有無（`pg_controldata` で読む。PG 18 以降は `initdb` の既定でチェックサムが有効なため、旧が無効なら `--no-data-checksums` を付ける）で新しいデータディレクトリを `initdb` し、移行先が PG 18 以上なら `pg_upgrade --swap --sync-method=fsync`（18 未満なら `--link`。`--copy` は使わない）で切り替え、新しいバイナリで起動する。オペレーションの時間切れはリレーション数とラージオブジェクト数から決め、`pg_upgrade` の進行段階をオペレーションのフェーズおよびログに記録する。起動後すぐに Branch を `ready` にして使えるようにし、後ろで `vacuumdb --all --analyze-in-stages --missing-stats-only`（18 未満は `--missing-stats-only` なし）を走らせて不足統計を補完する（更新中は Branch の `stats_updating: true` で表示し、失敗しても Branch は `ready` のまま `stats_warning` に警告を残す。エージェント再起動時は完了まで再開する）
 5. 起動中にエラーログへ出た警告・エラー・アップグレードの進行を集めて結果に入れる
 6. 失敗したら（起動しない、アップグレードのエラー、時間切れ）**自動で Checkpoint を復元して古いランタイムで起動し直す**。結果にエラーログの抜粋が残る。`--no-rollback` なら失敗したまま残す（状態 `failed`。Checkpoint を復元するか Branch を削除する）
 
@@ -65,8 +68,14 @@ Checkpoint はきれいに停止した**あと**に取る。そうすると、�
   - 8.4 へ: `warning`。db-branch はこの Branch の設定に `mysql_native_password=ON` を足して、既存のユーザーがそのまま使えるようにする（Branch に記録され、再起動後も続く）。9.0 より前に `caching_sha2_password` へ移すよう案内する
   - 9.x へ: db-branch 自身の Branch ユーザーは起動後に同じパスワードのまま `caching_sha2_password` へ自動で直す（`info`）。ほかのユーザーが使っていれば `error`
 - **my.cnf のオプション**: 新しいバージョンのランタイムに合う設定を生成する。db-branch が書くオプションと、モジュールが足すオプションのうち、新しいバージョンで消えたもの（`default_authentication_plugin`、`expire_logs_days`（`binlog_expire_logs_seconds` に書き換える）、`master_info_repository`、`relay_log_info_repository`、`transaction_write_set_extraction`、9.6 の `innodb_log_file_size` など）は落とすか書き換え、`info` で知らせる。さらに、**新しい `mysqld --validate-config`** に生成した設定を読ませ、受け付けなければ `error`（`config_invalid`）
-- **空き容量の見積もり**: Branch のデータの 1/20 と 512 MiB ほどを目安に、プールの空きと比べる（足りなければ `error`、2 倍に満たなければ `warning`）。Checkpoint は取った時点では容量を使わない
-- PostgreSQL: データディレクトリのメジャーが移行先と同じかを確かめる
+- **空き容量の見積もり**: Branch のデータの 1/20 と 512 MiB ほどを目安に、プールの空きと比べる（足りなければ `error`〔PostgreSQL メジャー更新ではコード `insufficient_space`〕、2 倍に満たなければ `warning`）。Checkpoint は取った時点では容量を使わない
+- **PostgreSQL**:
+  - マイナー更新: データディレクトリのメジャーが移行先と同じかを確かめる
+  - メジャー更新:
+    - 拡張機能が移行先ランタイムにあるか（なければ `error` `extension_missing`、`anon` 等）。`ALTER EXTENSION ... UPDATE` で更新可能なものは `info`（`extension_update`）
+    - 論理レプリケーションスロット・サブスクリプションがあれば `warning`（`logical_replication`）
+    - 所要時間の見積もり: リレーション数（`many_relations`）、ラージオブジェクト数（`many_large_objects`）、データ量（`large_database`：移行後の統計更新に時間がかかる旨）のしきい値を超えると `warning`（コンソールの確認ダイアログにも表示）
+    - 稼働中の旧クラスタに対して `pg_upgrade --check` を実行し、非互換な `reg*` 型や prepared transaction 等を `{level, code, message}` に変換する
 
 ## 5. 戻す・リセット・再作成
 
@@ -87,6 +96,6 @@ ProxySQL が接続元に見せるサーバーバージョン（`mysql-server_ver
 
 ## 8. 制限
 
-- PostgreSQL のメジャーアップグレードは未対応
-- ダウングレードはない（Checkpoint の復元で戻す）
-- 事前確認は基本だけ（`mysqlsh` の `checkForServerUpgrade` ほどは調べない）。テーブルの照合順序や廃止された機能の利用は調べない
+- ダウングレードはない（Checkpoint の復元で戻す。Reset で Base のランタイムに戻る）
+- 記録中（`history` モジュール）の Branch は MySQL のみを対象とする（PostgreSQL の履歴記録は未対応）
+- 事前確認は基本だけ（MySQL は `mysqlsh` の `checkForServerUpgrade` ほどは調べず、テーブルの照合順序や廃止された機能の利用は調べない。PostgreSQL は拡張の有無と `pg_upgrade --check` の範囲を確認する）

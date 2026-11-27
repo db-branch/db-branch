@@ -53,12 +53,22 @@ func (r Runner) Stream(ctx context.Context, in io.Reader, out io.Writer, name st
 // StreamEnv is Stream with extra environment variables (NAME=value), which
 // keeps secrets off the command line. The error never contains them.
 func (r Runner) StreamEnv(ctx context.Context, env []string, out io.Writer, name string, args ...string) error {
-	return r.run(ctx, env, nil, out, name, args...)
+	return r.runDir(ctx, "", env, nil, out, name, args...)
 }
 
-func (Runner) run(ctx context.Context, env []string, in io.Reader, out io.Writer, name string, args ...string) error {
+// StreamDir runs name in working directory dir with stdout written to out as it is produced.
+func (r Runner) StreamDir(ctx context.Context, dir string, out io.Writer, name string, args ...string) error {
+	return r.runDir(ctx, dir, nil, nil, out, name, args...)
+}
+
+func (r Runner) run(ctx context.Context, env []string, in io.Reader, out io.Writer, name string, args ...string) error {
+	return r.runDir(ctx, "", env, in, out, name, args...)
+}
+
+func (Runner) runDir(ctx context.Context, dir string, env []string, in io.Reader, out io.Writer, name string, args ...string) error {
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}

@@ -318,6 +318,7 @@ func (s *Service) transitionBranch(ctx context.Context, name domain.Name, check 
 
 // ResetBranch discards every change since the reset point.
 func (s *Service) ResetBranch(ctx context.Context, name domain.Name, report Reporter) (domain.Branch, error) {
+	s.cancelStats(name)
 	br, err := s.transitionBranch(ctx, name, domain.Branch.CanReset, domain.BranchResetting)
 	if err != nil {
 		return br, err
@@ -379,6 +380,7 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 	}
 	now := s.Clock()
 	br.Status, br.ResetAt, br.Error = domain.BranchReady, &now, ""
+	br.StatsUpdating, br.StatsWarning = false, ""
 	if err := s.saveBranch(ctx, br); err != nil {
 		_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
 		return br, err
@@ -390,6 +392,7 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 // branch may be deleted from any node: it is marked deleting, and its node
 // finishes the job when it returns.
 func (s *Service) DeleteBranch(ctx context.Context, name domain.Name, report Reporter) error {
+	s.cancelStats(name)
 	if done, err := s.abandonLost(ctx, name); done || err != nil {
 		return err
 	}
@@ -514,9 +517,17 @@ func (s *Service) Recover(ctx context.Context) error {
 		switch br.Status {
 		case domain.BranchReady:
 			_ = s.clearMergeIntent(ctx, br.Name)
-			errs = append(errs, s.recoverRunning(ctx, br, true))
+			rerr := s.recoverRunning(ctx, br, true)
+			errs = append(errs, rerr)
+			if rerr == nil && br.StatsUpdating {
+				s.startBackgroundStats(br)
+			}
 		case domain.BranchPaused:
 			_ = s.clearMergeIntent(ctx, br.Name)
+			if br.StatsUpdating {
+				br.StatsUpdating = false
+				errs = append(errs, s.saveBranch(ctx, br))
+			}
 		case domain.BranchResetting:
 			_, err := s.doReset(ctx, br, nil)
 			errs = append(errs, err)

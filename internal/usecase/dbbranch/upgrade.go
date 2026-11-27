@@ -80,15 +80,17 @@ func (s *Service) switchRuntime(ctx context.Context, br *domain.Branch, in resto
 	if in.Op == opReset && br.LegacyAuth != br.ForkLegacyAuth {
 		br.LegacyAuth, changed = br.ForkLegacyAuth, true
 	}
+	if br.StatsUpdating || br.StatsWarning != "" {
+		br.StatsUpdating, br.StatsWarning, changed = false, "", true
+	}
 	if !changed {
 		return nil
 	}
 	return s.saveBranch(ctx, *br)
 }
 
-// clusterAllowsBranchRuntime: every node knows that a branch may run another
-// runtime than its base.
-func (s *Service) clusterAllowsBranchRuntime(ctx context.Context) error {
+// clusterAllowsUpgrade: every node knows the protocol needed for this upgrade.
+func (s *Service) clusterAllowsUpgrade(ctx context.Context, from, to domain.RuntimeRef) error {
 	if s.Nodes == nil {
 		return nil
 	}
@@ -96,8 +98,14 @@ func (s *Service) clusterAllowsBranchRuntime(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if domain.ClusterProtocol(nodes, domain.ProtocolBranchRuntime) < domain.ProtocolBranchRuntime {
-		return fmt.Errorf("%w: a branch can only run another runtime than its base once every node runs the new version", domain.ErrClusterUpgrading)
+	need := domain.ProtocolBranchRuntime
+	msg := "a branch can only run another runtime than its base once every node runs the new version"
+	if domain.IsPGMajorUpgrade(from, to) {
+		need = domain.ProtocolPGMajorUpgrade
+		msg = "PostgreSQL major upgrades wait until every node runs the new version"
+	}
+	if domain.ClusterProtocol(nodes, need) < need {
+		return fmt.Errorf("%w: %s", domain.ErrClusterUpgrading, msg)
 	}
 	return nil
 }
@@ -122,6 +130,11 @@ func (s *Service) ValidateTarget(ctx context.Context, from, to domain.RuntimeRef
 	if _, _, err := s.upgrader(from); err != nil {
 		return err
 	}
+	if domain.IsPGMajorUpgrade(from, to) {
+		if err := s.requireInstalled(ctx, from); err != nil {
+			return err
+		}
+	}
 	return s.requireInstalled(ctx, to)
 }
 
@@ -144,7 +157,7 @@ func (s *Service) ValidateUpgrade(ctx context.Context, n domain.Name, to domain.
 	if err := s.requireLineage(); err != nil {
 		return br, err
 	}
-	return br, s.clusterAllowsBranchRuntime(ctx)
+	return br, s.clusterAllowsUpgrade(ctx, br.Runtime, to)
 }
 
 func newResult(br domain.Branch, req UpgradeRequest) domain.UpgradeResult {
@@ -215,7 +228,7 @@ const (
 func (s *Service) preCheck(ctx context.Context, br domain.Branch, req UpgradeRequest, up domain.Upgrader) (domain.UpgradePlan, []domain.Finding, error) {
 	out := []domain.Finding{{Level: domain.LevelInfo, Code: domain.CodeUpgradePath, Message: fmt.Sprintf("%s to %s on node %s", br.Runtime, req.To, s.Node)}}
 	ds := s.branchDataset(br.Name)
-	if f, err := s.spaceFinding(ctx, ds, req.PoolFree); err != nil {
+	if f, err := s.spaceFinding(ctx, ds, req.PoolFree, br.Runtime, req.To); err != nil {
 		return domain.UpgradePlan{}, out, err
 	} else if f.Code != "" {
 		out = append(out, f)
@@ -234,7 +247,7 @@ func (s *Service) preCheck(ctx context.Context, br domain.Branch, req UpgradeReq
 	return plan, append(out, plan.Findings...), nil
 }
 
-func (s *Service) spaceFinding(ctx context.Context, ds string, free uint64) (domain.Finding, error) {
+func (s *Service) spaceFinding(ctx context.Context, ds string, free uint64, from, to domain.RuntimeRef) (domain.Finding, error) {
 	info, err := s.Storage.Info(ctx, ds)
 	if err != nil {
 		return domain.Finding{}, err
@@ -247,6 +260,9 @@ func (s *Service) spaceFinding(ctx context.Context, ds string, free uint64) (dom
 	switch {
 	case free < need:
 		f.Level = domain.LevelError
+		if domain.IsPGMajorUpgrade(from, to) {
+			f.Code = domain.CodeInsufficientSpace
+		}
 		f.Message = fmt.Sprintf("The upgrade needs about %s of free space and the pool has %s.", humanBytes(need), humanBytes(free))
 	case free < 2*need:
 		f.Level = domain.LevelWarning
@@ -366,8 +382,10 @@ func (s *Service) doUpgrade(ctx context.Context, br domain.Branch, req UpgradeRe
 	}
 	res.Checkpoint = name
 
+	s.cancelStats(br.Name)
 	prevLegacy := br.LegacyAuth
 	br.Runtime, br.LegacyAuth = req.To, plan.LegacyAuth
+	br.StatsUpdating, br.StatsWarning = false, ""
 	failure := s.saveBranch(ctx, br)
 	var log domain.UpgradeLog
 	var spec domain.Server
@@ -376,7 +394,20 @@ func (s *Service) doUpgrade(ctx context.Context, br domain.Branch, req UpgradeRe
 	}
 	if failure == nil {
 		report.report("upgrading")
-		log, failure = up.StartUpgraded(ctx, spec, domain.Login{User: br.User, Password: br.Password})
+		upCtx, cancel := ctx, func() {}
+		if plan.Timeout > 0 {
+			upCtx, cancel = context.WithTimeout(ctx, plan.Timeout)
+		}
+		if mu, ok := up.(domain.MajorUpgrader); ok {
+			log, failure = mu.StartMajorUpgraded(upCtx, spec, domain.Login{User: br.User, Password: br.Password}, domain.UpgradeContext{
+				From:   from,
+				Plan:   plan,
+				Report: report.report,
+			})
+		} else {
+			log, failure = up.StartUpgraded(upCtx, spec, domain.Login{User: br.User, Password: br.Password})
+		}
+		cancel()
 	}
 	if log.Findings != nil {
 		res.Log = log.Findings
@@ -391,6 +422,7 @@ func (s *Service) doUpgrade(ctx context.Context, br domain.Branch, req UpgradeRe
 		return res, err
 	}
 	br.Status, br.Error = domain.BranchReady, ""
+	br.StatsUpdating, br.StatsWarning = log.NeedsStats, ""
 	if err := s.saveBranch(ctx, br); err != nil {
 		_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
 		return res, err
@@ -398,6 +430,9 @@ func (s *Service) doUpgrade(ctx context.Context, br domain.Branch, req UpgradeRe
 	res.Status = domain.UpgradeUpgraded
 	s.rotateAuto(ctx, br.Name)
 	s.collectIfSettled(ctx, br.Name)
+	if br.StatsUpdating {
+		s.startBackgroundStats(br)
+	}
 	return res, nil
 }
 
@@ -502,7 +537,7 @@ func (s *Service) CreateBranchUpgraded(ctx context.Context, req CreateBranchRequ
 	if err := s.ValidateTarget(ctx, base.Runtime, req.Runtime); err != nil {
 		return domain.Branch{}, nil, err
 	}
-	if err := s.clusterAllowsBranchRuntime(ctx); err != nil {
+	if err := s.clusterAllowsUpgrade(ctx, base.Runtime, req.Runtime); err != nil {
 		return domain.Branch{}, nil, err
 	}
 	br, err := s.CreateBranch(ctx, req, report)
@@ -514,4 +549,81 @@ func (s *Service) CreateBranchUpgraded(ctx context.Context, req CreateBranchRequ
 		br = cur
 	}
 	return br, &res, err
+}
+
+type statsJob struct {
+	gen    uint64
+	cancel context.CancelFunc
+}
+
+func (s *Service) cancelStats(n domain.Name) {
+	s.statsMu.Lock()
+	job, ok := s.statsCancels[n]
+	if ok {
+		delete(s.statsCancels, n)
+	}
+	s.statsMu.Unlock()
+	if ok && job.cancel != nil {
+		job.cancel()
+	}
+}
+
+func (s *Service) startBackgroundStats(br domain.Branch) {
+	srv, err := s.server(br.Runtime)
+	if err != nil {
+		return
+	}
+	su, ok := srv.(domain.MissingStatsUpdater)
+	if !ok {
+		return
+	}
+	spec, err := s.branchSpec(context.Background(), br, s.branchDataset(br.Name), false, false)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.statsMu.Lock()
+	if prev, exists := s.statsCancels[br.Name]; exists && prev.cancel != nil {
+		prev.cancel()
+	}
+	if s.statsCancels == nil {
+		s.statsCancels = map[domain.Name]statsJob{}
+	}
+	s.statsSeq++
+	gen := s.statsSeq
+	s.statsCancels[br.Name] = statsJob{gen: gen, cancel: cancel}
+	s.statsMu.Unlock()
+
+	go func() {
+		defer cancel()
+		runErr := su.UpdateMissingStats(ctx, spec)
+
+		s.statsMu.Lock()
+		curJob, active := s.statsCancels[br.Name]
+		superseded := !active || curJob.gen != gen
+		if !superseded {
+			delete(s.statsCancels, br.Name)
+		}
+		s.statsMu.Unlock()
+		if superseded || ctx.Err() != nil {
+			return
+		}
+
+		cur, gerr := s.Store.GetBranch(context.Background(), br.Name)
+		if gerr != nil || cur.Status != domain.BranchReady || cur.Runtime != br.Runtime || !cur.StatsUpdating {
+			return
+		}
+		cur.StatsUpdating = false
+		if runErr != nil {
+			cur.StatsWarning = fmt.Sprintf("background statistics update failed: %v; run ANALYZE manually if query plans are slow", runErr)
+			if s.Logf != nil {
+				s.Logf("branch %s: %s", br.Name, cur.StatsWarning)
+			}
+		} else {
+			cur.StatsWarning = ""
+		}
+		if err := s.saveBranch(context.Background(), cur); err == nil && s.OnBranchChanged != nil {
+			s.OnBranchChanged(br.Name)
+		}
+	}()
 }

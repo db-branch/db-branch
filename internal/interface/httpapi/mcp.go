@@ -154,14 +154,14 @@ func operationResult(f finished) *mcp.CallToolResult {
 
 type upgradeIn struct {
 	Branch     string `json:"branch" jsonschema:"the branch to upgrade"`
-	Runtime    string `json:"runtime" jsonschema:"the target, engine@version, e.g. mysql@8.4.13 (see db-branch runtime list on the CLI; it must be installed)"`
+	Runtime    string `json:"runtime" jsonschema:"the target, engine@version, e.g. mysql@8.4.13 or postgres@19.0 (see db-branch runtime list on the CLI; it must be installed)"`
 	NoRollback bool   `json:"no_rollback,omitempty" jsonschema:"keep a failed upgrade as it is instead of rolling back"`
 	Force      bool   `json:"force,omitempty" jsonschema:"upgrade although the pre-check found errors"`
 }
 
 type checkUpgradeIn struct {
 	Branch  string `json:"branch" jsonschema:"the branch to check"`
-	Runtime string `json:"runtime" jsonschema:"the target, engine@version, e.g. mysql@8.4.13"`
+	Runtime string `json:"runtime" jsonschema:"the target, engine@version, e.g. mysql@8.4.13 or postgres@19.0"`
 }
 
 // MCPMaxBody is the largest MCP request body (bytes) POST /v1/mcp accepts.
@@ -397,7 +397,7 @@ func (s *Server) mcpServer(r *http.Request) *mcp.Server {
 			}
 			return operationResult(f), nil, nil
 		})
-	mcp.AddTool(srv, &mcp.Tool{Name: "upgrade_branch", Description: "Move one branch to a newer version of its database engine (MySQL 8.0 to 8.4 and so on); its base and other branches are untouched. A checkpoint is saved first and a failed upgrade rolls back by itself. The result lists the pre-check findings and the server log's warnings. Upgrades only; to go back, restore the before-upgrade checkpoint."},
+	mcp.AddTool(srv, &mcp.Tool{Name: "upgrade_branch", Description: "Move one branch to a newer version of its database engine (MySQL 8.0 to 8.4, PostgreSQL 17/18 to 19 via pg_upgrade, and so on); its base and other branches are untouched. A checkpoint is saved first and a failed upgrade rolls back by itself. For PostgreSQL major upgrades, the branch becomes ready right away while optimizer statistics finish updating in the background (stats_updating). The result lists the pre-check findings and the server log's warnings. Upgrades only; to go back, restore the before-upgrade checkpoint."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in upgradeIn) (*mcp.CallToolResult, any, error) {
 			f, err := s.startAndCollect(ctx, r, http.MethodPost, "/v1/branches/"+url.PathEscape(in.Branch)+"/upgrade", map[string]any{"runtime": in.Runtime, "no_rollback": in.NoRollback, "force": in.Force})
 			if err != nil {

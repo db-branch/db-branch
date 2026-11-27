@@ -126,9 +126,17 @@ type Service struct {
 	Launcher MaskLauncher
 	// Logf reports what the service skips on its own. Nil: silent.
 	Logf func(format string, args ...any)
+	// OnBranchChanged is called after a background task updates a branch's
+	// metadata (e.g. background statistics completion). Nil: no-op.
+	OnBranchChanged func(domain.Name)
 
 	// mounts are the directories OpenLine handed out and not yet closed.
 	mounts lineMounts
+
+	// statsMu guards background stats cancellation handles per branch.
+	statsMu      sync.Mutex
+	statsSeq     uint64
+	statsCancels map[domain.Name]statsJob
 
 	// refreshMu guards running, the bases being refreshed now.
 	refreshMu sync.Mutex

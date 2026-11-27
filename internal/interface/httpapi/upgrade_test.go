@@ -375,3 +375,16 @@ func TestMCP_アップグレードの確認と実行と結果(t *testing.T) {
 		t.Errorf("create_branch did not pass the runtime: %v", f.branches.calls)
 	}
 }
+
+func TestBranch_統計更新中と警告をJSONで返す(t *testing.T) {
+	f := upgradeFixture(t)
+	b := f.branches.branches["x"]
+	b.Runtime = domain.RuntimeRef{Engine: domain.Postgres, Version: "19.0"}
+	b.StatsUpdating = true
+	b.StatsWarning = "analyze timed out"
+	f.branches.branches["x"] = b
+	_, body := f.do(t, "GET", "/v1/branches/x", nil)
+	if body["stats_updating"] != true || body["stats_warning"] != "analyze timed out" {
+		t.Errorf("branch = %v", body)
+	}
+}

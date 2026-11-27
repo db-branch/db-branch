@@ -104,11 +104,12 @@ func (a *App) upgradeCommand(noWait *bool) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "upgrade <name> --runtime <engine@version>",
 		Short: "Move one branch to a newer database version (the base and other branches stay as they are)",
-		Long: `Moves one branch to a newer runtime of its engine, for example mysql@8.0.46 to mysql@8.4.13.
+		Long: `Moves one branch to a newer runtime of its engine, for example mysql@8.0.46 to mysql@8.4.13
+or postgres@18.6 to postgres@19.0 (via pg_upgrade).
 A checkpoint (before-upgrade-<time>) is saved first and a failed upgrade rolls back to it by itself;
 --no-rollback keeps the failed state for investigation. --check-only runs the pre-check and changes nothing.
-Upgrades only: to go back, restore the before-upgrade checkpoint. The target must be installed
-(db-branch runtime install <engine@version>).`,
+Upgrades only: to go back, restore the before-upgrade checkpoint. The target (and for PostgreSQL major
+upgrades, the current runtime as well) must be installed (db-branch runtime install <engine@version>).`,
 		Args: cobra.ExactArgs(1),
 		RunE: a.named(func(cmd *cobra.Command, c Client, n domain.Name) error {
 			if _, err := parseRuntimeArg(runtime); err != nil {
@@ -126,7 +127,7 @@ Upgrades only: to go back, restore the before-upgrade checkpoint. The target mus
 			return nil
 		}),
 	}
-	cmd.Flags().StringVar(&runtime, "runtime", "", "target runtime, engine@version (required), e.g. mysql@8.4.13")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "target runtime, engine@version (required), e.g. mysql@8.4.13 or postgres@19.0")
 	_ = cmd.MarkFlagRequired("runtime")
 	cmd.Flags().BoolVar(&checkOnly, "check-only", false, "run the pre-check only; change nothing")
 	cmd.Flags().BoolVar(&noRollback, "no-rollback", false, "keep a failed upgrade as it is instead of rolling back (restore the checkpoint to go back)")

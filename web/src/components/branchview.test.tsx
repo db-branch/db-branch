@@ -122,6 +122,11 @@ describe("BranchView", () => {
     const lostFork = view(branch({ status: "lost", parent_branch: "parent-br" }));
     expect(lostFork).not.toContain("Recreate");
   });
+  it("shows Updating stats badge and stats_warning when set", () => {
+    const h = view(branch({ runtime: "postgres@19.0", stats_updating: true, stats_warning: "vacuumdb warning" }));
+    expect(h).toContain("Updating stats");
+    expect(h).toContain("vacuumdb warning");
+  });
 });
 
 describe("TestBranchView_Extend1hが残り72hを短縮せず加算する", () => {

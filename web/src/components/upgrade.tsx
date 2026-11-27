@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import { api, Branch } from "../api";
 import { t } from "../lib/i18n";
 import { serverError } from "../lib/errors";
-import { canForce, countLevel, Finding, installHint, PHASES, resultTone, stepReducer, UpgradeResult, upgradeChoices } from "../lib/upgrade";
+import { canForce, countLevel, Finding, findingText, installHint, PHASES, resultTone, stepReducer, UpgradeResult, upgradeChoices } from "../lib/upgrade";
 import { ErrorLine, ErrorText } from "./ui";
 
 const POLL_MS = 1000;
@@ -16,14 +16,63 @@ export function Findings({ title, list }: { title: string; list: Finding[] }) {
     <section className="findings" aria-label={title}>
       <h4 className="findings-title">{title}</h4>
       <ul>
-        {sorted.map((f, i) => (
-          <li key={i} className={`finding finding-${f.level}`}>
-            <span className="finding-level">{f.level}</span>
-            <span className="finding-text">{f.message}</span>
-          </li>
-        ))}
+        {sorted.map((f, i) => {
+          const msg = findingText(f);
+          return (
+            <li key={i} className={`finding finding-${f.level}`}>
+              <span className="finding-level">{f.level}</span>
+              <span className="finding-text">
+                {msg.text}
+                {msg.detail && <span className="muted small"> ({msg.detail})</span>}
+              </span>
+            </li>
+          );
+        })}
       </ul>
     </section>
+  );
+}
+
+// UpgradeConfirm: confirms the upgrade target, displays rollback safety and any pre-check warnings.
+export function UpgradeConfirm({
+  from,
+  to,
+  force,
+  warnings,
+  checking,
+  cancelRef,
+  onBack,
+  onConfirm,
+}: {
+  from: string;
+  to: string;
+  force: boolean;
+  warnings: Finding[];
+  checking: boolean;
+  cancelRef?: React.RefObject<HTMLButtonElement | null>;
+  onBack: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="confirm" role="group" aria-label={t("Upgrade")} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), onBack())}>
+      <span role="alert">
+        <span className="mono">
+          {from} → {to}
+        </span>
+        {force && <> {t("Errors ignored")}</>}
+      </span>
+      <p className="muted small">{t("A checkpoint is saved first; on failure it rolls back automatically.")}</p>
+      {checking && <p className="muted small">{t("Checking…")}</p>}
+      <Findings title={t("Warnings")} list={warnings} />
+      <span className="confirm-buttons">
+        <button type="button" ref={cancelRef} onClick={onBack}>
+          {t("Cancel")}
+        </button>
+        <button type="button" className="primary" onClick={onConfirm}>
+          {t("Confirm upgrade")}
+        </button>
+      </span>
+    </div>
   );
 }
 
@@ -74,6 +123,8 @@ export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Br
   const [available, setAvailable] = useState<string[]>([]);
   const [target, setTarget] = useState("");
   const [error, setError] = useState<unknown>(null);
+  const [confirmWarnings, setConfirmWarnings] = useState<Finding[]>([]);
+  const [checkingConfirm, setCheckingConfirm] = useState(false);
   const alive = useRef(true);
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => () => void (alive.current = false), []);
@@ -99,8 +150,42 @@ export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Br
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [installed, b.runtime]);
   useEffect(() => {
-    if (step.kind === "confirm") cancel.current?.focus();
-  }, [step.kind]);
+    if (step.kind !== "confirm") {
+      setConfirmWarnings([]);
+      setCheckingConfirm(false);
+      return;
+    }
+    cancel.current?.focus();
+    if (step.warnings) {
+      setConfirmWarnings(step.warnings);
+      setCheckingConfirm(false);
+      return;
+    }
+    let active = true;
+    setCheckingConfirm(true);
+    (async () => {
+      try {
+        const started = await api.upgradeBranch(b.name, { runtime: step.target, check_only: true });
+        for (;;) {
+          const o = await api.operation(started.id);
+          if (!active || !alive.current) return;
+          if (o.state !== "running") {
+            const w = (o.result?.pre_check ?? []).filter((f) => f.level === "warning");
+            setConfirmWarnings(w);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, POLL_MS));
+        }
+      } catch {
+        // Ignore pre-check probe failure in confirm; Confirm upgrade still runs the full upgrade check.
+      } finally {
+        if (active && alive.current) setCheckingConfirm(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [step.kind, b.name, step]);
 
   const run = async (to: string, checkOnly: boolean, force: boolean) => {
     dispatch({ type: "run", target: to, checkOnly });
@@ -164,22 +249,16 @@ export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Br
         </div>
       )}
       {step.kind === "confirm" && (
-        <div className="confirm" role="group" aria-label={t("Upgrade {name}", { name: b.name })} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), dispatch({ type: "back" }))}>
-          <span role="alert">
-            <span className="mono">
-              {b.runtime} → {step.target}
-            </span>
-            {step.force && <> {t("Errors ignored")}</>}
-          </span>
-          <span className="confirm-buttons">
-            <button type="button" ref={cancel} onClick={() => dispatch({ type: "back" })}>
-              {t("Cancel")}
-            </button>
-            <button type="button" className="primary" onClick={() => run(step.target, false, step.force)}>
-              {t("Confirm upgrade")}
-            </button>
-          </span>
-        </div>
+        <UpgradeConfirm
+          from={b.runtime}
+          to={step.target}
+          force={step.force}
+          warnings={confirmWarnings}
+          checking={checkingConfirm}
+          cancelRef={cancel}
+          onBack={() => dispatch({ type: "back" })}
+          onConfirm={() => run(step.target, false, step.force)}
+        />
       )}
       {step.kind === "running" && (
         <p className="muted small" role="status">
@@ -191,12 +270,19 @@ export function UpgradePanel({ branch: b, ready, allow, onChange }: { branch: Br
           {step.result ? <UpgradeResultView result={step.result} /> : <ErrorLine error={step.error ?? null} />}
           <span className="upgrade-buttons">
             {step.result && canForce(step.result) && allow("branch.upgrade") && (
-              <button type="button" onClick={() => dispatch({ type: "ask", target: step.target, force: true })}>
+              <button
+                type="button"
+                onClick={() => dispatch({ type: "ask", target: step.target, force: true, warnings: step.result?.pre_check.filter((f) => f.level === "warning") })}
+              >
                 {t("Upgrade anyway")}
               </button>
             )}
             {step.result?.status === "checked" && countLevel(step.result.pre_check, "error") === 0 && (
-              <button type="button" className="primary" onClick={() => dispatch({ type: "ask", target: step.target })}>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => dispatch({ type: "ask", target: step.target, warnings: step.result?.pre_check.filter((f) => f.level === "warning") })}
+              >
                 {t("Upgrade…")}
               </button>
             )}

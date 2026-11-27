@@ -188,7 +188,12 @@ type BranchOwner struct {
 // 30: multi-user OSS accounts: State.Users and insert_user / put_user /
 // delete_user commands replicate console user accounts across the cluster
 // (domain.ProtocolUsers).
-const Protocol = domain.ProtocolUsers
+//
+// 31: PostgreSQL major upgrade background statistics: Branch carries
+// StatsUpdating and StatsWarning inside insert_branch / put_branch. Older
+// nodes drop those fields, so branches carrying them wait for protocol 31
+// everywhere (domain.ProtocolPGMajorUpgrade).
+const Protocol = domain.ProtocolPGMajorUpgrade
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a
@@ -231,6 +236,9 @@ func (c Command) Needs() int {
 		return domain.ProtocolRuntimeModules
 	}
 	if (c.Op == "insert_branch" || c.Op == "put_branch") && c.Branch != nil {
+		if c.Branch.StatsUpdating || c.Branch.StatsWarning != "" {
+			return domain.ProtocolPGMajorUpgrade
+		}
 		if c.Branch.Status == domain.BranchMerging {
 			return domain.ProtocolBranchMerge
 		}

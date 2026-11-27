@@ -66,9 +66,15 @@ export function BranchView({
             </span>
           )}
           <RecordingBadge record={b.record} />
+          {b.stats_updating && (
+            <span className="badge" title={t("Optimizer statistics are updating in the background; this Branch is ready to use.")}>
+              {t("Updating stats")}
+            </span>
+          )}
         </span>
       </header>
       {b.status_reason && <p className="reason"><ErrorText error={serverError(b.status_reason)} /></p>}
+      {b.stats_warning && <p className="reason warn">{b.stats_warning}</p>}
       <dl className="branch-facts">
         <dt>{t("Base")}</dt>
         <dd className="mono" title={`snapshot ${b.snapshot}`}>

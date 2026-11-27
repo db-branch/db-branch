@@ -27,6 +27,7 @@ func (s *Service) clusterAllowsBranchPause(ctx context.Context) error {
 // the dataset, the port and the credentials stay, nothing runs and no memory is
 // held. ResumeBranch starts it again. Connections are refused meanwhile.
 func (s *Service) PauseBranch(ctx context.Context, name domain.Name, report Reporter) (domain.Branch, error) {
+	s.cancelStats(name)
 	if err := s.clusterAllowsBranchPause(ctx); err != nil {
 		return domain.Branch{}, err
 	}
@@ -51,6 +52,7 @@ func (s *Service) doPause(ctx context.Context, br domain.Branch, report Reporter
 		return s.keepRunning(ctx, br, err)
 	}
 	br.Status, br.Error = domain.BranchPaused, ""
+	br.StatsUpdating = false
 	return br, s.saveBranch(ctx, br)
 }
 

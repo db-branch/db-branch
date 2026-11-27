@@ -141,6 +141,7 @@ func (s *Service) RestoreCheckpoint(ctx context.Context, n domain.Name, name str
 // domain.ResetPoint restores the branch's creation state the same way (a
 // restore, not a reset: the checkpoints are kept).
 func (s *Service) RestoreCheckpointWith(ctx context.Context, n domain.Name, name, note string, report Reporter) (domain.Branch, error) {
+	s.cancelStats(n)
 	if len(note) > maxNote {
 		return domain.Branch{}, fmt.Errorf("%w: the note of a restore is at most %d bytes", domain.ErrInvalidName, maxNote)
 	}

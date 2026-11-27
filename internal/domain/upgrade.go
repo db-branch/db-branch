@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ProtocolBranchRuntime is the cluster protocol from which a branch may run
@@ -17,6 +18,11 @@ const ProtocolBranchRuntime = 16
 // paused. A paused branch is a status inside put_branch (no new command), but a
 // node that does not know it would not start or reap it correctly.
 const ProtocolBranchPause = 18
+
+// ProtocolPGMajorUpgrade is the cluster protocol from which a branch may carry
+// background statistics update fields (StatsUpdating, StatsWarning) inside
+// insert_branch / put_branch after a PostgreSQL major upgrade.
+const ProtocolPGMajorUpgrade = 31
 
 // ErrUpgradeRefused is returned for an upgrade db-branch does not do.
 var ErrUpgradeRefused = errors.New("upgrade not allowed")
@@ -43,6 +49,7 @@ const (
 	CodeUpgradePath        = "upgrade_path"
 	CodeRuntimeMissing     = "runtime_not_installed"
 	CodeDiskSpace          = "disk_space"
+	CodeInsufficientSpace  = "insufficient_space"
 	CodeNativePassword     = "native_password_users"
 	CodeNativePasswordGone = "native_password_removed"
 	CodeBranchUser         = "branch_user_converted"
@@ -50,6 +57,15 @@ const (
 	CodePartitionEngine    = "partitions_not_innodb"
 	CodeConfigInvalid      = "config_invalid"
 	CodeConfigAdapted      = "config_adapted"
+	CodeManyRelations      = "many_relations"
+	CodeManyLargeObjects   = "many_large_objects"
+	CodeLargeDatabase      = "large_database"
+	CodeExtensionMissing   = "extension_missing"
+	CodeExtensionUpdate    = "extension_update"
+	CodeLogicalReplication = "logical_replication"
+	CodePGCheckError       = "pg_upgrade_check_error"
+	CodePGCheckWarning     = "pg_upgrade_check_warning"
+	CodeStatsUpdate        = "stats_update"
 	CodeLogWarning         = "log_warning"
 	CodeLogError           = "log_error"
 	CodeLogProgress        = "log_upgrade"
@@ -95,6 +111,16 @@ type UpgradeResult struct {
 // upgrade that was not rolled back.
 const UpgradeFailedPrefix = "upgrade failed: "
 
+// PGClusterMeta records the old PostgreSQL cluster's locale settings read
+// while it was running, so initdb for the new cluster can match them.
+type PGClusterMeta struct {
+	Encoding       string
+	LCCollate      string
+	LCCtype        string
+	LocaleProvider string
+	Locale         string
+}
+
 // UpgradePlan is what an engine found out about moving a running server to
 // another runtime.
 type UpgradePlan struct {
@@ -102,6 +128,10 @@ type UpgradePlan struct {
 	// LegacyAuth: accounts use MySQL's mysql_native_password, so the new
 	// server must keep that plugin loaded (8.4 disables it by default).
 	LegacyAuth bool
+	// Timeout scales the upgrade operation deadline (0: engine default).
+	Timeout time.Duration
+	// PGMeta holds PostgreSQL cluster locale metadata captured during pre-check.
+	PGMeta *PGClusterMeta
 }
 
 // Login is a database account of a branch.
@@ -112,6 +142,17 @@ type UpgradeLog struct {
 	Findings []Finding
 	// Excerpt is the end of the error log (also when the start failed).
 	Excerpt string
+	// NeedsStats indicates that optimizer statistics should be refreshed in
+	// the background once the branch is ready (PostgreSQL major upgrade).
+	NeedsStats bool
+}
+
+// UpgradeContext passes the old runtime, pre-check plan, and progress reporter
+// to an engine that replaces on-disk files during an upgrade (e.g. pg_upgrade).
+type UpgradeContext struct {
+	From   RuntimeRef
+	Plan   UpgradePlan
+	Report func(phase string)
 }
 
 // Upgrader is implemented by a DBServer that can move an instance to another
@@ -123,6 +164,19 @@ type Upgrader interface {
 	// clean shutdown of the old runtime left, and reads its log. login is the
 	// branch's own account.
 	StartUpgraded(ctx context.Context, s Server, login Login) (UpgradeLog, error)
+}
+
+// MajorUpgrader is an optional extension of Upgrader for engines that need the
+// old runtime and progress reporting when running the upgrade (pg_upgrade).
+type MajorUpgrader interface {
+	Upgrader
+	StartMajorUpgraded(ctx context.Context, s Server, login Login, up UpgradeContext) (UpgradeLog, error)
+}
+
+// MissingStatsUpdater is a DBServer that can populate missing optimizer
+// statistics asynchronously after a major upgrade.
+type MissingStatsUpdater interface {
+	UpdateMissingStats(ctx context.Context, s Server) error
 }
 
 type version struct{ major, minor, patch int }
@@ -264,12 +318,17 @@ func pgMajor(v version) version {
 	return version{v.major, v.minor, 0}
 }
 
-func checkPostgresPath(from, to RuntimeRef) error {
-	a, b := parseVersion(from.Version), parseVersion(to.Version)
-	if pgMajor(a) != pgMajor(b) {
-		return fmt.Errorf("%w: PostgreSQL major version upgrades (%s to %s, pg_upgrade) are not supported yet; minor upgrades within one major version, such as 17.2 to 17.5, are", ErrUpgradeRefused, from, to)
-	}
+func checkPostgresPath(_, _ RuntimeRef) error {
 	return nil
+}
+
+// IsPGMajorUpgrade reports whether moving from from to to crosses a
+// PostgreSQL major version boundary.
+func IsPGMajorUpgrade(from, to RuntimeRef) bool {
+	if from.Engine != Postgres || to.Engine != Postgres {
+		return false
+	}
+	return pgMajor(parseVersion(from.Version)) != pgMajor(parseVersion(to.Version))
 }
 
 func checkMySQLPath(from, to RuntimeRef) error {

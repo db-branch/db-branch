@@ -31,8 +31,10 @@ type branchView struct {
 	Owner       *string `json:"owner"`
 	OwnerName   *string `json:"owner_name,omitempty"`
 	ID          string  `json:"id"`
-	Access      string  `json:"access"`
-	Record      bool    `json:"record"`
+	Access        string  `json:"access"`
+	Record        bool    `json:"record"`
+	StatsUpdating bool    `json:"stats_updating"`
+	StatsWarning  *string `json:"stats_warning"`
 	Connection  struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
@@ -273,7 +275,11 @@ func (a *App) branchCommand() *cobra.Command {
 				if b.Storage != nil {
 					used = HumanBytes(b.Storage.Used)
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", orValue(b.ID, b.Name), b.Status, b.Base, b.Runtime, b.Node, b.Connection.Port, used, orDash(b.ExpiresAt))
+				status := b.Status
+				if b.StatsUpdating {
+					status += " (updating stats)"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", orValue(b.ID, b.Name), status, b.Base, b.Runtime, b.Node, b.Connection.Port, used, orDash(b.ExpiresAt))
 			}
 			return tw.Flush()
 		},
@@ -421,6 +427,12 @@ func (a *App) showBranch(cmd *cobra.Command, c Client, n domain.Name) error {
 		fmt.Fprintf(tw, "Runtime:\t%s (upgraded; the base runs %s)\n", b.Runtime, b.BaseRuntime)
 	} else {
 		fmt.Fprintf(tw, "Runtime:\t%s\n", b.Runtime)
+	}
+	if b.StatsUpdating {
+		fmt.Fprintf(tw, "Stats:\tupdating in background (branch is ready to use)\n")
+	}
+	if b.StatsWarning != nil && *b.StatsWarning != "" {
+		fmt.Fprintf(tw, "Stats warning:\t%s\n", *b.StatsWarning)
 	}
 	fmt.Fprintf(tw, "Connect:\t%s:%d  user %s  (password: db-branch branch dsn %s)\n", b.Connection.Host, b.Connection.Port, b.Connection.User, b.Name)
 	fmt.Fprintf(tw, "Expires:\t%s\n", orDash(b.ExpiresAt))

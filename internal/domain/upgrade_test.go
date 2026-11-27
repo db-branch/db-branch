@@ -43,11 +43,13 @@ func TestCheckUpgradePath_許す道と断る道を見分ける(t *testing.T) {
 		{"mysql@5.5.62", "mysql@5.7.44", "too old; upgrades start from MySQL 5.6"},
 		{"postgres@17.2", "postgres@17.5", ""},
 		{"postgres@17.5", "postgres@17.2", "downgrade"},
-		{"postgres@17.2", "postgres@18.1", "not supported yet"},
-		{"postgres@18.7", "postgres@19.0", "postgres@18.7 to postgres@19.0, pg_upgrade) are not supported yet"},
+		{"postgres@17.2", "postgres@18.1", ""},
+		{"postgres@17.12", "postgres@19.0", ""},
+		{"postgres@18.7", "postgres@19.0", ""},
 		{"postgres@19.0", "postgres@19.1", ""},
 		{"postgres@19.1", "postgres@19.0", "downgrade"},
-		{"postgres@9.6.1", "postgres@10.1", "not supported yet"},
+		{"postgres@19.0", "postgres@18.7", "downgrade"},
+		{"postgres@9.6.1", "postgres@10.1", ""},
 		{"postgres@9.6.1", "postgres@9.6.5", ""},
 	}
 	for _, c := range cases {
@@ -115,5 +117,24 @@ func TestListCheckpoints_取得時のランタイムを返す(t *testing.T) {
 	got := domain.ListCheckpoints(lines, "")
 	if got[0].Runtime != "mysql@8.0.46" || got[1].Runtime != "" {
 		t.Errorf("runtimes = %q %q", got[0].Runtime, got[1].Runtime)
+	}
+}
+
+func TestIsPGMajorUpgrade_PostgreSQLのメジャー更新だけを真とする(t *testing.T) {
+	if domain.ProtocolPGMajorUpgrade != 31 {
+		t.Fatalf("ProtocolPGMajorUpgrade = %d, want 31", domain.ProtocolPGMajorUpgrade)
+	}
+	for _, tc := range []struct {
+		from, to string
+		want     bool
+	}{
+		{"postgres@18.6", "postgres@19.0", true},
+		{"postgres@17.12", "postgres@19.0", true},
+		{"postgres@18.6", "postgres@18.7", false},
+		{"mysql@8.0.46", "mysql@8.4.13", false},
+	} {
+		if got := domain.IsPGMajorUpgrade(rt(tc.from), rt(tc.to)); got != tc.want {
+			t.Errorf("IsPGMajorUpgrade(%s, %s) = %v, want %v", tc.from, tc.to, got, tc.want)
+		}
 	}
 }

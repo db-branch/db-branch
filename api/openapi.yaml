@@ -3880,6 +3880,12 @@ components:
         checkpoints:
           type: boolean
           description: Whether the node holding the branch can take checkpoints (it needs its own ZFS pool). When false, the checkpoint endpoints answer `409 checkpoints_unavailable`.
+        stats_updating:
+          type: boolean
+          description: Present and true while optimizer statistics are updating in the background after a PostgreSQL major upgrade (the branch is already `ready` and usable).
+        stats_warning:
+          type: [string, 'null']
+          description: Warning message if background optimizer statistics collection failed after a PostgreSQL major upgrade.
       required:
         - name
         - id
@@ -4149,7 +4155,7 @@ components:
         code:
           type: string
           examples: [native_password_users]
-          description: One of `upgrade_path`, `runtime_not_installed`, `disk_space`, `native_password_users`, `native_password_removed`, `branch_user_converted`, `config_invalid`, `config_adapted`, `log_warning`, `log_error`, `log_upgrade`.
+          description: One of `upgrade_path`, `runtime_not_installed`, `disk_space`, `insufficient_space`, `native_password_users`, `native_password_removed`, `branch_user_converted`, `old_password_users`, `partitions_not_innodb`, `config_invalid`, `config_adapted`, `many_relations`, `many_large_objects`, `large_database`, `extension_missing`, `extension_update`, `logical_replication`, `pg_upgrade_check_error`, `pg_upgrade_check_warning`, `stats_update`, `log_warning`, `log_error`, `log_upgrade`.
         message: {type: string}
       required: [level, code, message]
     UpgradeRequest:

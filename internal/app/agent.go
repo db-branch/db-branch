@@ -264,6 +264,11 @@ func RunAgent(ctx context.Context, cfg config.Config, opts AgentOptions) error {
 	}})
 	var tokens *token.Service
 	if svc, err := a.Branches(); err == nil {
+		svc.OnBranchChanged = func(n domain.Name) {
+			if cl == nil {
+				srv.PublishBranch(runCtx, n)
+			}
+		}
 		if cl == nil {
 			if fs, ok := svc.Store.(*filestore.Store); ok {
 				credStore := srv.Auth.Store

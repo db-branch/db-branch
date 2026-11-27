@@ -170,15 +170,15 @@ func TestTailLog_unitのジャーナルの末尾を返す(t *testing.T) {
 	}
 }
 
-func TestCheckUpgradePath_PostgreSQLは同じメジャーの中だけ許す(t *testing.T) {
+func TestCheckUpgradePath_PostgreSQLは新しい版への移行を許しダウングレードを断る(t *testing.T) {
 	_, p, _ := providerFixture(t)
 	for _, c := range []struct {
 		from, to string
 		ok       bool
 	}{
 		{"17.2", "17.5", true}, {"19.0", "19.1", true}, {"9.6.1", "9.6.5", true},
-		{"17.2", "18.1", false}, {"18.7", "19.0", false}, {"9.5.1", "9.6.1", false},
-		{"17.5", "17.2", false}, {"19.1", "19.0", false}, {"17.2", "17.2", false},
+		{"17.2", "18.1", true}, {"18.7", "19.0", true}, {"17.12", "19.0", true}, {"9.5.1", "9.6.1", true},
+		{"17.5", "17.2", false}, {"19.1", "19.0", false}, {"19.0", "18.7", false}, {"17.2", "17.2", false},
 	} {
 		err := p.CheckUpgradePath(ctx, c.from, c.to)
 		if (err == nil) != c.ok || (err != nil && !errors.Is(err, domain.ErrUpgradeRefused)) {
