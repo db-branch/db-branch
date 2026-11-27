@@ -879,6 +879,40 @@ func TestRecover_統計更新中にエージェントが再起動したらバッ
 	if got := z.branchNow(t); got.StatsUpdating || len(z.server.statsCalls) == 0 {
 		t.Fatalf("after recover: branch = %+v statsCalls = %d", got, len(z.server.statsCalls))
 	}
+
+	// Agent shutdown (SIGTERM race: child exits slightly before LifecycleCtx cancels) keeps StatsUpdating == true with no warning.
+	z2 := newPGUEnv(t)
+	lctx, lcancel := context.WithCancel(context.Background())
+	z2.svc.LifecycleCtx = lctx
+	z2.server.upNeedsStats = true
+	z2.server.statsErr = errors.New("signal: terminated")
+	hookDone := make(chan struct{})
+	z2.server.statsHook = func(context.Context) {
+		close(hookDone)
+	}
+	if _, err := z2.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19}, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-hookDone
+	time.Sleep(15 * time.Millisecond)
+	lcancel()
+	time.Sleep(30 * time.Millisecond)
+	if got := z2.branchNow(t); !got.StatsUpdating || got.StatsWarning != "" {
+		t.Fatalf("on shutdown SIGTERM race = %+v", got)
+	}
+	// Restart with fresh LifecycleCtx recovers and completes stats cleanly.
+	z2.svc.LifecycleCtx = context.Background()
+	z2.server.statsErr = nil
+	z2.server.statsHook = nil
+	done2 := make(chan struct{})
+	z2.svc.OnBranchChanged = func(domain.Name) { close(done2) }
+	if err := z2.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-done2
+	if got := z2.branchNow(t); got.StatsUpdating || got.StatsWarning != "" {
+		t.Fatalf("after restart recover = %+v", got)
+	}
 }
 
 func TestResetBranchとRestore_統計更新中に戻すとキャンセルして状態と警告を消す(t *testing.T) {

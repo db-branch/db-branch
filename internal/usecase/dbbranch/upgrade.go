@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
 )
@@ -587,7 +588,11 @@ func (s *Service) startBackgroundStats(br domain.Branch) {
 	if err != nil {
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	parentCtx := s.LifecycleCtx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parentCtx)
 	s.statsMu.Lock()
 	if prev, exists := s.statsCancels[br.Name]; exists && prev.cancel != nil {
 		prev.cancel()
@@ -603,6 +608,16 @@ func (s *Service) startBackgroundStats(br domain.Branch) {
 	go func() {
 		defer cancel()
 		runErr := su.UpdateMissingStats(ctx, spec)
+		if runErr != nil && s.LifecycleCtx != nil && ctx.Err() == nil {
+			// Give a simultaneous cgroup SIGTERM a brief window to cancel LifecycleCtx
+			// before recording a failure warning instead of leaving recovery intact.
+			timer := time.NewTimer(200 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+			case <-timer.C:
+			}
+			timer.Stop()
+		}
 
 		s.statsMu.Lock()
 		curJob, active := s.statsCancels[br.Name]

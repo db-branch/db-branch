@@ -74,6 +74,10 @@ type Service struct {
 	MemoryMB int
 	Clock    func() time.Time
 	Password func() string
+	// LifecycleCtx is cancelled when the agent shuts down so background work
+	// (such as post-upgrade statistics) stops cleanly and leaves persisted
+	// in-progress state intact for Recover() on restart.
+	LifecycleCtx context.Context
 	// OpenPassword is the shared password of open branches (AccessOpen).
 	OpenPassword func() string
 
