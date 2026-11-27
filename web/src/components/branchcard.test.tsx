@@ -110,5 +110,10 @@ describe("BranchRow page: SQL", () => {
   it("shows nothing without it", () => {
     expect(row({ mode: "page" })).not.toMatch(/<h2>SQL<\/h2>/);
   });
+  it("shows Updating stats badge and stats_warning", () => {
+    const h = row({}, branch({ runtime: "postgres@19.0", stats_updating: true, stats_warning: "analyze slow" }));
+    expect(h).toContain("Updating stats");
+    expect(h).toContain("analyze slow");
+  });
 });
 

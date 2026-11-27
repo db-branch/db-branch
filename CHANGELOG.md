@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **PostgreSQL Major Version Upgrades (`F-16`)**: `branch upgrade` now supports PostgreSQL major version upgrades (including jumping majors such as `17 -> 19` and `18 -> 19`) via `pg_upgrade --swap` (PostgreSQL 18+, `--link` on older versions), preserving encoding, locale, and data checksum settings (`pg_controldata`), checking target extensions (including `anon`), logical replication slots/subscriptions, object-count/database-size warnings, and `pg_upgrade --check` compatibility, scaling operation timeouts from object counts, reporting `pg_upgrade` progress stages, rolling back automatically via ZFS checkpoints on failure, and running `vacuumdb --analyze-in-stages --missing-stats-only` in the background while keeping the branch `ready` (`stats_updating`, `stats_warning`, Raft Protocol `31`).
+
 ## [0.4.0] - 2026-11-26
 
 1.0 (GA) readiness release introducing multi-user OSS console accounts, DB client connection file export in the Web Console, 100% Japanese Web Console localization, console TLS 1.3 hardening, API/CLI/MCP 1.0 contract unification, and token/cluster security improvements.

@@ -68,6 +68,17 @@ func TestStreamEnv_環境変数を足して実行し標準出力を流す(t *tes
 	}
 }
 
+func TestStreamDir_作業ディレクトリを指定して標準出力を流す(t *testing.T) {
+	dir := t.TempDir()
+	var out strings.Builder
+	if err := (execx.Runner{}).StreamDir(context.Background(), dir, &out, "pwd"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(out.String()), dir) {
+		t.Fatalf("pwd = %q, want %q", out.String(), dir)
+	}
+}
+
 func TestRunInputEnv_環境変数と標準入力を渡して実行しエラーに環境変数を含めない(t *testing.T) {
 	// Overrides an existing parent environment variable with the same name.
 	t.Setenv("DBB_SECRET", "old-parent-value")

@@ -168,13 +168,19 @@ type fakeServer struct {
 	ranAs []string
 
 	// Upgrader behaviour (see upgrade_test.go).
-	plan       domain.UpgradePlan
-	checkErr   error
-	checkedFor domain.Login
-	upgraded   []domain.Server
-	upFail     error
-	upFindings []domain.Finding
-	upExcerpt  string
+	plan          domain.UpgradePlan
+	checkErr      error
+	checkedFor    domain.Login
+	upgraded      []domain.Server
+	majorUpgrades []domain.UpgradeContext
+	upDeadlines   []bool
+	upFail        error
+	upFindings    []domain.Finding
+	upExcerpt     string
+	upNeedsStats  bool
+	statsCalls    []domain.Server
+	statsErr      error
+	statsHook     func(ctx context.Context)
 }
 
 func (f *fakeServer) fail(op string) error {

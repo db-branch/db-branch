@@ -14,8 +14,8 @@ import (
 )
 
 func TestProtocolUsers_プロトコル30と混在クラスタ拒否(t *testing.T) {
-	if raftstore.Protocol != domain.ProtocolUsers {
-		t.Fatalf("Protocol = %d, want %d", raftstore.Protocol, domain.ProtocolUsers)
+	if raftstore.Protocol < domain.ProtocolUsers {
+		t.Fatalf("Protocol = %d, below %d", raftstore.Protocol, domain.ProtocolUsers)
 	}
 	for _, c := range []raftstore.Command{
 		raftstore.InsertUser(domain.User{ID: "user:a@example.com"}),

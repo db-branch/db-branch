@@ -238,3 +238,24 @@ func TestCLI_BranchCreateUpgraded_JSON出力が単一の有効JSONになりBaseC
 		t.Errorf("slash name should be rejected client-side without API calls: %v", api2.requests)
 	}
 }
+
+func TestBranchShowとList_統計更新中と警告を表示する(t *testing.T) {
+	api := newFakeAPI()
+	b := map[string]any{
+		"name": "pgx", "status": "ready", "runtime": "postgres@19.0", "base_runtime": "postgres@18.6",
+		"base": "pgbase", "snapshot": "s1", "node": "n1",
+		"connection": map[string]any{"host": "h", "port": 40001, "user": "pgx"},
+		"stats_updating": true, "stats_warning": "vacuumdb failed",
+	}
+	api.answers["GET /v1/branches/pgx"] = b
+	api.answers["GET /v1/branches"] = map[string]any{"items": []any{b}}
+
+	code, showOut, errOut := runAPI(t, api, "branch", "show", "pgx")
+	if code != 0 || !strings.Contains(showOut, "updating in background") || !strings.Contains(showOut, "vacuumdb failed") {
+		t.Fatalf("show code=%d err=%q out:\n%s", code, errOut, showOut)
+	}
+	code, listOut, errOut := runAPI(t, api, "branch", "list")
+	if code != 0 || !strings.Contains(listOut, "ready (updating stats)") {
+		t.Fatalf("list code=%d err=%q out:\n%s", code, errOut, listOut)
+	}
+}

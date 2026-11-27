@@ -68,6 +68,11 @@ type branchJSON struct {
 	Record bool `json:"record"`
 	// Checkpoints is whether the node holding the branch can take checkpoints.
 	Checkpoints bool `json:"checkpoints"`
+	// StatsUpdating is true while background optimizer statistics are updating
+	// after a PostgreSQL major upgrade.
+	StatsUpdating bool `json:"stats_updating,omitempty"`
+	// StatsWarning holds a warning if background statistics collection failed.
+	StatsWarning *string `json:"stats_warning,omitempty"`
 }
 
 func ts(t time.Time) string { return t.UTC().Format(time.RFC3339) }
@@ -94,6 +99,7 @@ func (s *Server) branchView(ctx context.Context, svc Branches, b domain.Branch) 
 		CreatedAt: ts(b.CreatedAt), ExpiresAt: optTS(b.ExpiresAt), ResetAt: optTS(b.ResetAt),
 		Connection: connectionJSON{Host: s.hostOf(b.Node), Port: b.Port, User: b.User},
 		Owner:      optString(b.Owner), OwnerName: optString(b.DisplayOwner()), ID: b.Name.String(), Access: domain.AccessPrivate, Record: b.Record,
+		StatsUpdating: b.StatsUpdating, StatsWarning: optString(b.StatsWarning),
 	}
 	if b.ParentBranch != (domain.Name{}) {
 		v.ParentBranch = optString(b.ParentBranch.String())

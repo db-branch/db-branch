@@ -74,7 +74,12 @@ func (f *fakeSystem) RunInput(ctx context.Context, in io.Reader, name string, ar
 	switch {
 	case strings.Contains(call, " initdb "):
 		if f.initdb != nil {
-			f.initdb(args[len(args)-9])
+			for i := 0; i+1 < len(args); i++ {
+				if args[i] == "-D" {
+					f.initdb(args[i+1])
+					break
+				}
+			}
 		}
 	case strings.HasPrefix(call, "systemctl start"):
 		f.active = true

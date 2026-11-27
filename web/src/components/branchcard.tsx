@@ -186,6 +186,11 @@ export function BranchRow({
             </span>
             {b.access === "open" && <span className="badge">{t("open")}</span>}
             <RecordingBadge record={b.record} />
+            {b.stats_updating && (
+              <span className="badge" title={t("Optimizer statistics are updating in the background; this Branch is ready to use.")}>
+                {t("Updating stats")}
+              </span>
+            )}
             {chip}
           </span>
           <span className="brow-meta">
@@ -205,6 +210,11 @@ export function BranchRow({
             </span>
             {b.access === "open" && <span className="badge">{t("open")}</span>}
             <RecordingBadge record={b.record} />
+            {b.stats_updating && (
+              <span className="badge" title={t("Optimizer statistics are updating in the background; this Branch is ready to use.")}>
+                {t("Updating stats")}
+              </span>
+            )}
             {chip}
           </span>
           <span className="brow-meta">
@@ -247,9 +257,9 @@ export function BranchRow({
           </span>
         </div>
       </div>
-      {(b.status_reason || failedJob) && (
+      {(b.status_reason || b.stats_warning || failedJob) && (
         <p className="brow-reason" role={failedJob ? "alert" : undefined}>
-          {failedJob ? (job?.error ? <ErrorText error={job.error} /> : null) : b.status_reason ? <>{b.status}: <ErrorText error={serverError(b.status_reason)} /></> : null}
+          {failedJob ? (job?.error ? <ErrorText error={job.error} /> : null) : b.status_reason ? <>{b.status}: <ErrorText error={serverError(b.status_reason)} /></> : b.stats_warning ?? null}
           {failedJob && onDismiss && (
             <>
               {" "}

@@ -916,3 +916,82 @@ func TestMergeBranch_追加網羅_PausedPreCrashとSwapped済ロールバック�
 		t.Errorf("expected BranchReady after Step 6, got %s", br12.Status)
 	}
 }
+
+func TestMergeBranch_統計更新中のマージとロールバックでstatsを再開する(t *testing.T) {
+	z, m := newMergeEnv(t)
+	started := make(chan struct{}, 8)
+	cancelled := make(chan struct{}, 8)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	z.server.statsHook = func(sctx context.Context) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		started <- struct{}{}
+		if n < 3 {
+			<-sctx.Done()
+			cancelled <- struct{}{}
+			return
+		}
+		select {
+		case <-sctx.Done():
+			cancelled <- struct{}{}
+		case <-release:
+		}
+	}
+	br, err := z.store.GetBranch(ctx, name("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	br.StatsUpdating = true
+	if err := z.store.PutBranch(ctx, br); err != nil {
+		t.Fatal(err)
+	}
+	if err := z.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+
+	// 1. Conflict rollback cancels stats before stop and restarts it on return to Ready.
+	m.diffPlan = domain.MergePlan{TotalConflicts: 1}
+	if _, err := z.svc.MergeBranch(ctx, dbbranch.MergeBranchRequest{Name: name("x"), SourceLine: intPtr(0)}, nil); !errors.Is(err, domain.ErrMergeConflict) {
+		t.Fatalf("want conflict err, got %v", err)
+	}
+	<-cancelled
+	<-started
+
+	// 2. Apply failure (rollbackMerge) also restarts stats when returning to Ready.
+	m.diffPlan = domain.MergePlan{Inserted: 1}
+	m.applyErr = errors.New("apply boom")
+	if _, err := z.svc.MergeBranch(ctx, dbbranch.MergeBranchRequest{Name: name("x"), SourceLine: intPtr(0)}, nil); err == nil {
+		t.Fatal("want apply err")
+	}
+	<-cancelled
+	<-started
+
+	// 3. Merge success restarts stats and lets it finish cleanly (StatsUpdating becomes false).
+	doneCh := make(chan struct{})
+	z.svc.OnBranchChanged = func(n domain.Name) {
+		if b, _ := z.store.GetBranch(ctx, n); !b.StatsUpdating {
+			select {
+			case <-doneCh:
+			default:
+				close(doneCh)
+			}
+		}
+	}
+	m.applyErr = nil
+	res, err := z.svc.MergeBranch(ctx, dbbranch.MergeBranchRequest{Name: name("x"), SourceLine: intPtr(0)}, nil)
+	if err != nil || res.Status != domain.MergeMerged {
+		t.Fatalf("merge = %+v, err = %v", res, err)
+	}
+	<-cancelled
+	<-started
+	close(release)
+	<-doneCh
+	if got, _ := z.store.GetBranch(ctx, name("x")); got.StatsUpdating {
+		t.Fatalf("expected StatsUpdating == false after background vacuumdb completes, got %+v", got)
+	}
+}

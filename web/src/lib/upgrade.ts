@@ -2,6 +2,8 @@
 // Pure, so it can be tested without a browser; the server
 // (domain.CheckUpgradePath) stays the authority.
 
+import { language, t } from "./i18n";
+
 export type Level = "error" | "warning" | "info";
 export type Finding = { level: Level; code: string; message: string };
 
@@ -43,7 +45,6 @@ const MYSQL_LTS: Version[] = [
 ];
 
 const series = (v: Version): Version => [v[0], v[1], 0];
-const pgMajor = (v: Version): Version => (v[0] >= 10 ? [v[0], 0, 0] : [v[0], v[1], 0]);
 
 // upgradeProblem says why a branch on from cannot move to to ("" when it can).
 export function upgradeProblem(from: string, to: string): string {
@@ -53,7 +54,7 @@ export function upgradeProblem(from: string, to: string): string {
   const c = cmp(a.v, b.v);
   if (c === 0) return "The branch already runs this version.";
   if (c > 0) return "Downgrades are not supported; restore a Checkpoint taken on the older version instead.";
-  if (b.engine === "postgres") return cmp(pgMajor(a.v), pgMajor(b.v)) === 0 ? "" : "PostgreSQL major version upgrades are not supported yet.";
+  if (b.engine === "postgres") return "";
   if (a.v[0] < 5 || (a.v[0] === 5 && a.v[1] < 6)) return "Upgrades start from MySQL 5.6.";
   for (const l of MYSQL_LTS) if (cmp(series(a.v), l) < 0 && cmp(l, series(b.v)) < 0) return `This would skip the long-term-support series ${l[0]}.${l[1]}.`;
   return "";
@@ -115,6 +116,12 @@ export const PHASES: Record<string, string> = {
   stopping: "Stopping the server",
   checkpointing: "Saving a Checkpoint",
   upgrading: "Starting the new version",
+  "pg_upgrade: initdb": "Initializing new cluster",
+  "pg_upgrade: checking": "Checking cluster compatibility",
+  "pg_upgrade: dumping": "Dumping schemas",
+  "pg_upgrade: restoring": "Restoring schemas",
+  "pg_upgrade: swapping": "Swapping data directories",
+  "pg_upgrade: syncing": "Syncing data directory",
   rolling_back: "Rolling back",
   cloning: "Rolling back",
   swapping: "Rolling back",
@@ -122,17 +129,36 @@ export const PHASES: Record<string, string> = {
   starting: "Starting the server",
 };
 
+export const FINDING_SUMMARIES: Record<string, string> = {
+  many_relations: "Many relations: schema dump/restore may take longer.",
+  many_large_objects: "Many large objects: pg_upgrade transfers them one by one and may take longer.",
+  large_database: "Large database: the Branch becomes ready after pg_upgrade while optimizer statistics update in the background.",
+  insufficient_space: "Not enough free pool space for the upgrade.",
+  logical_replication: "Logical replication slots or subscriptions exist; verify their state after upgrading.",
+  extension_missing: "An installed extension is missing in the target PostgreSQL runtime.",
+  extension_update: "An installed extension can be updated with ALTER EXTENSION ... UPDATE after upgrading.",
+  pg_upgrade_check_error: "pg_upgrade --check reported an error.",
+  pg_upgrade_check_warning: "pg_upgrade --check reported a warning.",
+};
+
+export function findingText(f: Finding): { text: string; detail?: string } {
+  if (language() !== "ja") return { text: f.message };
+  const summary = FINDING_SUMMARIES[f.code];
+  if (!summary) return { text: f.message };
+  return { text: t(summary), detail: f.message };
+}
+
 export type Step =
   | { kind: "closed" }
   | { kind: "choose" }
-  | { kind: "confirm"; target: string; force: boolean }
+  | { kind: "confirm"; target: string; force: boolean; warnings?: Finding[] }
   | { kind: "running"; target: string; checkOnly: boolean; phase: string }
   | { kind: "done"; target: string; result?: UpgradeResult; error?: unknown };
 
 export type StepAction =
   | { type: "open" }
   | { type: "close" }
-  | { type: "ask"; target: string; force?: boolean }
+  | { type: "ask"; target: string; force?: boolean; warnings?: Finding[] }
   | { type: "back" }
   | { type: "run"; target: string; checkOnly: boolean }
   | { type: "phase"; phase: string }
@@ -146,7 +172,9 @@ export function stepReducer(s: Step, a: StepAction): Step {
     case "close":
       return s.kind === "running" ? s : { kind: "closed" };
     case "ask":
-      return s.kind === "choose" || s.kind === "done" ? { kind: "confirm", target: a.target, force: !!a.force } : s;
+      return s.kind === "choose" || s.kind === "done"
+        ? { kind: "confirm", target: a.target, force: !!a.force, ...(a.warnings ? { warnings: a.warnings } : {}) }
+        : s;
     case "back":
       return s.kind === "confirm" ? { kind: "choose" } : s;
     case "run":

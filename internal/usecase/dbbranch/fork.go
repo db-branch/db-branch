@@ -322,6 +322,9 @@ func (s *Service) cloneCleanFork(ctx context.Context, plan forkPlan, child domai
 			_ = s.stopBranchImmediate(wctx, parent)
 			return false, errors.Join(cause, err)
 		}
+		if parent.StatsUpdating {
+			s.startBackgroundStats(parent)
+		}
 		s.collectIfSettled(wctx, parent.Name)
 		return false, cause
 	}
@@ -332,6 +335,9 @@ func (s *Service) cloneCleanFork(ctx context.Context, plan forkPlan, child domai
 		return err
 	}
 
+	if parent.StatsUpdating {
+		s.cancelStats(parent.Name)
+	}
 	parentSrv, err := s.server(parent.Runtime)
 	if err != nil {
 		return restoreParent(cancelChild(domain.Snapshot{}, err))
@@ -361,6 +367,9 @@ func (s *Service) cloneCleanFork(ctx context.Context, plan forkPlan, child domai
 	if err := s.saveBranch(wctx, parent); err != nil {
 		_ = s.stopBranchImmediate(wctx, parent)
 		return true, errors.Join(err, s.markFailed(wctx, child, err))
+	}
+	if parent.StatsUpdating {
+		s.startBackgroundStats(parent)
 	}
 	s.collectIfSettled(wctx, parent.Name)
 	return true, nil
@@ -490,6 +499,9 @@ func (s *Service) recoverForking(ctx context.Context, br domain.Branch) error {
 	if err := s.saveBranch(ctx, br); err != nil {
 		_ = s.stopBranchImmediate(ctx, br)
 		return err
+	}
+	if br.StatsUpdating {
+		s.startBackgroundStats(br)
 	}
 	s.collectIfSettled(ctx, br.Name)
 	return nil

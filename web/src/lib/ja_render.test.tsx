@@ -7,7 +7,7 @@ import { TtlBar } from "../components/marks";
 import { ScopeForm } from "../components/scopeform";
 import { Sparkline, sparkTitle } from "../components/sparkline";
 import { TourCard } from "../components/tour";
-import { UpgradePanel } from "../components/upgrade";
+import { UpgradeConfirm, UpgradePanel } from "../components/upgrade";
 import { Banner } from "../demo/Banner";
 import { seed } from "../demo/state";
 import { DeleteBase, UpdateData } from "../pages/Bases";
@@ -140,6 +140,19 @@ describe("Japanese UI rendering", () => {
     const upHtml = renderToStaticMarkup(<UpgradePanel branch={{ ...branch, checkpoints: false }} ready={true} allow={() => true} onChange={noop} />);
     expect(upHtml).toContain("アップグレードは Checkpoint と同じく、ノード自身の ZFS が必要です。");
     expect(relative(new Date(Date.now() - 120_000).toISOString())).toBe("2m前");
+    const confirmHtml = renderToStaticMarkup(
+      <UpgradeConfirm
+        from="postgres@18.6"
+        to="postgres@19.0"
+        force={false}
+        warnings={[{ level: "warning", code: "many_relations", message: "The cluster has 15000 relations." }]}
+        checking={false}
+        onBack={noop}
+        onConfirm={noop}
+      />,
+    );
+    expect(confirmHtml).toContain("先に Checkpoint を保存し、失敗時は自動でロールバックします。");
+    expect(confirmHtml).toContain("オブジェクト数が多いため");
   });
 
   it("renders TourCard and tourSteps titles and buttons in Japanese", () => {

@@ -900,3 +900,40 @@ func TestFSM_サービストークンの制限はプロトコル29を要求し�
 		t.Fatalf("after restore = %+v, want Bases:[shop] Team:payments", got)
 	}
 }
+
+func TestFSM_統計更新中のブランチはプロトコル31を要求しスナップショットに残る(t *testing.T) {
+	if raftstore.Protocol < domain.ProtocolPGMajorUpgrade {
+		t.Fatalf("raftstore.Protocol = %d, below %d", raftstore.Protocol, domain.ProtocolPGMajorUpgrade)
+	}
+	br := domain.Branch{Name: name("pg19"), Base: name("pg18"), Status: domain.BranchReady, StatsUpdating: true, StatsWarning: "analyze slow"}
+	if got := raftstore.PutBranch(br).Needs(); got != domain.ProtocolPGMajorUpgrade {
+		t.Fatalf("PutBranch(stats).Needs() = %d, want %d", got, domain.ProtocolPGMajorUpgrade)
+	}
+	if got := raftstore.InsertBranch(br).Needs(); got != domain.ProtocolPGMajorUpgrade {
+		t.Fatalf("InsertBranch(stats).Needs() = %d, want %d", got, domain.ProtocolPGMajorUpgrade)
+	}
+	plain := domain.Branch{Name: name("plain"), Base: name("pg18"), Status: domain.BranchReady}
+	if got := raftstore.PutBranch(plain).Needs(); got != 1 {
+		t.Fatalf("PutBranch(plain).Needs() = %d, want 1", got)
+	}
+
+	f := raftstore.NewFSM()
+	apply(t, f, raftstore.PutBranch(br))
+	snap, err := f.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := snap.Persist(&sink{Buffer: &buf}); err != nil {
+		t.Fatal(err)
+	}
+	snap.Release()
+	g := raftstore.NewFSM()
+	if err := g.Restore(io.NopCloser(&buf)); err != nil {
+		t.Fatal(err)
+	}
+	got := g.State().Branches["pg19"]
+	if !got.StatsUpdating || got.StatsWarning != "analyze slow" {
+		t.Fatalf("restored = %+v", got)
+	}
+}

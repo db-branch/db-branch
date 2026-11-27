@@ -34,6 +34,7 @@ func (s *Service) PauseBranch(ctx context.Context, name domain.Name, report Repo
 	if err != nil {
 		return br, err
 	}
+	s.cancelStats(name)
 	return s.doPause(ctx, br, report)
 }
 
@@ -51,6 +52,7 @@ func (s *Service) doPause(ctx context.Context, br domain.Branch, report Reporter
 		return s.keepRunning(ctx, br, err)
 	}
 	br.Status, br.Error = domain.BranchPaused, ""
+	br.StatsUpdating = false
 	return br, s.saveBranch(ctx, br)
 }
 
@@ -60,7 +62,11 @@ func (s *Service) keepRunning(ctx context.Context, br domain.Branch, cause error
 	wctx := context.WithoutCancel(ctx)
 	err := s.ensureRunning(wctx, br)
 	br.Status = domain.BranchReady
-	return br, errors.Join(cause, err, s.saveBranch(wctx, br))
+	saveErr := s.saveBranch(wctx, br)
+	if err == nil && saveErr == nil && br.StatsUpdating {
+		s.startBackgroundStats(br)
+	}
+	return br, errors.Join(cause, err, saveErr)
 }
 
 // ResumeBranch starts a paused branch's server again. When it cannot start, the

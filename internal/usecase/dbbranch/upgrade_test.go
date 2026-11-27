@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/usecase/dbbranch"
@@ -31,7 +33,26 @@ func (f *fakeServer) StartUpgraded(_ context.Context, s domain.Server, own domai
 		return domain.UpgradeLog{Findings: f.upFindings, Excerpt: f.upExcerpt}, f.upFail
 	}
 	f.running[s.ID] = true
-	return domain.UpgradeLog{Findings: f.upFindings, Excerpt: f.upExcerpt}, nil
+	return domain.UpgradeLog{Findings: f.upFindings, Excerpt: f.upExcerpt, NeedsStats: f.upNeedsStats}, nil
+}
+
+func (f *fakeServer) StartMajorUpgraded(ctx context.Context, s domain.Server, own domain.Login, up domain.UpgradeContext) (domain.UpgradeLog, error) {
+	f.majorUpgrades = append(f.majorUpgrades, up)
+	_, hasDeadline := ctx.Deadline()
+	f.upDeadlines = append(f.upDeadlines, hasDeadline)
+	return f.StartUpgraded(ctx, s, own)
+}
+
+func (f *fakeServer) UpdateMissingStats(ctx context.Context, s domain.Server) error {
+	f.j.add("update-missing-stats %s %s", s.ID, s.Runtime)
+	f.statsCalls = append(f.statsCalls, s)
+	if f.statsHook != nil {
+		f.statsHook(ctx)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return f.statsErr
 }
 
 func (s crashServer) StartUpgraded(ctx context.Context, sp domain.Server, own domain.Login) (domain.UpgradeLog, error) {
@@ -39,6 +60,13 @@ func (s crashServer) StartUpgraded(ctx context.Context, sp domain.Server, own do
 		return domain.UpgradeLog{}, err
 	}
 	return s.fakeServer.StartUpgraded(ctx, sp, own)
+}
+
+func (s crashServer) StartMajorUpgraded(ctx context.Context, sp domain.Server, own domain.Login, up domain.UpgradeContext) (domain.UpgradeLog, error) {
+	if err := s.c.step(); err != nil {
+		return domain.UpgradeLog{}, err
+	}
+	return s.fakeServer.StartMajorUpgraded(ctx, sp, own, up)
 }
 
 // uenv: a base "prod" on MySQL 8.0 with branch "x", both runtimes installed.
@@ -688,5 +716,398 @@ func TestCreateBranchUpgraded_作る前に道筋とインストールと対象�
 	z.clustered().nodes = []domain.Node{{Name: "node1", Protocol: 15}}
 	if _, _, err := z.svc.CreateBranchUpgraded(ctx, dbbranch.CreateBranchRequest{Name: name("y"), Base: name("prod"), Runtime: mysql84}, nil); !errors.Is(err, domain.ErrClusterUpgrading) {
 		t.Errorf("old node: %v", err)
+	}
+}
+
+var (
+	pg18 = domain.RuntimeRef{Engine: domain.Postgres, Version: "18.6"}
+	pg19 = domain.RuntimeRef{Engine: domain.Postgres, Version: "19.0"}
+)
+
+func newPGUEnv(t *testing.T) *zenv {
+	t.Helper()
+	z := newZEnv(t)
+	z.svc.Servers[domain.Postgres] = z.server
+	z.svc.Runtimes = fakeRuntimes{installed: map[domain.RuntimeRef]bool{pg18: true, pg19: true}}
+	if _, err := z.svc.CreateBase(ctx, dbbranch.CreateBaseRequest{Name: name("pgprod"), Runtime: pg18, Dump: "/dumps/pg.sql.gz"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := z.svc.CreateBranch(ctx, dbbranch.CreateBranchRequest{Name: name("x"), Base: name("pgprod")}, nil); err != nil {
+		t.Fatal(err)
+	}
+	z.sim.write(live, "v0")
+	z.j.entries = nil
+	return z
+}
+
+func TestUpgradeBranch_旧ランタイムが無ければ404を返す(t *testing.T) {
+	z := newPGUEnv(t)
+	z.svc.Runtimes = fakeRuntimes{installed: map[domain.RuntimeRef]bool{pg19: true}}
+	_, err := z.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19, CheckOnly: true}, nil)
+	if !errors.Is(err, domain.ErrRuntimeNotInstalled) || !strings.Contains(err.Error(), "runtime install postgres@18.6") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestUpgradeBranch_PGメジャー更新はタイムアウト付きで実行し統計更新を後ろで進めて先にreadyにする(t *testing.T) {
+	z := newPGUEnv(t)
+	z.server.plan = domain.UpgradePlan{Timeout: 20 * time.Minute}
+	z.server.upNeedsStats = true
+
+	statsStarted := make(chan struct{})
+	statsRelease := make(chan struct{})
+	z.server.statsHook = func(context.Context) {
+		close(statsStarted)
+		<-statsRelease
+	}
+	changed := make(chan domain.Name, 4)
+	z.svc.OnBranchChanged = func(n domain.Name) { changed <- n }
+
+	res, err := z.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19, PoolFree: 100 << 30}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != domain.UpgradeUpgraded {
+		t.Fatalf("status = %s", res.Status)
+	}
+	if len(z.server.majorUpgrades) != 1 || z.server.majorUpgrades[0].From != pg18 || len(z.server.upDeadlines) != 1 || !z.server.upDeadlines[0] {
+		t.Fatalf("majorUpgrades = %+v deadlines = %v", z.server.majorUpgrades, z.server.upDeadlines)
+	}
+	// Branch must already be ready with StatsUpdating == true while vacuumdb runs.
+	<-statsStarted
+	b := z.branchNow(t)
+	if b.Status != domain.BranchReady || b.Runtime != pg19 || !b.StatsUpdating || b.StatsWarning != "" {
+		t.Fatalf("branch while updating stats = %+v", b)
+	}
+
+	close(statsRelease)
+	select {
+	case n := <-changed:
+		if n != name("x") {
+			t.Fatalf("changed = %s", n)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for background stats completion")
+	}
+	b = z.branchNow(t)
+	if b.Status != domain.BranchReady || b.StatsUpdating || b.StatsWarning != "" {
+		t.Fatalf("branch after stats = %+v", b)
+	}
+}
+
+func TestUpgradeBranch_統計更新に失敗してもBranchはreadyのままで警告を残す(t *testing.T) {
+	z := newPGUEnv(t)
+	z.server.upNeedsStats = true
+	z.server.statsErr = errors.New("vacuumdb failed")
+	var logged []string
+	z.svc.Logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	done := make(chan struct{})
+	z.svc.OnBranchChanged = func(domain.Name) { close(done) }
+
+	if _, err := z.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19}, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stats failure notification")
+	}
+	b := z.branchNow(t)
+	if b.Status != domain.BranchReady || b.StatsUpdating || !strings.Contains(b.StatsWarning, "vacuumdb failed") || len(logged) == 0 {
+		t.Fatalf("branch = %+v logged = %v", b, logged)
+	}
+
+	// Non-MajorUpgrader fallback and missing MissingStatsUpdater are handled gracefully.
+	z2 := newPGUEnv(t)
+	z2.server.upNeedsStats = true
+	done2 := make(chan struct{})
+	z2.svc.OnBranchChanged = func(domain.Name) { close(done2) }
+	z2.svc.Servers[domain.Postgres] = plainUpgrader{z2.server}
+	if _, err := z2.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19}, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-done2
+}
+
+type plainUpgrader struct {
+	*fakeServer
+}
+
+func (p plainUpgrader) UpdateMissingStats(context.Context, domain.Server) error { return nil }
+
+func TestUpgradeBranch_PGメジャー更新は空き容量不足でinsufficient_spaceを出しプロトコル31を待つ(t *testing.T) {
+	z := newPGUEnv(t)
+	res, err := z.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19, CheckOnly: true, PoolFree: 1 << 20}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PreCheck[1].Code != domain.CodeInsufficientSpace || res.PreCheck[1].Level != domain.LevelError {
+		t.Errorf("finding = %+v", res.PreCheck[1])
+	}
+
+	n := z.clustered()
+	n.nodes = []domain.Node{{Name: "node1", Protocol: domain.ProtocolUsers}}
+	if _, err := z.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19}, nil); !errors.Is(err, domain.ErrClusterUpgrading) {
+		t.Errorf("want ErrClusterUpgrading below protocol 31, got %v", err)
+	}
+	if res, err := z.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19, CheckOnly: true}, nil); err != nil || res.Status != domain.UpgradeChecked {
+		t.Errorf("check_only must work during rolling upgrade: %+v %v", res, err)
+	}
+	n.nodes = []domain.Node{{Name: "node1", Protocol: domain.ProtocolPGMajorUpgrade}}
+	if _, err := z.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19}, nil); err != nil {
+		t.Errorf("protocol 31 should allow PG major upgrade: %v", err)
+	}
+}
+
+func TestRecover_統計更新中にエージェントが再起動したらバックグラウンド更新をやり直す(t *testing.T) {
+	z := newPGUEnv(t)
+	b := z.branchNow(t)
+	b.Runtime = pg19
+	b.StatsUpdating = true
+	_ = z.store.PutBranch(ctx, b)
+	done := make(chan struct{})
+	z.svc.OnBranchChanged = func(domain.Name) { close(done) }
+
+	if err := z.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for recovered background stats")
+	}
+	if got := z.branchNow(t); got.StatsUpdating || len(z.server.statsCalls) == 0 {
+		t.Fatalf("after recover: branch = %+v statsCalls = %d", got, len(z.server.statsCalls))
+	}
+
+	// Agent shutdown (SIGTERM race: child exits slightly before LifecycleCtx cancels) keeps StatsUpdating == true with no warning.
+	z2 := newPGUEnv(t)
+	lctx, lcancel := context.WithCancel(context.Background())
+	z2.svc.LifecycleCtx = lctx
+	z2.server.upNeedsStats = true
+	z2.server.statsErr = errors.New("signal: terminated")
+	hookDone := make(chan struct{})
+	z2.server.statsHook = func(context.Context) {
+		close(hookDone)
+	}
+	if _, err := z2.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19}, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-hookDone
+	time.Sleep(15 * time.Millisecond)
+	lcancel()
+	time.Sleep(30 * time.Millisecond)
+	if got := z2.branchNow(t); !got.StatsUpdating || got.StatsWarning != "" {
+		t.Fatalf("on shutdown SIGTERM race = %+v", got)
+	}
+	// Restart with a fresh Service sharing store/storage recovers and completes stats cleanly.
+	z3 := newZEnv(t)
+	z3.store = z2.store
+	z3.sim = z2.sim
+	z3.wire(z3.svc)
+	z3.svc.Store = crashStore{z2.store, z3.crash}
+	z3.svc.Servers[domain.Postgres] = z3.server
+	z3.svc.Runtimes = z2.svc.Runtimes
+	z3.svc.Pool = z2.svc.Pool
+	done2 := make(chan struct{})
+	z3.svc.OnBranchChanged = func(domain.Name) { close(done2) }
+	if err := z3.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-done2
+	if got := z3.branchNow(t); got.StatsUpdating || got.StatsWarning != "" {
+		t.Fatalf("after restart recover = %+v", got)
+	}
+}
+
+func TestResetBranchとRestore_統計更新中に戻すとキャンセルして状態と警告を消す(t *testing.T) {
+	z := newPGUEnv(t)
+	z.server.upNeedsStats = true
+	statsStarted := make(chan struct{})
+	statsCancelled := make(chan struct{})
+	z.server.statsHook = func(sctx context.Context) {
+		close(statsStarted)
+		<-sctx.Done()
+		close(statsCancelled)
+	}
+	if _, err := z.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19}, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-statsStarted
+
+	got, err := z.svc.ResetBranch(ctx, name("x"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-statsCancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stats goroutine was not cancelled on ResetBranch")
+	}
+	if got.Runtime != pg18 || got.StatsUpdating || got.StatsWarning != "" {
+		t.Fatalf("after reset = %+v", got)
+	}
+}
+
+func TestPGMajorUpgrade_RestoreとPauseとRecoverの連携(t *testing.T) {
+	// 1. RestoreCheckpoint reverts runtime from pg19 back to pg18 and cancels stats.
+	z := newPGUEnv(t)
+	z.server.upNeedsStats = true
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	z.server.statsHook = func(sctx context.Context) {
+		close(started)
+		<-sctx.Done()
+		close(cancelled)
+	}
+	res, err := z.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	restored, err := z.svc.RestoreCheckpoint(ctx, name("x"), res.Checkpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-cancelled
+	if restored.Runtime != pg18 || restored.StatsUpdating || restored.StatsWarning != "" {
+		t.Fatalf("after restore = %+v", restored)
+	}
+
+	// 2. Recover clears StatsUpdating on a paused branch.
+	b := z.branchNow(t)
+	b.Status = domain.BranchPaused
+	b.StatsUpdating = true
+	_ = z.store.PutBranch(ctx, b)
+	if err := z.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := z.branchNow(t); got.StatsUpdating {
+		t.Fatalf("paused branch after recover still StatsUpdating: %+v", got)
+	}
+
+	// 3. PauseBranch clears StatsUpdating.
+	z2 := newPGUEnv(t)
+	z2.server.upNeedsStats = true
+	z2.server.statsHook = func(sctx context.Context) { <-sctx.Done() }
+	if _, err := z2.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19}, nil); err != nil {
+		t.Fatal(err)
+	}
+	paused, err := z2.svc.PauseBranch(ctx, name("x"), nil)
+	if err != nil || paused.Status != domain.BranchPaused || paused.StatsUpdating {
+		t.Fatalf("paused = %+v, err = %v", paused, err)
+	}
+}
+
+func TestStatsUpdating_拒否操作は停止せずクリーンフォークや回復は再開する(t *testing.T) {
+	z := newPGUEnv(t)
+	z.server.upNeedsStats = true
+	var calls atomic.Int32
+	startedCh := make(chan struct{}, 8)
+	cancelledCh := make(chan struct{}, 8)
+	releaseCh := make(chan struct{})
+	z.server.statsHook = func(sctx context.Context) {
+		n := calls.Add(1)
+		startedCh <- struct{}{}
+		if n < 7 {
+			<-sctx.Done()
+			cancelledCh <- struct{}{}
+			return
+		}
+		select {
+		case <-sctx.Done():
+			cancelledCh <- struct{}{}
+		case <-releaseCh:
+		}
+	}
+	if _, err := z.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19}, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-startedCh
+
+	// 1. Rejected RestoreCheckpoint / DeleteBranch (nonexistent/bad input) / ResetBranch must NOT cancel running stats.
+	if _, err := z.svc.RestoreCheckpoint(ctx, name("x"), "no-such-cp", nil); err == nil {
+		t.Fatal("want RestoreCheckpoint error")
+	}
+	if _, err := z.svc.RestoreCheckpointWith(ctx, name("x"), "no-such-cp", strings.Repeat("a", 5000), nil); err == nil {
+		t.Fatal("want long note error")
+	}
+	if _, err := z.svc.ResetBranch(ctx, name("missing"), nil); err == nil {
+		t.Fatal("want missing ResetBranch error")
+	}
+	if err := z.svc.DeleteBranch(ctx, name("missing"), nil); err == nil {
+		t.Fatal("want missing DeleteBranch error")
+	}
+	select {
+	case <-cancelledCh:
+		t.Fatal("rejected operations must not cancel background stats")
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	// 2. PauseBranch failure (keepRunning) cancels during transition then restarts background stats.
+	z.server.failOn = "stop-clean"
+	if _, err := z.svc.PauseBranch(ctx, name("x"), nil); err == nil {
+		t.Fatal("want PauseBranch stop-clean error")
+	}
+	z.server.failOn = ""
+	<-cancelledCh
+	<-startedCh
+	if got := z.branchNow(t); got.Status != domain.BranchReady || !got.StatsUpdating {
+		t.Fatalf("after keepRunning = %+v", got)
+	}
+
+	// 3. Clean ForkBranch failure restores parent and restarts stats, then clean ForkBranch succeeds.
+	z.server.failOn = "stop-clean"
+	if _, err := z.svc.ForkBranch(ctx, dbbranch.ForkBranchRequest{Source: name("x"), Name: name("childfail"), Clean: true}, nil); err == nil {
+		t.Fatal("want clean fork stop-clean error")
+	}
+	z.server.failOn = ""
+	<-cancelledCh
+	<-startedCh
+
+	// 4. RestoreCheckpoint failure before swap (abortRestore) & interrupted restore/fork restart background stats.
+	z.sim.failOn = "zfs clone"
+	if _, err := z.svc.RestoreCheckpoint(ctx, name("x"), domain.ResetPoint, nil); err == nil {
+		t.Fatal("want restore clone failure")
+	}
+	z.sim.failOn = ""
+	<-cancelledCh
+	<-startedCh
+
+	brX := z.branchNow(t)
+	brX.Status = domain.BranchRestoring
+	_ = z.store.PutBranch(ctx, brX)
+	if err := z.svc.Recover(ctx); err != nil {
+		t.Fatalf("Recover(restoring): %v", err)
+	}
+	<-startedCh
+	brX = z.branchNow(t)
+	brX.Status = domain.BranchForking
+	_ = z.store.PutBranch(ctx, brX)
+	if err := z.svc.Recover(ctx); err != nil {
+		t.Fatalf("Recover(forking): %v", err)
+	}
+	<-startedCh
+
+	// 5. Clean ForkBranch succeeds: cancels before stopping parent and restarts background stats once ready.
+	doneCh := make(chan struct{})
+	z.svc.OnBranchChanged = func(n domain.Name) {
+		if n == name("x") && !z.branchNow(t).StatsUpdating {
+			select {
+			case <-doneCh:
+			default:
+				close(doneCh)
+			}
+		}
+	}
+	if _, err := z.svc.ForkBranch(ctx, dbbranch.ForkBranchRequest{Source: name("x"), Name: name("child1"), Clean: true}, nil); err != nil {
+		t.Fatalf("ForkBranch: %v", err)
+	}
+	<-cancelledCh
+	<-startedCh
+	close(releaseCh)
+	<-doneCh
+	if got := z.branchNow(t); got.Status != domain.BranchReady || got.StatsUpdating {
+		t.Fatalf("after clean fork + stats finish = %+v", got)
 	}
 }

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Branch } from "../api";
-import { Findings, headline, NotInstalled, UpgradePanel, UpgradeResultView } from "./upgrade";
+import { Findings, headline, NotInstalled, UpgradeConfirm, UpgradePanel, UpgradeResultView } from "./upgrade";
 import type { UpgradeResult } from "../lib/upgrade";
 
 const html = (node: React.ReactElement) => renderToStaticMarkup(node);
@@ -73,5 +73,23 @@ describe("NotInstalled", () => {
   it("says there is nothing when there is neither, and says nothing when an installed target is enough", () => {
     expect(renderToStaticMarkup(<NotInstalled runtime="mysql@9.6.0" targets={[]} toInstall={[]} />)).toContain("No upgrade target");
     expect(renderToStaticMarkup(<NotInstalled runtime="mysql@8.0.46" targets={["mysql@8.4.13"]} toInstall={[]} />)).toBe("");
+  });
+});
+
+describe("UpgradeConfirm", () => {
+  it("shows checkpoint/rollback note and pre-check warnings", () => {
+    const h = html(
+      <UpgradeConfirm
+        from="postgres@18.6"
+        to="postgres@19.0"
+        force={false}
+        warnings={[{ level: "warning", code: "many_relations", message: "The cluster has 15000 relations." }]}
+        checking={false}
+        onBack={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
+    expect(h).toContain("A checkpoint is saved first; on failure it rolls back automatically.");
+    expect(h).toContain("15000 relations");
   });
 });

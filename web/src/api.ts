@@ -29,6 +29,9 @@ export type Branch = {
   // parent_branch and parent_snapshot are set when the branch was forked from another branch.
   parent_branch?: string | null;
   parent_snapshot?: string | null;
+  // stats_updating is true while background optimizer statistics update after a PostgreSQL major upgrade.
+  stats_updating?: boolean;
+  stats_warning?: string | null;
 };
 
 // ownerLabel returns the human-readable owner label, falling back to owner id.

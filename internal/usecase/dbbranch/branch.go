@@ -322,6 +322,7 @@ func (s *Service) ResetBranch(ctx context.Context, name domain.Name, report Repo
 	if err != nil {
 		return br, err
 	}
+	s.cancelStats(name)
 	return s.doReset(ctx, br, report)
 }
 
@@ -329,7 +330,11 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 	if in, swap, err := s.resetBySwap(ctx, br); err != nil {
 		// Nothing was touched: the branch is still what it was.
 		br.Status = domain.BranchReady
-		return br, errors.Join(err, s.saveBranch(ctx, br))
+		saveErr := s.saveBranch(ctx, br)
+		if saveErr == nil && br.StatsUpdating {
+			s.startBackgroundStats(br)
+		}
+		return br, errors.Join(err, saveErr)
 	} else if swap {
 		return s.runRestore(ctx, br, in, report)
 	}
@@ -379,6 +384,7 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 	}
 	now := s.Clock()
 	br.Status, br.ResetAt, br.Error = domain.BranchReady, &now, ""
+	br.StatsUpdating, br.StatsWarning = false, ""
 	if err := s.saveBranch(ctx, br); err != nil {
 		_ = srv.Stop(context.WithoutCancel(ctx), spec, domain.StopImmediate)
 		return br, err
@@ -397,6 +403,7 @@ func (s *Service) DeleteBranch(ctx context.Context, name domain.Name, report Rep
 	if err != nil {
 		return err
 	}
+	s.cancelStats(name)
 	return s.doDelete(ctx, br, report)
 }
 
@@ -514,9 +521,17 @@ func (s *Service) Recover(ctx context.Context) error {
 		switch br.Status {
 		case domain.BranchReady:
 			_ = s.clearMergeIntent(ctx, br.Name)
-			errs = append(errs, s.recoverRunning(ctx, br, true))
+			rerr := s.recoverRunning(ctx, br, true)
+			errs = append(errs, rerr)
+			if rerr == nil && br.StatsUpdating {
+				s.startBackgroundStats(br)
+			}
 		case domain.BranchPaused:
 			_ = s.clearMergeIntent(ctx, br.Name)
+			if br.StatsUpdating {
+				br.StatsUpdating = false
+				errs = append(errs, s.saveBranch(ctx, br))
+			}
 		case domain.BranchResetting:
 			_, err := s.doReset(ctx, br, nil)
 			errs = append(errs, err)

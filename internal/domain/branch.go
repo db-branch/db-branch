@@ -272,8 +272,14 @@ type Branch struct {
 	// the forked branch started with, so reset returns to them rather than the base's.
 	ForkRuntime    RuntimeRef `json:"fork_runtime,omitzero"`
 	ForkLegacyAuth bool       `json:"fork_legacy_auth,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	ResetAt        *time.Time `json:"reset_at,omitempty"`
+	// StatsUpdating is true while background optimizer statistics are being
+	// collected after a PostgreSQL major upgrade (the branch is already ready).
+	StatsUpdating bool `json:"stats_updating,omitempty"`
+	// StatsWarning holds a warning if background statistics collection failed;
+	// the branch stays ready and usable.
+	StatsWarning string     `json:"stats_warning,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	ResetAt      *time.Time `json:"reset_at,omitempty"`
 }
 
 // ProtocolBranchOwnerID is the cluster protocol from which branch owners use
