@@ -51,12 +51,19 @@ func UpgradeTimeout(relations, largeObjects int64) time.Duration {
 }
 
 func pgMajorStr(v string) string {
-	major, _, _ := strings.Cut(v, ".")
+	major, rest, ok := strings.Cut(v, ".")
+	if n, err := strconv.Atoi(major); err == nil && n < 10 && ok {
+		minor, _, _ := strings.Cut(rest, ".")
+		if minor != "" {
+			return major + "." + minor
+		}
+	}
 	return major
 }
 
 func pgMajorNum(v string) int {
-	n, _ := strconv.Atoi(pgMajorStr(v))
+	major, _, _ := strings.Cut(v, ".")
+	n, _ := strconv.Atoi(major)
 	return n
 }
 
@@ -161,7 +168,7 @@ func (p *Server) readChecksums(ctx context.Context, s domain.Server) (bool, erro
 
 func (p *Server) readClusterMeta(ctx context.Context, s domain.Server) (domain.PGClusterMeta, error) {
 	meta := domain.PGClusterMeta{Encoding: "UTF8", LCCollate: "C.UTF-8", LCCtype: "C.UTF-8", LocaleProvider: "c"}
-	out, err := p.psqlQuery(ctx, s, "template0", "SELECT pg_encoding_to_char(encoding), datcollate, datctype FROM pg_database WHERE datname = 'template0'")
+	out, err := p.psqlQuery(ctx, s, "postgres", "SELECT pg_encoding_to_char(encoding), datcollate, datctype FROM pg_database WHERE datname = 'template0'")
 	if err != nil {
 		return meta, err
 	}
@@ -176,7 +183,12 @@ func (p *Server) readClusterMeta(ctx context.Context, s domain.Server) (domain.P
 			meta.LCCtype = fields[2]
 		}
 	}
-	if provOut, err := p.psqlQuery(ctx, s, "template0", "SELECT datlocprovider, COALESCE(datlocale, '') FROM pg_database WHERE datname = 'template0'"); err == nil {
+	// PG 17+ stores ICU/builtin locale in pg_database.datlocale; PG 15-16 used daticulocale.
+	provOut, err := p.psqlQuery(ctx, s, "postgres", "SELECT datlocprovider, COALESCE(datlocale, '') FROM pg_database WHERE datname = 'template0'")
+	if err != nil {
+		provOut, err = p.psqlQuery(ctx, s, "postgres", "SELECT datlocprovider, COALESCE(daticulocale, '') FROM pg_database WHERE datname = 'template0'")
+	}
+	if err == nil {
 		if fields := strings.Split(provOut, "|"); len(fields) == 2 {
 			if fields[0] != "" {
 				meta.LocaleProvider = fields[0]
@@ -311,14 +323,15 @@ func initdbArgs(dataDir string, checksums bool, meta domain.PGClusterMeta) []str
 		args = append(args, "--locale-provider=builtin", "--builtin-locale="+meta.Locale)
 	case meta.LocaleProvider == "i" && meta.Locale != "":
 		args = append(args, "--locale-provider=icu", "--icu-locale="+meta.Locale)
-	case meta.LCCollate != "" || meta.LCCtype != "":
+	}
+	if meta.LCCollate != "" || meta.LCCtype != "" {
 		if meta.LCCollate != "" {
 			args = append(args, "--lc-collate="+meta.LCCollate)
 		}
 		if meta.LCCtype != "" {
 			args = append(args, "--lc-ctype="+meta.LCCtype)
 		}
-	default:
+	} else if meta.LocaleProvider != "b" && meta.LocaleProvider != "i" {
 		args = append(args, "--locale=C.UTF-8")
 	}
 	if checksums {

@@ -329,10 +329,10 @@ func TestStartMajorUpgraded_エラー処理とストリームとICUロケール(
 	f3.spec.Runtime = domain.RuntimeRef{Engine: domain.Postgres, Version: "19.0"}
 	upLog, err := f3.srv.StartMajorUpgraded(ctx, f3.spec, domain.Login{}, domain.UpgradeContext{
 		From: domain.RuntimeRef{Engine: domain.Postgres, Version: "18.6"},
-		Plan: domain.UpgradePlan{PGMeta: &domain.PGClusterMeta{Encoding: "UTF8", LocaleProvider: "i", Locale: "en-US-x-icu"}},
+		Plan: domain.UpgradePlan{PGMeta: &domain.PGClusterMeta{Encoding: "UTF8", LocaleProvider: "i", Locale: "en-US-x-icu", LCCollate: "en_US.UTF-8", LCCtype: "en_US.UTF-8"}},
 	})
-	if err == nil || upLog.Excerpt == "" || !f3.sys.called("--locale-provider=icu") {
-		t.Fatalf("expected pg_upgrade failure with ICU and excerpt: log=%+v err=%v calls=%v", upLog, err, f3.sys.calls)
+	if err == nil || upLog.Excerpt == "" || !f3.sys.called("--locale-provider=icu") || !f3.sys.called("--lc-collate=en_US.UTF-8") || !f3.sys.called("--lc-ctype=en_US.UTF-8") {
+		t.Fatalf("expected pg_upgrade failure with ICU+LC and excerpt: log=%+v err=%v calls=%v", upLog, err, f3.sys.calls)
 	}
 
 	// 4. Default locale fallback when PGMeta is nil and checkMajorUpgrade errors.
@@ -493,5 +493,38 @@ func TestStartMajorUpgraded_エラー処理とストリームとICUロケール(
 	upLog9b, err := f9b.srv.StartMajorUpgraded(ctx, f9b.spec, domain.Login{}, domain.UpgradeContext{From: pg18})
 	if err == nil || len(upLog9b.Excerpt) != 4096 {
 		t.Errorf("expected 4096-byte truncated excerpt, got len=%d err=%v", len(upLog9b.Excerpt), err)
+	}
+}
+
+func TestCheckUpgrade_9系とdaticulocaleとpostgresDB接続(t *testing.T) {
+	f := newFixture(t)
+	_ = os.MkdirAll(filepath.Join(f.rt, "9.5.1/bin"), 0o755)
+	_ = os.MkdirAll(filepath.Join(f.rt, "9.6.2/bin"), 0o755)
+	_ = os.MkdirAll(filepath.Join(f.rt, "9.6.2/usr/share/postgresql/9.6/extension"), 0o755)
+	_ = os.WriteFile(filepath.Join(f.rt, "9.6.2/usr/share/postgresql/9.6/extension/hstore.control"), []byte("default_version = '1.4'\n"), 0o644)
+	f.srv.RuntimeDir = func(rt domain.RuntimeRef) string { return filepath.Join(f.rt, rt.Version) }
+	f.spec.Runtime = domain.RuntimeRef{Engine: domain.Postgres, Version: "9.5.1"}
+	_ = os.WriteFile(filepath.Join(f.spec.DataDir, "PG_VERSION"), []byte("9.5\n"), 0o644)
+	f.sys.outputs = map[string]string{
+		"pg_controldata":      "Data page checksum version: 0\n",
+		"pg_encoding_to_char": "UTF8|C|C\n",
+		"daticulocale":        "i|und-x-icu\n",
+		"NOT datistemplate":   "postgres\n",
+		"pg_extension":        "hstore|1.3\n",
+	}
+	f.sys.failOn = "COALESCE(datlocale"
+
+	plan, err := f.srv.CheckUpgrade(ctx, f.spec, domain.RuntimeRef{Engine: domain.Postgres, Version: "9.6.2"}, domain.Login{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.sys.called("-d template0") {
+		t.Errorf("must not connect to unconnectable template0: %v", f.sys.calls)
+	}
+	if plan.PGMeta == nil || plan.PGMeta.LocaleProvider != "i" || plan.PGMeta.Locale != "und-x-icu" {
+		t.Errorf("expected daticulocale fallback, got PGMeta=%+v", plan.PGMeta)
+	}
+	if len(plan.Findings) == 0 || plan.Findings[0].Code != domain.CodeExtensionUpdate {
+		t.Errorf("expected 9.6 extension lookup (hstore update), got %+v", plan.Findings)
 	}
 }

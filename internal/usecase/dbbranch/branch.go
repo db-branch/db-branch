@@ -318,11 +318,11 @@ func (s *Service) transitionBranch(ctx context.Context, name domain.Name, check 
 
 // ResetBranch discards every change since the reset point.
 func (s *Service) ResetBranch(ctx context.Context, name domain.Name, report Reporter) (domain.Branch, error) {
-	s.cancelStats(name)
 	br, err := s.transitionBranch(ctx, name, domain.Branch.CanReset, domain.BranchResetting)
 	if err != nil {
 		return br, err
 	}
+	s.cancelStats(name)
 	return s.doReset(ctx, br, report)
 }
 
@@ -330,7 +330,11 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 	if in, swap, err := s.resetBySwap(ctx, br); err != nil {
 		// Nothing was touched: the branch is still what it was.
 		br.Status = domain.BranchReady
-		return br, errors.Join(err, s.saveBranch(ctx, br))
+		saveErr := s.saveBranch(ctx, br)
+		if saveErr == nil && br.StatsUpdating {
+			s.startBackgroundStats(br)
+		}
+		return br, errors.Join(err, saveErr)
 	} else if swap {
 		return s.runRestore(ctx, br, in, report)
 	}
@@ -392,7 +396,6 @@ func (s *Service) doReset(ctx context.Context, br domain.Branch, report Reporter
 // branch may be deleted from any node: it is marked deleting, and its node
 // finishes the job when it returns.
 func (s *Service) DeleteBranch(ctx context.Context, name domain.Name, report Reporter) error {
-	s.cancelStats(name)
 	if done, err := s.abandonLost(ctx, name); done || err != nil {
 		return err
 	}
@@ -400,6 +403,7 @@ func (s *Service) DeleteBranch(ctx context.Context, name domain.Name, report Rep
 	if err != nil {
 		return err
 	}
+	s.cancelStats(name)
 	return s.doDelete(ctx, br, report)
 }
 

@@ -141,7 +141,6 @@ func (s *Service) RestoreCheckpoint(ctx context.Context, n domain.Name, name str
 // domain.ResetPoint restores the branch's creation state the same way (a
 // restore, not a reset: the checkpoints are kept).
 func (s *Service) RestoreCheckpointWith(ctx context.Context, n domain.Name, name, note string, report Reporter) (domain.Branch, error) {
-	s.cancelStats(n)
 	if len(note) > maxNote {
 		return domain.Branch{}, fmt.Errorf("%w: the note of a restore is at most %d bytes", domain.ErrInvalidName, maxNote)
 	}
@@ -157,9 +156,14 @@ func (s *Service) RestoreCheckpointWith(ctx context.Context, n domain.Name, name
 	if err != nil {
 		return br, err
 	}
+	s.cancelStats(n)
 	if err := s.writeIntent(ctx, n, in); err != nil {
 		br.Status = domain.BranchReady
-		return br, errors.Join(err, s.saveBranch(ctx, br))
+		saveErr := s.saveBranch(ctx, br)
+		if saveErr == nil && br.StatsUpdating {
+			s.startBackgroundStats(br)
+		}
+		return br, errors.Join(err, saveErr)
 	}
 	return s.runRestore(ctx, br, in, report)
 }
@@ -219,6 +223,7 @@ func (s *Service) runRestore(ctx context.Context, br domain.Branch, in restoreIn
 		return br, s.fail(ctx, br, fmt.Errorf("%s interrupted, it is finished when the agent restarts: %w", in.Op, err))
 	}
 	br.Status, br.Error = domain.BranchReady, ""
+	br.StatsUpdating, br.StatsWarning = false, ""
 	if in.Op == opReset {
 		now := s.Clock()
 		br.ResetAt = &now
@@ -493,6 +498,9 @@ func (s *Service) abortRestore(ctx context.Context, br domain.Branch, in restore
 	if err := s.saveBranch(ctx, br); err != nil {
 		return err
 	}
+	if br.StatsUpdating {
+		s.startBackgroundStats(br)
+	}
 	s.collectIfSettled(ctx, br.Name)
 	return nil
 }
@@ -511,6 +519,9 @@ func (s *Service) resumeRestore(ctx context.Context, br domain.Branch) error {
 		br.Status, br.Error = domain.BranchReady, ""
 		if err := s.saveBranch(ctx, br); err != nil {
 			return err
+		}
+		if br.StatsUpdating {
+			s.startBackgroundStats(br)
 		}
 		s.collectIfSettled(ctx, br.Name)
 		return nil

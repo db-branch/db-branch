@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -953,5 +954,118 @@ func TestPGMajorUpgrade_RestoreとPauseとRecoverの連携(t *testing.T) {
 	paused, err := z2.svc.PauseBranch(ctx, name("x"), nil)
 	if err != nil || paused.Status != domain.BranchPaused || paused.StatsUpdating {
 		t.Fatalf("paused = %+v, err = %v", paused, err)
+	}
+}
+
+func TestStatsUpdating_拒否操作は停止せずクリーンフォークや回復は再開する(t *testing.T) {
+	z := newPGUEnv(t)
+	z.server.upNeedsStats = true
+	var calls atomic.Int32
+	startedCh := make(chan struct{}, 8)
+	cancelledCh := make(chan struct{}, 8)
+	releaseCh := make(chan struct{})
+	z.server.statsHook = func(sctx context.Context) {
+		n := calls.Add(1)
+		startedCh <- struct{}{}
+		if n < 7 {
+			<-sctx.Done()
+			cancelledCh <- struct{}{}
+			return
+		}
+		select {
+		case <-sctx.Done():
+			cancelledCh <- struct{}{}
+		case <-releaseCh:
+		}
+	}
+	if _, err := z.svc.UpgradeBranch(ctx, dbbranch.UpgradeRequest{Name: name("x"), To: pg19}, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-startedCh
+
+	// 1. Rejected RestoreCheckpoint / DeleteBranch (nonexistent/bad input) / ResetBranch must NOT cancel running stats.
+	if _, err := z.svc.RestoreCheckpoint(ctx, name("x"), "no-such-cp", nil); err == nil {
+		t.Fatal("want RestoreCheckpoint error")
+	}
+	if _, err := z.svc.RestoreCheckpointWith(ctx, name("x"), "no-such-cp", strings.Repeat("a", 5000), nil); err == nil {
+		t.Fatal("want long note error")
+	}
+	if _, err := z.svc.ResetBranch(ctx, name("missing"), nil); err == nil {
+		t.Fatal("want missing ResetBranch error")
+	}
+	if err := z.svc.DeleteBranch(ctx, name("missing"), nil); err == nil {
+		t.Fatal("want missing DeleteBranch error")
+	}
+	select {
+	case <-cancelledCh:
+		t.Fatal("rejected operations must not cancel background stats")
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	// 2. PauseBranch failure (keepRunning) cancels during transition then restarts background stats.
+	z.server.failOn = "stop-clean"
+	if _, err := z.svc.PauseBranch(ctx, name("x"), nil); err == nil {
+		t.Fatal("want PauseBranch stop-clean error")
+	}
+	z.server.failOn = ""
+	<-cancelledCh
+	<-startedCh
+	if got := z.branchNow(t); got.Status != domain.BranchReady || !got.StatsUpdating {
+		t.Fatalf("after keepRunning = %+v", got)
+	}
+
+	// 3. Clean ForkBranch failure restores parent and restarts stats, then clean ForkBranch succeeds.
+	z.server.failOn = "stop-clean"
+	if _, err := z.svc.ForkBranch(ctx, dbbranch.ForkBranchRequest{Source: name("x"), Name: name("childfail"), Clean: true}, nil); err == nil {
+		t.Fatal("want clean fork stop-clean error")
+	}
+	z.server.failOn = ""
+	<-cancelledCh
+	<-startedCh
+
+	// 4. RestoreCheckpoint failure before swap (abortRestore) & interrupted restore/fork restart background stats.
+	z.sim.failOn = "zfs clone"
+	if _, err := z.svc.RestoreCheckpoint(ctx, name("x"), domain.ResetPoint, nil); err == nil {
+		t.Fatal("want restore clone failure")
+	}
+	z.sim.failOn = ""
+	<-cancelledCh
+	<-startedCh
+
+	brX := z.branchNow(t)
+	brX.Status = domain.BranchRestoring
+	_ = z.store.PutBranch(ctx, brX)
+	if err := z.svc.Recover(ctx); err != nil {
+		t.Fatalf("Recover(restoring): %v", err)
+	}
+	<-startedCh
+	brX = z.branchNow(t)
+	brX.Status = domain.BranchForking
+	_ = z.store.PutBranch(ctx, brX)
+	if err := z.svc.Recover(ctx); err != nil {
+		t.Fatalf("Recover(forking): %v", err)
+	}
+	<-startedCh
+
+	// 5. Clean ForkBranch succeeds: cancels before stopping parent and restarts background stats once ready.
+	doneCh := make(chan struct{})
+	z.svc.OnBranchChanged = func(n domain.Name) {
+		if n == name("x") && !z.branchNow(t).StatsUpdating {
+			select {
+			case <-doneCh:
+			default:
+				close(doneCh)
+			}
+		}
+	}
+	if _, err := z.svc.ForkBranch(ctx, dbbranch.ForkBranchRequest{Source: name("x"), Name: name("child1"), Clean: true}, nil); err != nil {
+		t.Fatalf("ForkBranch: %v", err)
+	}
+	<-cancelledCh
+	<-startedCh
+	close(releaseCh)
+	<-doneCh
+	if got := z.branchNow(t); got.Status != domain.BranchReady || got.StatsUpdating {
+		t.Fatalf("after clean fork + stats finish = %+v", got)
 	}
 }
