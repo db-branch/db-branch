@@ -405,9 +405,6 @@ export const ja: Record<string, string> = {
   "Working": "処理中",
   "No upgrade target": "アップグレード可能なバージョンはありません",
   "A checkpoint is saved first; on failure it rolls back automatically.": "先に Checkpoint を保存し、失敗時は自動でロールバックします。",
-  "Warnings": "警告",
-  "Checking…": "確認中…",
-  "Updating stats": "統計を更新中",
   "Optimizer statistics are updating in the background; this Branch is ready to use.": "バックグラウンドで統計情報を更新しています（この Branch はそのまま利用できます）。",
   "Initializing new cluster": "新しいクラスタを初期化しています",
   "Checking cluster compatibility": "クラスタの互換性を確認しています",
@@ -537,6 +534,7 @@ export const ja: Record<string, string> = {
   "Tables with triggers cannot be merged.": "トリガーがあるテーブルはマージできません。",
   "Authentication is required. Sign in again.": "認証が必要です。再度サインインしてください。",
   "The server did not shut down cleanly.": "前回の停止が正常に完了していません。",
+  "Content-Type must be application/json.": "Content-Type には application/json を指定してください。",
   "This upgrade path is not allowed.": "このアップグレード経路は許可されていません。",
   "The password is too weak. Use at least 12 characters.": "パスワードが短すぎるか脆弱です。12 文字以上にしてください。",
 

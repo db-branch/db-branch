@@ -69,6 +69,7 @@ export const ERROR_CODES: Record<string, string> = {
   triggers_not_supported: "Tables with triggers cannot be merged.",
   unauthenticated: "Authentication is required. Sign in again.",
   unclean_shutdown: "The server did not shut down cleanly.",
+  unsupported_media_type: "Content-Type must be application/json.",
   upgrade_not_allowed: "This upgrade path is not allowed.",
   weak_password: "The password is too weak. Use at least 12 characters.",
 };
