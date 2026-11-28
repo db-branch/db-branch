@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/pkg/ext"
 )
 
 func login(t *testing.T, f *fixture) (cookie *http.Cookie, csrf string) {
@@ -367,4 +368,52 @@ func TestLogin_非JSONのContentTypeは拒否してLoginCSRFを防ぐ(t *testing
 			t.Errorf("valid Content-Type %q: got %d, want 401", ct, resp.StatusCode)
 		}
 	}
+}
+
+func TestCrossOriginProtection_異オリジンの書き込みを拒否しつつBearerとXCSRFTokenは維持する(t *testing.T) {
+	f := newFixture(t)
+	f.srv.TokenAuth = tokenAuthFunc(func(_ context.Context, c ext.Credentials) (ext.Principal, error) {
+		if c.Token == "valid-token" {
+			return ext.Principal{ID: "admin", Name: "admin", Roles: []string{"admin"}}, nil
+		}
+		return ext.Principal{}, ext.ErrUnauthenticated
+	})
+	h := f.srv.Handler(false)
+	cookie, csrf := login(t, f)
+
+	// 1. Cross-site login POST is rejected by CrossOriginProtection.
+	resp, body := send(t, h, "POST", "/v1/auth/login", map[string]any{"username": "admin", "password": "correct horse battery"},
+		func(r *http.Request) { r.Header.Set("Sec-Fetch-Site", "cross-site") })
+	if resp.StatusCode != http.StatusForbidden || errCode(body) != "csrf_failed" {
+		t.Fatalf("cross-site login: got %d %v, want 403 csrf_failed", resp.StatusCode, body)
+	}
+
+	// 2. Cross-origin POST even with valid session + X-CSRF-Token is rejected.
+	resp, body = send(t, h, "POST", "/v1/branches", map[string]any{"name": "x", "base": "prod"}, func(r *http.Request) {
+		withSession(cookie, csrf)(r)
+		r.Header.Set("Origin", "https://evil.example")
+	})
+	if resp.StatusCode != http.StatusForbidden || errCode(body) != "csrf_failed" {
+		t.Fatalf("cross-origin session POST: got %d %v, want 403 csrf_failed", resp.StatusCode, body)
+	}
+
+	// 3. Same-origin POST with valid session + X-CSRF-Token succeeds.
+	resp, body = send(t, h, "POST", "/v1/branches", map[string]any{"name": "sameorig", "base": "prod"}, func(r *http.Request) {
+		withSession(cookie, csrf)(r)
+		r.Header.Set("Sec-Fetch-Site", "same-origin")
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("same-origin session POST: got %d %v, want 202", resp.StatusCode, body)
+	}
+	f.waitOp(t, body["id"].(string))
+
+	// 4. Bearer API client is not blocked by CrossOriginProtection even if Origin is present.
+	resp, body = send(t, h, "POST", "/v1/branches", map[string]any{"name": "bearerok", "base": "prod"}, func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer valid-token")
+		r.Header.Set("Origin", "https://client.example")
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("bearer POST with Origin: got %d %v, want 202", resp.StatusCode, body)
+	}
+	f.waitOp(t, body["id"].(string))
 }

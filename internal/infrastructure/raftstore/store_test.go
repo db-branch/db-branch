@@ -453,6 +453,9 @@ func TestAdminStore_パスワードはクラスタで一つでどのノードか
 			return err == nil && got.Generation == 3 && string(got.Hash) == "h"
 		})
 	}
+	if st, err := (raftstore.AdminStore{Store: l}).Stamp(); err != nil || st == "" {
+		t.Fatalf("AdminStore.Stamp = (%q, %v)", st, err)
+	}
 }
 
 func TestAdminStore_初期化は未設定のときだけ効く(t *testing.T) {

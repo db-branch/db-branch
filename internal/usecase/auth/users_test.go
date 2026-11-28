@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -724,6 +725,197 @@ func TestMultiUser_LegacyPreMigrationPathsAndEmptySessionKey(t *testing.T) {
 	}
 	if got, err := svc.GetUser(context.Background(), "admin"); err != nil || got.Name != "admin" {
 		t.Fatalf("admin Name should normalize cleanly: %+v err=%v", got, err)
+	}
+}
+
+type phcTestHasher struct{}
+
+func (phcTestHasher) Hash(pw string, salt []byte) []byte {
+	return []byte("$argon2id$v=19$m=19456,t=2,p=1$" + string(salt) + "$" + pw)
+}
+
+func (phcTestHasher) HashLegacy(pw string, salt []byte) []byte {
+	return (testHasher{}).Hash(pw, salt)
+}
+
+func (phcTestHasher) Verify(pw string, salt, hash []byte) bool {
+	s := string(hash)
+	if strings.HasPrefix(s, "$argon2id$") {
+		parts := strings.Split(s, "$")
+		if len(parts) != 6 {
+			return false
+		}
+		return parts[5] == pw
+	}
+	return string((testHasher{}).Hash(pw, salt)) == s
+}
+
+func (phcTestHasher) NeedsRehash(hash []byte) bool {
+	return !strings.HasPrefix(string(hash), "$argon2id$v=19$m=19456,t=2,p=1$")
+}
+
+func TestPHC_レガシーハッシュは次回ログイン時にPHCへ再ハッシュされ混在クラスタでは猶予される(t *testing.T) {
+	clk := &fakeClock{now: time.Date(2026, 11, 28, 10, 0, 0, 0, time.UTC)}
+	cs := &credMemStore{}
+	us := newMemUserStore()
+	us.protocol = domain.ProtocolPHCPassword
+	svc := &auth.Service{
+		Store:    cs,
+		Users:    us,
+		Hasher:   phcTestHasher{},
+		Clock:    clk.Now,
+		Protocol: func() int { return us.protocol },
+	}
+
+	// 1. New user and SetPassword write PHC with Salt=nil when Protocol >= 32.
+	if err := svc.SetPassword("admin strong password!"); err != nil {
+		t.Fatal(err)
+	}
+	adminU, _ := svc.GetUser(context.Background(), "admin")
+	if !strings.HasPrefix(string(adminU.Hash), "$argon2id$v=19$m=19456,t=2,p=1$") || len(adminU.Salt) != 0 {
+		t.Fatalf("expected PHC hash and empty salt for admin, got hash=%q salt=%x", adminU.Hash, adminU.Salt)
+	}
+	if _, err := svc.VerifyUserFrom("", "admin", "admin strong password!"); err != nil {
+		t.Fatalf("admin PHC verify failed: %v", err)
+	}
+
+	// 2. Legacy raw hash user logs in during rolling upgrade (Protocol 31) -> deferred.
+	us.protocol = domain.ProtocolPGMajorUpgrade
+	salt := []byte("0123456789abcdef")
+	legHash := phcTestHasher{}.HashLegacy("legacy user pass!!", salt)
+	if err := us.InsertUser(context.Background(), domain.User{
+		ID: "user:leg@example.com", Email: "leg@example.com", Name: "Leg",
+		Salt: salt, Hash: legHash, SessionGen: 1, CreatedAt: clk.Now(), UpdatedAt: clk.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.VerifyUserFrom("", "leg@example.com", "legacy user pass!!"); err != nil {
+		t.Fatalf("legacy verify during upgrade failed: %v", err)
+	}
+	duringU, _ := svc.GetUser(context.Background(), "leg@example.com")
+	if strings.HasPrefix(string(duringU.Hash), "$argon2id$") {
+		t.Fatalf("rehash must be deferred while cluster protocol < 32, got %q", duringU.Hash)
+	}
+	// Password update during rolling upgrade also stays legacy so old nodes can verify.
+	if _, err := svc.CreateUser(context.Background(), auth.CreateUserInput{Email: "mid@example.com", Password: "mid upgrade pass!!"}); err != nil {
+		t.Fatal(err)
+	}
+	midU, _ := svc.GetUser(context.Background(), "mid@example.com")
+	if strings.HasPrefix(string(midU.Hash), "$argon2id$") {
+		t.Fatalf("CreateUser during upgrade must keep legacy format, got %q", midU.Hash)
+	}
+
+	// 3. Once cluster reaches Protocol 32, next login re-hashes both legacy user and single-node Credentials to PHC.
+	us.protocol = domain.ProtocolPHCPassword
+	if _, err := svc.VerifyUserFrom("", "leg@example.com", "legacy user pass!!"); err != nil {
+		t.Fatalf("legacy verify at protocol 32 failed: %v", err)
+	}
+	afterU, _ := svc.GetUser(context.Background(), "leg@example.com")
+	if !strings.HasPrefix(string(afterU.Hash), "$argon2id$v=19$m=19456,t=2,p=1$") || len(afterU.Salt) != 0 || afterU.SessionGen != 1 {
+		t.Fatalf("expected transparent rehash to PHC preserving SessionGen=1, got %+v", afterU)
+	}
+	// Verify again with the rehashed PHC record.
+	if _, err := svc.VerifyUserFrom("", "leg@example.com", "legacy user pass!!"); err != nil {
+		t.Fatalf("post-rehash verify failed: %v", err)
+	}
+
+	// 4. Outdated-param PHC hash is also rehashed on login.
+	oldPHC := []byte("$argon2id$v=19$m=8192,t=1,p=1$somesalt$outdated pass!!")
+	if err := us.InsertUser(context.Background(), domain.User{
+		ID: "user:oldphc@example.com", Email: "oldphc@example.com", Name: "OldPHC",
+		Hash: oldPHC, SessionGen: 2, CreatedAt: clk.Now(), UpdatedAt: clk.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.VerifyUserFrom("", "oldphc@example.com", "outdated pass!!"); err != nil {
+		t.Fatalf("outdated PHC verify failed: %v", err)
+	}
+	upU, _ := svc.GetUser(context.Background(), "oldphc@example.com")
+	if !strings.HasPrefix(string(upU.Hash), "$argon2id$v=19$m=19456,t=2,p=1$") {
+		t.Fatalf("outdated PHC was not rehashed: %q", upU.Hash)
+	}
+
+	// 5. Single-node (Users == nil) legacy Credentials re-hash on next login preserving Generation.
+	singleCred := &credMemStore{}
+	_ = singleCred.Save(auth.Credentials{
+		Salt: salt, Hash: phcTestHasher{}.HashLegacy("single legacy pw!", salt), Generation: 4, UpdatedAt: clk.Now(), MustChange: true,
+	})
+	singleSvc := &auth.Service{Store: singleCred, Hasher: phcTestHasher{}, Clock: clk.Now}
+	if u, err := singleSvc.VerifyUserFrom("", "admin", "single legacy pw!"); err != nil || !u.MustChange {
+		t.Fatalf("single-node legacy login failed: u=%+v err=%v", u, err)
+	}
+	cAfter, _ := singleCred.Load()
+	if !strings.HasPrefix(string(cAfter.Hash), "$argon2id$v=19$m=19456,t=2,p=1$") || len(cAfter.Salt) != 0 || cAfter.Generation != 4 || !cAfter.MustChange {
+		t.Fatalf("single-node Credentials not rehashed cleanly: %+v", cAfter)
+	}
+
+	// 6. Legacy admin fallback (Users empty, Protocol >= 32) also rehashes Credentials on login.
+	fallbackCred := &credMemStore{}
+	_ = fallbackCred.Save(auth.Credentials{
+		Salt: salt, Hash: phcTestHasher{}.HashLegacy("fallback admin pw!", salt), Generation: 2, UpdatedAt: clk.Now(),
+	})
+	fallbackUsers := newMemUserStore()
+	fallbackUsers.protocol = domain.ProtocolPHCPassword
+	fallbackSvc := &auth.Service{
+		Store:    fallbackCred,
+		Users:    fallbackUsers,
+		Hasher:   phcTestHasher{},
+		Clock:    clk.Now,
+		Protocol: func() int { return fallbackUsers.protocol },
+	}
+	if _, err := fallbackSvc.VerifyUserFrom("", "admin", "fallback admin pw!"); err != nil {
+		t.Fatalf("legacy admin fallback login failed: %v", err)
+	}
+	fcAfter, _ := fallbackCred.Load()
+	if !strings.HasPrefix(string(fcAfter.Hash), "$argon2id$v=19$m=19456,t=2,p=1$") || len(fcAfter.Salt) != 0 {
+		t.Fatalf("legacy admin fallback Credentials not rehashed: %+v", fcAfter)
+	}
+}
+
+type hookPHCHasher struct {
+	phcTestHasher
+	onHash func()
+}
+
+func (h hookPHCHasher) Hash(pw string, salt []byte) []byte {
+	if h.onHash != nil {
+		h.onHash()
+	}
+	return h.phcTestHasher.Hash(pw, salt)
+}
+
+func TestPHC_ログイン時リハッシュ中の並行パスワード変更を上書きしない(t *testing.T) {
+	clk := &fakeClock{now: time.Date(2026, 11, 28, 10, 0, 0, 0, time.UTC)}
+	cs := &credMemStore{}
+	us := newMemUserStore()
+	us.protocol = domain.ProtocolPHCPassword
+	salt := []byte("0123456789abcdef")
+	legHash := phcTestHasher{}.HashLegacy("old-pw-secret!!", salt)
+	_ = us.InsertUser(context.Background(), domain.User{
+		ID: "user:race@example.com", Email: "race@example.com", Name: "Race",
+		Salt: salt, Hash: legHash, SessionGen: 1, CreatedAt: clk.Now(), UpdatedAt: clk.Now(),
+	})
+
+	var svc *auth.Service
+	newPW := "concurrent-new-pw!"
+	triggered := false
+	hh := hookPHCHasher{onHash: func() {
+		if !triggered {
+			triggered = true
+			_, _ = svc.UpdateUser(context.Background(), "user:race@example.com", auth.UpdateUserInput{Password: &newPW})
+		}
+	}}
+	svc = &auth.Service{Store: cs, Users: us, Hasher: hh, Clock: clk.Now, Protocol: func() int { return us.protocol }}
+
+	if _, err := svc.VerifyUserFrom("", "race@example.com", "old-pw-secret!!"); err != nil {
+		t.Fatalf("initial login failed: %v", err)
+	}
+	// The concurrent UpdateUser (SessionGen=2, newPW) must NOT be overwritten by the stale rehash of old-pw-secret!!.
+	if _, err := svc.VerifyUserFrom("", "race@example.com", newPW); err != nil {
+		t.Fatalf("concurrently updated password was lost: %v", err)
+	}
+	if _, err := svc.VerifyUserFrom("", "race@example.com", "old-pw-secret!!"); !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Fatalf("stale password should be rejected, got %v", err)
 	}
 }
 

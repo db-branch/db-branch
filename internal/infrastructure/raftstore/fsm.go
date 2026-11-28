@@ -2,6 +2,7 @@
 package raftstore
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -193,7 +194,12 @@ type BranchOwner struct {
 // StatsUpdating and StatsWarning inside insert_branch / put_branch. Older
 // nodes drop those fields, so branches carrying them wait for protocol 31
 // everywhere (domain.ProtocolPGMajorUpgrade).
-const Protocol = domain.ProtocolPGMajorUpgrade
+//
+// 32: PHC password hashes: Credentials.Hash and User.Hash may carry
+// "$argon2id$..." PHC strings instead of raw 32-byte keys; older nodes
+// cannot verify PHC strings, so writing PHC waits for protocol 32
+// everywhere (domain.ProtocolPHCPassword).
+const Protocol = domain.ProtocolPHCPassword
 
 // opProtocol is the protocol each command needs. A command is written to the
 // log only once every member speaks it, so an older node never meets a
@@ -253,6 +259,12 @@ func (c Command) Needs() int {
 		if len(c.Token.OwnerRoles) > 0 {
 			return domain.ProtocolPersonalTokenRoles
 		}
+	}
+	if (c.Op == "set_admin" || c.Op == "init_admin") && c.Admin != nil && bytes.HasPrefix(c.Admin.Hash, []byte("$argon2id$")) {
+		return domain.ProtocolPHCPassword
+	}
+	if (c.Op == "insert_user" || c.Op == "put_user") && c.User != nil && bytes.HasPrefix(c.User.Hash, []byte("$argon2id$")) {
+		return domain.ProtocolPHCPassword
 	}
 	return opProtocol[c.Op]
 }
@@ -427,10 +439,28 @@ type FSM struct {
 	OnApply func(Command)
 	// index is the last log index applied (successfully or not).
 	index atomic.Uint64
+	// adminStamp encodes (seq << 1) | hasAdmin so AdminStore.Stamp can check
+	// for admin credential changes lock-free.
+	adminStamp atomic.Uint64
 }
 
 // Index returns the last log index the FSM has applied.
 func (f *FSM) Index() uint64 { return f.index.Load() }
+
+// AdminStamp returns a monotonic change stamp and whether Admin credentials are set.
+func (f *FSM) AdminStamp() (uint64, bool) {
+	v := f.adminStamp.Load()
+	return v, v&1 == 1
+}
+
+func (f *FSM) bumpAdminStamp(hasAdmin bool) {
+	seq := (f.adminStamp.Load() >> 1) + 1
+	var bit uint64
+	if hasAdmin {
+		bit = 1
+	}
+	f.adminStamp.Store((seq << 1) | bit)
+}
 
 var _ raft.FSM = (*FSM)(nil)
 
@@ -771,10 +801,12 @@ func (f *FSM) apply(c Command) error {
 	case "set_admin":
 		admin := *c.Admin
 		s.Admin = &admin
+		f.bumpAdminStamp(true)
 	case "init_admin":
 		if s.Admin == nil {
 			admin := *c.Admin
 			s.Admin = &admin
+			f.bumpAdminStamp(true)
 		}
 	default:
 		return fmt.Errorf("unknown command %q", c.Op)
@@ -964,6 +996,7 @@ func (f *FSM) Restore(r io.ReadCloser) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.state = st
+	f.bumpAdminStamp(st.Admin != nil)
 	return nil
 }
 

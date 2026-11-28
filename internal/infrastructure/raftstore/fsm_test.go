@@ -16,6 +16,7 @@ import (
 
 	"github.com/db-branch/db-branch/internal/domain"
 	"github.com/db-branch/db-branch/internal/infrastructure/raftstore"
+	"github.com/db-branch/db-branch/internal/usecase/auth"
 	"github.com/db-branch/db-branch/internal/usecase/operation"
 )
 
@@ -935,5 +936,29 @@ func TestFSM_統計更新中のブランチはプロトコル31を要求しス�
 	got := g.State().Branches["pg19"]
 	if !got.StatsUpdating || got.StatsWarning != "analyze slow" {
 		t.Fatalf("restored = %+v", got)
+	}
+}
+
+func TestFSM_PHCパスワードハッシュはプロトコル32を要求する(t *testing.T) {
+	if raftstore.Protocol < domain.ProtocolPHCPassword {
+		t.Fatalf("raftstore.Protocol = %d, below %d", raftstore.Protocol, domain.ProtocolPHCPassword)
+	}
+	phcCreds := auth.Credentials{Hash: []byte("$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA"), Generation: 1}
+	if got := raftstore.SetAdmin(phcCreds).Needs(); got != domain.ProtocolPHCPassword {
+		t.Fatalf("SetAdmin(PHC).Needs() = %d, want %d", got, domain.ProtocolPHCPassword)
+	}
+	if got := raftstore.InitAdmin(phcCreds).Needs(); got != domain.ProtocolPHCPassword {
+		t.Fatalf("InitAdmin(PHC).Needs() = %d, want %d", got, domain.ProtocolPHCPassword)
+	}
+	phcUser := domain.User{ID: "user:a@example.com", Hash: []byte("$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA")}
+	if got := raftstore.InsertUser(phcUser).Needs(); got != domain.ProtocolPHCPassword {
+		t.Fatalf("InsertUser(PHC).Needs() = %d, want %d", got, domain.ProtocolPHCPassword)
+	}
+	if got := raftstore.PutUser(phcUser).Needs(); got != domain.ProtocolPHCPassword {
+		t.Fatalf("PutUser(PHC).Needs() = %d, want %d", got, domain.ProtocolPHCPassword)
+	}
+	legacyUser := domain.User{ID: "user:b@example.com", Salt: []byte("salt"), Hash: []byte("raw32")}
+	if got := raftstore.PutUser(legacyUser).Needs(); got != domain.ProtocolUsers {
+		t.Fatalf("PutUser(legacy).Needs() = %d, want %d", got, domain.ProtocolUsers)
 	}
 }

@@ -729,3 +729,137 @@ func TestLogout_更新完了時に保留していたクラスタ失効を流せ�
 		t.Errorf("FlushRevocations with nil Revocations = %v", err)
 	}
 }
+
+type stampedStore struct {
+	mu       sync.Mutex
+	c        auth.Credentials
+	ok       bool
+	loads    int
+	stamps   int
+	version  uint64
+	fail     error
+	loadFail error
+	bumpLoad bool
+}
+
+func (s *stampedStore) Stamp() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stamps++
+	if s.fail != nil {
+		return "", s.fail
+	}
+	if !s.ok {
+		return "", auth.ErrNoCredentials
+	}
+	return fmt.Sprintf("v%d", s.version), nil
+}
+
+func (s *stampedStore) Load() (auth.Credentials, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loads++
+	if s.loadFail != nil {
+		return auth.Credentials{}, s.loadFail
+	}
+	if s.fail != nil {
+		return auth.Credentials{}, s.fail
+	}
+	if !s.ok {
+		return auth.Credentials{}, auth.ErrNoCredentials
+	}
+	if s.bumpLoad {
+		s.bumpLoad = false
+		s.version++
+	}
+	return s.c, nil
+}
+
+func (s *stampedStore) Save(c auth.Credentials) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fail != nil {
+		return s.fail
+	}
+	s.c = c
+	s.ok = true
+	s.version++
+	return nil
+}
+
+func TestSession_StampStoreキャッシュは毎回のLoadを省きつつ外部変更で即時失効する(t *testing.T) {
+	clk := &clock{now: time.Date(2026, 11, 28, 10, 0, 0, 0, time.UTC)}
+	st := &stampedStore{}
+	s := &auth.Service{Store: st, Clock: clk.Now, Hasher: sha{}}
+	if err := s.SetPassword("correct horse battery"); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := s.Login("admin", "correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Login warmed the cache on s (1 Load), so subsequent Session calls incur zero extra Loads.
+	loadsBefore := st.loads
+	for i := 0; i < 5; i++ {
+		if _, err := s.Session(sess.Token); err != nil {
+			t.Fatalf("Session on s %d: %v", i, err)
+		}
+	}
+	if st.loads != loadsBefore {
+		t.Fatalf("expected 0 Loads on s after Login warmed cache, got %d", st.loads-loadsBefore)
+	}
+
+	// A fresh Service instance warms its cache with exactly 1 Load across 10 Session calls.
+	restarted := &auth.Service{Store: st, Clock: clk.Now, Hasher: sha{}}
+	loadsBeforeRestarted := st.loads
+	for i := 0; i < 10; i++ {
+		if _, err := restarted.Session(sess.Token); err != nil {
+			t.Fatalf("Session on restarted %d: %v", i, err)
+		}
+	}
+	if got := st.loads - loadsBeforeRestarted; got != 1 {
+		t.Fatalf("expected 1 Load to warm cache across 10 Session calls, got %d", got)
+	}
+	if st.stamps < 10 {
+		t.Fatalf("expected Stamp called on each Session check, got %d", st.stamps)
+	}
+
+	// External password reset bumps stamp -> Session immediately fails without waiting for any TTL.
+	other := &auth.Service{Store: st, Clock: clk.Now, Hasher: sha{}}
+	if err := other.SetPassword("reset from cli immediately"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Session(sess.Token); !errors.Is(err, auth.ErrNoSession) {
+		t.Fatalf("expected immediate revocation after external reset, got %v", err)
+	}
+
+	// Stamp race during Load does not poison cache; Load error clears cache and propagates.
+	sess2, _ := restarted.Login("admin", "reset from cli immediately")
+	fresh := &auth.Service{Store: st, Clock: clk.Now, Hasher: sha{}}
+	st.bumpLoad = true
+	if _, err := fresh.Session(sess2.Token); err != nil {
+		t.Fatalf("Session during concurrent stamp bump: %v", err)
+	}
+	// Next call still warms cache cleanly because the raced load was not cached.
+	if _, err := fresh.Session(sess2.Token); err != nil {
+		t.Fatalf("Session after concurrent stamp bump: %v", err)
+	}
+	st.loadFail = errors.New("corrupt json")
+	st.version++
+	if _, err := fresh.Session(sess2.Token); err == nil {
+		t.Fatal("expected error when Load fails after stamp change")
+	}
+	st.loadFail = nil
+
+	// Store failure surfaces immediately rather than returning stale cache.
+	_, _ = restarted.Session(sess2.Token)
+	st.fail = errors.New("disk unreadable")
+	if _, err := restarted.Session(sess2.Token); err == nil {
+		t.Fatal("expected error when Stamp fails")
+	}
+	st.fail = nil
+	st.ok = false
+	if _, err := restarted.Session(sess2.Token); !errors.Is(err, auth.ErrNoSession) {
+		t.Fatalf("expected ErrNoSession when credentials disappear, got %v", err)
+	}
+}

@@ -11,6 +11,9 @@ func TestProtocolUsers_プロトコル30が予約されている(t *testing.T) {
 	if domain.ProtocolUsers != 30 {
 		t.Fatalf("ProtocolUsers = %d, want 30", domain.ProtocolUsers)
 	}
+	if domain.ProtocolPHCPassword != 32 {
+		t.Fatalf("ProtocolPHCPassword = %d, want 32", domain.ProtocolPHCPassword)
+	}
 }
 
 func TestUserEmail_正規化と検証(t *testing.T) {

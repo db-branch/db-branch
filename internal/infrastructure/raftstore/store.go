@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -489,7 +490,18 @@ func (s *Store) ListOperations(context.Context) ([]operation.Operation, error) {
 // password works on every node. It implements auth.Store.
 type AdminStore struct{ Store *Store }
 
-var _ auth.Store = AdminStore{}
+var (
+	_ auth.Store      = AdminStore{}
+	_ auth.StampStore = AdminStore{}
+)
+
+func (a AdminStore) Stamp() (string, error) {
+	v, ok := a.Store.fsm.AdminStamp()
+	if !ok {
+		return "", auth.ErrNoCredentials
+	}
+	return strconv.FormatUint(v, 10), nil
+}
 
 func (a AdminStore) Load() (auth.Credentials, error) {
 	c := a.Store.fsm.State().Admin

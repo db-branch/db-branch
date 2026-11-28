@@ -12,6 +12,10 @@ import (
 // replicated in Raft (insert_user, put_user, delete_user).
 const ProtocolUsers = 30
 
+// ProtocolPHCPassword is the cluster protocol from which stored password hashes
+// use Argon2id PHC strings instead of raw 32-byte keys.
+const ProtocolPHCPassword = 32
+
 // AdminUserID is the immutable principal ID of the built-in admin account.
 const AdminUserID = "admin"
 
