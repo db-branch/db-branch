@@ -74,4 +74,18 @@ func TestWindowsBackend_CredentialManager操作とエラー処理(t *testing.T) 
 	if err := b.Save("prod", "tok"); err == nil {
 		t.Error("expected Write error")
 	}
+	ops.writeErr = nil
+	ops.readErr = errors.New("read denied")
+	if _, err := b.Load("prod"); err == nil {
+		t.Error("expected Read error")
+	}
+	ops.readErr = nil
+	ops.delErr = errors.New("del denied")
+	if err := b.Delete("prod"); err == nil {
+		t.Error("expected Delete error")
+	}
+	ops.delErr = nil
+	if err := ops.Write("db-branch:empty", "empty", nil); err != nil {
+		t.Errorf("empty Write = %v", err)
+	}
 }

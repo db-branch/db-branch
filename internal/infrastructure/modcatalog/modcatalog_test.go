@@ -147,6 +147,26 @@ func TestAvailable_プラットフォームで絞り新しい順に並べる(t *
 	}
 }
 
+func TestAvailable_プレリリースと数値版を正しく並べる(t *testing.T) {
+	src := &source{entries: []domain.CatalogEntry{
+		{Version: "24.10.0-rc.1", Platform: "amd64", URL: "https://builds.example.com/a", SHA256: digest, Size: 1},
+		{Version: "24.10.0-beta.1", Platform: "amd64", URL: "https://builds.example.com/b", SHA256: digest, Size: 1},
+		{Version: "24.10.0", Platform: "amd64", URL: "https://builds.example.com/c", SHA256: digest, Size: 1},
+		{Version: "24.8.1", Platform: "amd64", URL: "https://builds.example.com/d", SHA256: digest, Size: 1},
+	}}
+	c, _ := newCatalog(src)
+	got := c.Available("clickhouse", "amd64")
+	want := []string{"24.10.0", "24.10.0-rc.1", "24.10.0-beta.1", "24.8.1"}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, got %v", len(got), got)
+	}
+	for i := range want {
+		if got[i].Version != want[i] {
+			t.Fatalf("got[%d] = %s, want %s (full=%v)", i, got[i].Version, want[i], got)
+		}
+	}
+}
+
 func TestLookup_カタログはTTLの間だけ使い回す(t *testing.T) {
 	src := &source{entries: entries()}
 	c, _ := newCatalog(src)

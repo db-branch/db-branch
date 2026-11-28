@@ -10,12 +10,11 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/infrastructure/catalog"
 )
 
 // Source is a runtime module's catalog.
@@ -128,21 +127,8 @@ func (c *Catalog) Available(engine domain.Engine, platform string) []domain.Runt
 			refs = append(refs, domain.RuntimeRef{Engine: engine, Version: e.Version})
 		}
 	}
-	sort.Slice(refs, func(i, j int) bool { return before(refs[i].Version, refs[j].Version) })
+	sort.Slice(refs, func(i, j int) bool { return catalog.NewerVersion(refs[i].Version, refs[j].Version) })
 	return refs
-}
-
-// before reports whether version a is newer than b (compared by number).
-func before(a, b string) bool {
-	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
-	for i := 0; i < len(pa) && i < len(pb); i++ {
-		na, _ := strconv.Atoi(pa[i])
-		nb, _ := strconv.Atoi(pb[i])
-		if na != nb {
-			return na > nb
-		}
-	}
-	return len(pa) > len(pb)
 }
 
 // Cache downloads the archives of the modules' engines through External (a

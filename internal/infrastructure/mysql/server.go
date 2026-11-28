@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/infrastructure/retry"
 )
 
 // Runner runs external commands, optionally feeding stdin and extra environment.
@@ -259,7 +260,7 @@ func (m *Server) start(ctx context.Context, s domain.Server, timeout time.Durati
 			lcancel()
 			return domain.StartFailure(s.ID, out)
 		}
-		if err := sleepContext(waitCtx, m.PollInterval); err != nil {
+		if err := retry.Sleep(waitCtx, m.PollInterval); err != nil {
 			return m.abortStart(ctx, s, offset, timeout)
 		}
 	}
@@ -293,20 +294,6 @@ func (m *Server) stopAborted(ctx context.Context, s domain.Server) {
 		_ = m.runTimeout(base, 10*time.Second, "systemctl", "stop", unit(s))
 	}
 	_ = m.runTimeout(base, 10*time.Second, "systemctl", "reset-failed", unit(s))
-}
-
-func sleepContext(ctx context.Context, d time.Duration) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
 }
 
 func (m *Server) activeState(ctx context.Context, s domain.Server) (string, error) {

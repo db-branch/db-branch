@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"github.com/db-branch/db-branch/internal/infrastructure/retry"
 	"github.com/db-branch/db-branch/internal/infrastructure/rtunit"
 )
 
@@ -192,7 +193,9 @@ func (v *Server) launch(ctx context.Context, s domain.Server, inst domain.Instan
 			j := v.journal(ctx, s)
 			return j, fmt.Errorf("%s did not become ready within %s: %s", s.ID, v.StartTimeout, j)
 		}
-		time.Sleep(v.PollInterval)
+		if err := retry.Sleep(ctx, v.PollInterval); err != nil {
+			return "", err
+		}
 	}
 }
 

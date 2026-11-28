@@ -3,6 +3,7 @@
 package keychain
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -41,6 +42,13 @@ func (d *darwinBackend) Save(profile, token string) error {
 	if err := validateTokenInput(profile, token); err != nil {
 		return err
 	}
+	// `security find-generic-password -w` hex-encodes non-ASCII secrets, making them
+	// indistinguishable from ASCII hex tokens; fall back to the 0600 file instead.
+	for i := 0; i < len(token); i++ {
+		if token[i] < 0x20 || token[i] >= 0x7f {
+			return errors.New("macOS keychain only supports printable ASCII tokens")
+		}
+	}
 	// Run add-generic-password via `/usr/bin/security -i` stdin so the token never appears in argv/ps.
 	script := fmt.Sprintf("add-generic-password -U -a %s -s %s -w %s\n",
 		escapeSecurityArg(profile), escapeSecurityArg(serviceName), escapeSecurityArg(token))
@@ -50,8 +58,11 @@ func (d *darwinBackend) Save(profile, token string) error {
 	}
 	// Verify via direct lookup because `security -i` may exit 0 even on subcommand failure.
 	got, err := d.Load(profile)
-	if err != nil || got != token {
-		return fmt.Errorf("keychain save verification failed: %v", err)
+	if err != nil {
+		return fmt.Errorf("keychain save verification failed: %w", err)
+	}
+	if got != token {
+		return errors.New("keychain save verification failed: stored token mismatch")
 	}
 	return nil
 }
