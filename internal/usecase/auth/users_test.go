@@ -3,6 +3,7 @@ package auth_test
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"slices"
 	"strings"
@@ -731,7 +732,7 @@ func TestMultiUser_LegacyPreMigrationPathsAndEmptySessionKey(t *testing.T) {
 type phcTestHasher struct{}
 
 func (phcTestHasher) Hash(pw string, salt []byte) []byte {
-	return []byte("$argon2id$v=19$m=19456,t=2,p=1$" + string(salt) + "$" + pw)
+	return []byte("$argon2id$v=19$m=19456,t=2,p=1$" + hex.EncodeToString(salt) + "$" + pw)
 }
 
 func (phcTestHasher) HashLegacy(pw string, salt []byte) []byte {
