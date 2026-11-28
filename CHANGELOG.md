@@ -4,9 +4,43 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-28
+
+PostgreSQL 19 support and PostgreSQL major version upgrades for branches, plus authentication hardening and dependency cleanups.
+
+### Upgrade notes (read before upgrading)
+
+- **Raft Protocol `30` → `32`**: upgrade nodes one at a time, followers first and the leader last (Settings → Updates in the console, `db-branch update apply 0.4.1`, or `apt update && apt upgrade` on each node). Until every node runs `0.4.1`, PostgreSQL major upgrades of branches and the new password hash format are not used. Do not downgrade a node after the cluster has moved to protocol `32`: passwords re-hashed on login can no longer be verified by `0.4.0`.
+- **Console password hashes move to Argon2id in PHC format**: existing hashes keep working and are re-hashed the next time each user logs in. No action is needed.
+- **`POST /v1/auth/login` requires `Content-Type: application/json`** and answers `415 unsupported_media_type` otherwise. The console, CLI and MCP already send JSON; update scripts that post a form.
+- **Cross-origin browser requests are refused**: cookie-authenticated requests that a browser marks as cross-site now answer `403 csrf_failed` (in addition to the existing `X-CSRF-Token` check). Requests with `Authorization: Bearer` are not affected. If you embed the console behind another origin, serve it from the same origin.
+
 ### Added
 
-- **PostgreSQL Major Version Upgrades (`F-16`)**: `branch upgrade` now supports PostgreSQL major version upgrades (including jumping majors such as `17 -> 19` and `18 -> 19`) via `pg_upgrade --swap` (PostgreSQL 18+, `--link` on older versions), preserving encoding, locale, and data checksum settings (`pg_controldata`), checking target extensions (including `anon`), logical replication slots/subscriptions, object-count/database-size warnings, and `pg_upgrade --check` compatibility, scaling operation timeouts from object counts, reporting `pg_upgrade` progress stages, rolling back automatically via ZFS checkpoints on failure, and running `vacuumdb --analyze-in-stages --missing-stats-only` in the background while keeping the branch `ready` (`stats_updating`, `stats_warning`, Raft Protocol `31`).
+- **PostgreSQL 19**: `postgres@19.0` runtime for Ubuntu 24.04 / 26.04 on amd64 / arm64. PostgreSQL 18 and 17 move to `postgres@18.7` and `postgres@17.12`.
+- **PostgreSQL major version upgrades of a branch**: `branch upgrade` now supports PostgreSQL major version upgrades (including jumping majors such as `17 -> 19` and `18 -> 19`) via `pg_upgrade --swap` (PostgreSQL 18+, `--link` on older versions), preserving encoding, locale, and data checksum settings (`pg_controldata`), checking target extensions (including `anon`), logical replication slots/subscriptions, object-count/database-size warnings, and `pg_upgrade --check` compatibility, scaling operation timeouts from object counts, reporting `pg_upgrade` progress stages, rolling back automatically via ZFS checkpoints on failure, and running `vacuumdb --analyze-in-stages --missing-stats-only` in the background while keeping the branch `ready` (`stats_updating`, `stats_warning`, Raft Protocol `31`).
+- `ext.AtomicStore` (`Get` / `PutIfAbsent` / `Take`) for modules that need atomic, leader-forwarded state (used by the SSO module).
+
+### Security
+
+- Console passwords use Argon2id in PHC format (`m=19456,t=2,p=1`), with transparent re-hashing of legacy hashes on login (Raft Protocol `32`).
+- `net/http.CrossOriginProtection` is added on cookie-authenticated routes as defense in depth next to `X-CSRF-Token`.
+- `POST /v1/auth/login` only accepts JSON (prevents login CSRF).
+- Key, serial and certificate generation errors in the cluster PKI are no longer ignored.
+
+### Fixed
+
+- PGDG catalog generation compares versions with Debian rules (pre-releases such as `18~rc1` sort before `18.0`).
+- Client connection files (DataGrip, MySQL Workbench, Navicat, DBeaver) are built with an XML encoder and use standard RFC 4122 UUIDv5 values, so control characters in names no longer break the files.
+- The SQL runner handles MySQL conditional comments (`/*! ... */`) and `--` comments correctly.
+- HTTP clients for artifacts and the license service have timeouts.
+- `publish-apt.py` uploads `Release` / `Release.gpg` after the package indexes.
+- The console's live updates reconnect with exponential backoff instead of retrying in a tight loop.
+
+### Changed
+
+- Dependencies replace hand-written code: `golang.org/x/term` (password prompts), `github.com/danieljoos/wincred` (Windows credential store), `golang.org/x/mod/semver` (catalog version comparison), `github.com/cenkalti/backoff/v5` (retries), `github.com/google/uuid`. All are pure Go (no cgo) under MIT or BSD licenses.
+- Authentication state reads are cached and invalidated immediately when the store changes.
 
 ## [0.4.0] - 2026-11-26
 
