@@ -26,7 +26,7 @@ internal/
 ├── interface/       CLI・HTTP・Web コンソールなどの入出力アダプタ
 └── infrastructure/  ZFS・DB エンジン・ProxySQL・Raft・設定ファイルなどの外部実装
 internal/app/        コンポジションルート（実装を組み立てる。ロジックを置かない）
-pkg/ext/             有償モジュール向けの公開拡張ポイント（後のフェーズ）
+pkg/ext/             有償モジュール向けの公開拡張ポイント
 web/                 Web コンソール（React + Vite。ビルド結果をバイナリに埋め込む）
 cmd/db-branch/       エントリポイント
 ```
