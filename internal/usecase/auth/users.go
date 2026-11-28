@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"strings"
 	"time"
@@ -83,12 +82,12 @@ func (s *Service) setAdminUserPassword(c Credentials, loadErr error, salt, hash,
 	}
 	if errors.Is(loadErr, ErrNoCredentials) {
 		c = Credentials{Salt: salt, Hash: hash, Generation: 1, UpdatedAt: now, SessionKey: key, MustChange: mustChange}
-		if err := s.Store.Save(c); err != nil {
+		if err := s.saveCredentials(c); err != nil {
 			return err
 		}
 	} else if len(c.SessionKey) == 0 {
 		c.SessionKey = key
-		if err := s.Store.Save(c); err != nil {
+		if err := s.saveCredentials(c); err != nil {
 			return err
 		}
 	}
@@ -97,7 +96,7 @@ func (s *Service) setAdminUserPassword(c Credentials, loadErr error, salt, hash,
 		if gen < 1 {
 			gen = 1
 		}
-		return s.Store.Save(Credentials{
+		return s.saveCredentials(Credentials{
 			Salt:       salt,
 			Hash:       hash,
 			Generation: gen,
@@ -125,7 +124,7 @@ func (s *Service) setAdminUserPassword(c Credentials, loadErr error, salt, hash,
 	}
 	err := s.Users.InsertUser(ctx, admin)
 	if errors.Is(err, domain.ErrClusterUpgrading) && loadErr == nil {
-		return s.Store.Save(Credentials{
+		return s.saveCredentials(Credentials{
 			Salt: salt, Hash: hash, Generation: c.Generation + 1, UpdatedAt: now, SessionKey: key, MustChange: mustChange,
 		})
 	}
@@ -165,9 +164,8 @@ func (s *Service) hashNewPassword(password string) (salt, hash []byte, err error
 	if len(password) < minPasswordLen || len(password) > MaxPasswordLen {
 		return nil, nil, ErrWeakPassword
 	}
-	salt = make([]byte, 16)
-	_, _ = rand.Read(salt)
-	return salt, s.Hasher.Hash(password, salt), nil
+	salt, hash = s.hashPassword(password)
+	return salt, hash, nil
 }
 
 // ListUsers lists all core console users sorted by ID.
@@ -230,13 +228,15 @@ func (s *Service) UpdateUser(ctx context.Context, idOrEmail string, in UpdateUse
 	if s.Protocol != nil && s.Protocol() < domain.ProtocolUsers {
 		return domain.User{}, domain.ErrClusterUpgrading
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	u, err := s.Users.GetUser(ctx, id)
 	if err != nil {
 		return domain.User{}, err
 	}
 	credGen := 0
 	if id == AdminUser {
-		if c, cerr := s.Store.Load(); cerr == nil {
+		if c, cerr := s.loadCredentials(); cerr == nil {
 			credGen = c.Generation
 		}
 	}

@@ -238,7 +238,20 @@ func (s *Server) Handler(local bool) http.Handler {
 			mux.ServeHTTP(w, r)
 		}))
 	} else {
-		api = s.requireSession(mux)
+		cop := http.NewCrossOriginProtection()
+		cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s.auditAuthFailure(r, Anonymous, "auth.csrf", http.StatusForbidden)
+			writeError(w, http.StatusForbidden, "csrf_failed", "cross-origin request blocked")
+		}))
+		sessAPI := s.requireSession(mux)
+		protected := cop.Handler(sessAPI)
+		api = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+				sessAPI.ServeHTTP(w, r)
+				return
+			}
+			protected.ServeHTTP(w, r)
+		})
 	}
 	return securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.health(w, r) {

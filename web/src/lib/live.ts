@@ -20,37 +20,70 @@ export const LIVE_EVENTS = [
 
 type Listener = (type: string) => void;
 const listeners = new Set<Listener>();
+const INITIAL_RECONNECT_MS = 1000;
+const MAX_RECONNECT_MS = 30000;
 let source: EventSource | null = null;
 let checkingAuth: Promise<void> | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempts = 0;
+let sessionSeq = 0;
+
+function closeSource() {
+  source?.close();
+  source = null;
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer || listeners.size === 0) return;
+  const base = Math.min(MAX_RECONNECT_MS, INITIAL_RECONNECT_MS * 2 ** reconnectAttempts);
+  const delay = base + Math.floor(Math.random() * base * 0.2);
+  reconnectAttempts++;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (listeners.size > 0) connect();
+  }, delay);
+}
 
 function handleDisconnect() {
-  if (checkingAuth) return;
+  if (checkingAuth || reconnectTimer) return;
+  const seq = sessionSeq;
   const hadSession = hasSession();
   checkingAuth = api
     .session()
     .then(
       () => {
+        if (seq !== sessionSeq) return;
         if (source && typeof EventSource !== "undefined" && source.readyState === EventSource.CLOSED) {
-          disconnect();
-          if (listeners.size > 0) connect();
+          closeSource();
+          scheduleReconnect();
         }
       },
       (err: unknown) => {
+        if (seq !== sessionSeq) return;
         if (err instanceof ApiError && err.status === 401) {
           disconnect();
           if (!hadSession) notifyUnauthorized();
+          return;
+        }
+        if (source && typeof EventSource !== "undefined" && source.readyState === EventSource.CLOSED) {
+          closeSource();
+          scheduleReconnect();
         }
       },
     )
     .finally(() => {
-      checkingAuth = null;
+      if (seq === sessionSeq) checkingAuth = null;
     });
 }
 
 function connect() {
-  if (source) return;
+  if (source || reconnectTimer) return;
   source = new EventSource("/v1/events");
+  source.onopen = () => {
+    reconnectAttempts = 0;
+  };
   const forward = (e: MessageEvent) => {
+    reconnectAttempts = 0;
     if (e.type === "module.updated" || e.type === "resync") {
       forgetCapabilities();
     }
@@ -67,8 +100,14 @@ function connect() {
 }
 
 export function disconnect() {
-  source?.close();
-  source = null;
+  sessionSeq++;
+  checkingAuth = null;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectAttempts = 0;
+  closeSource();
 }
 
 /** subscribeEvents opens the shared EventSource and invokes onReload (coalesced) when any matching resource or resync arrives. */

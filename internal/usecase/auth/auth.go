@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -96,9 +97,35 @@ type Store interface {
 	Save(Credentials) error
 }
 
+// StampStore is an optional Store extension returning a cheap change stamp
+// (such as file stat metadata or an FSM sequence number) so Service can cache
+// Credentials while preserving immediate revocation when the store changes.
+type StampStore interface {
+	Store
+	Stamp() (string, error)
+}
+
 // Hasher derives a password hash (argon2id in production).
 type Hasher interface {
 	Hash(password string, salt []byte) []byte
+}
+
+// Verifier is an optional Hasher extension that verifies self-contained
+// password hashes (such as PHC strings) as well as legacy raw hashes.
+type Verifier interface {
+	Verify(password string, salt, hash []byte) bool
+}
+
+// RehashChecker is an optional Hasher extension that reports whether a stored
+// hash should be re-hashed with current parameters on the next login.
+type RehashChecker interface {
+	NeedsRehash(hash []byte) bool
+}
+
+// LegacyHasher is an optional Hasher extension used during a rolling cluster
+// upgrade before all nodes speak ProtocolPHCPassword.
+type LegacyHasher interface {
+	HashLegacy(password string, salt []byte) []byte
 }
 
 // Revocations remembers the sessions that were logged out, so that every node
@@ -145,11 +172,74 @@ type Service struct {
 	Revocations Revocations
 
 	mu            sync.Mutex
+	writeMu       sync.Mutex // serializes credential/user password updates and rehashes
 	revoked       map[string]time.Time // session id -> expiry, after logout
 	pendingRevoke map[string]time.Time // session id -> expiry, awaiting cluster protocol >= 24
 	clients       map[string]*failure  // by client address
-	hashing     chan struct{}        // semaphore for password hashes
-	hashingOnce sync.Once
+	credCached    bool
+	credStamp     string
+	credCache     Credentials
+	hashing       chan struct{} // semaphore for password hashes
+	hashingOnce   sync.Once
+}
+
+func cloneCredentials(c Credentials) Credentials {
+	c.Salt = append([]byte(nil), c.Salt...)
+	c.Hash = append([]byte(nil), c.Hash...)
+	c.SessionKey = append([]byte(nil), c.SessionKey...)
+	return c
+}
+
+func (s *Service) invalidateCredentialsCache() {
+	s.mu.Lock()
+	s.credCached = false
+	s.credStamp = ""
+	s.credCache = Credentials{}
+	s.mu.Unlock()
+}
+
+func (s *Service) loadCredentials() (Credentials, error) {
+	st, ok := s.Store.(StampStore)
+	if !ok {
+		return s.Store.Load()
+	}
+	stamp, err := st.Stamp()
+	if err != nil {
+		s.invalidateCredentialsCache()
+		return Credentials{}, err
+	}
+	s.mu.Lock()
+	if s.credCached && s.credStamp == stamp {
+		c := cloneCredentials(s.credCache)
+		s.mu.Unlock()
+		return c, nil
+	}
+	s.mu.Unlock()
+	c, err := s.Store.Load()
+	if err != nil {
+		s.invalidateCredentialsCache()
+		return Credentials{}, err
+	}
+	afterStamp, serr := st.Stamp()
+	s.mu.Lock()
+	if serr == nil && afterStamp == stamp {
+		s.credCached = true
+		s.credStamp = stamp
+		s.credCache = cloneCredentials(c)
+	} else {
+		s.credCached = false
+		s.credStamp = ""
+		s.credCache = Credentials{}
+	}
+	s.mu.Unlock()
+	return cloneCredentials(c), nil
+}
+
+func (s *Service) saveCredentials(c Credentials) error {
+	s.invalidateCredentialsCache()
+	err := s.Store.Save(c)
+	s.invalidateCredentialsCache()
+	return err
 }
 
 func (s *Service) ttl() time.Duration {
@@ -177,21 +267,55 @@ func (s *Service) SetPassword(password string) error { return s.setPassword(pass
 // "admin" on an evaluation VM): the next sign-in must change it.
 func (s *Service) SetInitialPassword(password string) error { return s.setPassword(password, true) }
 
+func (s *Service) phcReady() bool {
+	return s.Protocol == nil || s.Protocol() >= domain.ProtocolPHCPassword
+}
+
+func (s *Service) hashPassword(password string) (salt, hash []byte) {
+	rawSalt := make([]byte, 16)
+	_, _ = rand.Read(rawSalt)
+	if !s.phcReady() {
+		if lh, ok := s.Hasher.(LegacyHasher); ok {
+			return rawSalt, lh.HashLegacy(password, rawSalt)
+		}
+	}
+	h := s.Hasher.Hash(password, rawSalt)
+	if bytes.HasPrefix(h, []byte("$argon2id$")) {
+		return nil, h
+	}
+	return rawSalt, h
+}
+
+func (s *Service) hashPasswordBounded(password string) (salt, hash []byte) {
+	s.hashingOnce.Do(func() { s.hashing = make(chan struct{}, MaxHashing) })
+	s.hashing <- struct{}{}
+	defer func() { <-s.hashing }()
+	return s.hashPassword(password)
+}
+
+func (s *Service) needsRehash(hash []byte) bool {
+	if !s.phcReady() {
+		return false
+	}
+	rc, ok := s.Hasher.(RehashChecker)
+	return ok && rc.NeedsRehash(hash)
+}
+
 func (s *Service) setPassword(password string, mustChange bool) error {
-	c, loadErr := s.Store.Load()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	c, loadErr := s.loadCredentials()
 	if loadErr != nil && !errors.Is(loadErr, ErrNoCredentials) {
 		return loadErr
 	}
-	salt := make([]byte, 16)
-	_, _ = rand.Read(salt)
 	key := c.SessionKey
 	if len(key) == 0 {
 		key = newKey()
 	}
-	hash := s.Hasher.Hash(password, salt)
+	salt, hash := s.hashPassword(password)
 	now := s.Clock().UTC()
 	if s.Users == nil {
-		return s.Store.Save(Credentials{
+		return s.saveCredentials(Credentials{
 			Salt: salt, Hash: hash, Generation: c.Generation + 1, UpdatedAt: now, SessionKey: key, MustChange: mustChange,
 		})
 	}
@@ -209,6 +333,9 @@ func (s *Service) verifyHash(salt, hash []byte, password string) bool {
 	s.hashingOnce.Do(func() { s.hashing = make(chan struct{}, MaxHashing) })
 	s.hashing <- struct{}{}
 	defer func() { <-s.hashing }()
+	if v, ok := s.Hasher.(Verifier); ok {
+		return v.Verify(password, salt, hash)
+	}
 	return subtle.ConstantTimeCompare(s.Hasher.Hash(password, salt), hash) == 1
 }
 
@@ -246,7 +373,7 @@ func (s *Service) VerifyFrom(client, user, password string) error {
 // VerifyUserFrom validates user ("admin" or an email/user:<email>) and
 // password with per-client rate limiting, returning the matched domain.User.
 func (s *Service) VerifyUserFrom(client, user, password string) (domain.User, error) {
-	c, loadErr := s.Store.Load()
+	c, loadErr := s.loadCredentials()
 	if loadErr != nil && !errors.Is(loadErr, ErrNoCredentials) {
 		return domain.User{}, loadErr
 	}
@@ -261,6 +388,9 @@ func (s *Service) VerifyUserFrom(client, user, password string) (domain.User, er
 			return domain.User{}, ErrInvalidCredentials
 		}
 		s.clearExpiredLock(client)
+		if s.needsRehash(c.Hash) {
+			s.rehashCredentials(c, password)
+		}
 		return domain.User{ID: AdminUser, Name: AdminUser, MustChange: c.MustChange}, nil
 	}
 	if retry := s.reserve(client); retry > 0 {
@@ -283,6 +413,9 @@ func (s *Service) VerifyUserFrom(client, user, password string) (domain.User, er
 				return domain.User{}, ErrInvalidCredentials
 			}
 			s.clearExpiredLock(client)
+			if s.needsRehash(c.Hash) {
+				s.rehashCredentials(c, password)
+			}
 			return domain.User{ID: AdminUser, Name: AdminUser, MustChange: c.MustChange}, nil
 		}
 	}
@@ -296,7 +429,34 @@ func (s *Service) VerifyUserFrom(client, user, password string) (domain.User, er
 		return domain.User{}, ErrInvalidCredentials
 	}
 	s.clearExpiredLock(client)
+	if s.needsRehash(u.Hash) {
+		s.rehashUser(u, password)
+	}
 	return u, nil
+}
+
+func (s *Service) rehashCredentials(seen Credentials, password string) {
+	salt, hash := s.hashPasswordBounded(password)
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	cur, err := s.loadCredentials()
+	if err != nil || cur.Generation != seen.Generation || !bytes.Equal(cur.Hash, seen.Hash) || !bytes.Equal(cur.Salt, seen.Salt) {
+		return
+	}
+	cur.Salt, cur.Hash, cur.UpdatedAt = salt, hash, s.Clock().UTC()
+	_ = s.saveCredentials(cur)
+}
+
+func (s *Service) rehashUser(seen domain.User, password string) {
+	salt, hash := s.hashPasswordBounded(password)
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	cur, err := s.Users.GetUser(context.Background(), seen.ID)
+	if err != nil || cur.Disabled || cur.SessionGen != seen.SessionGen || !bytes.Equal(cur.Hash, seen.Hash) || !bytes.Equal(cur.Salt, seen.Salt) {
+		return
+	}
+	cur.Salt, cur.Hash, cur.UpdatedAt = salt, hash, s.Clock().UTC()
+	_ = s.Users.PutUser(context.Background(), cur)
 }
 
 func (s *Service) clearExpiredLock(client string) {
@@ -420,7 +580,7 @@ func (s *Service) buildSession(id, user, name string, roles []string, renewed bo
 // credentialsWithKey loads the credentials, adding a session key to ones
 // stored before sessions were signed.
 func (s *Service) credentialsWithKey() (Credentials, error) {
-	c, err := s.Store.Load()
+	c, err := s.loadCredentials()
 	if errors.Is(err, ErrNoCredentials) {
 		return c, ErrNoSession
 	}
@@ -429,7 +589,7 @@ func (s *Service) credentialsWithKey() (Credentials, error) {
 	}
 	if len(c.SessionKey) == 0 {
 		c.SessionKey = newKey()
-		if err := s.Store.Save(c); err != nil {
+		if err := s.saveCredentials(c); err != nil {
 			return c, err
 		}
 	}
@@ -516,7 +676,7 @@ func (s *Service) PendingSession(token string) (Session, error) {
 }
 
 func (s *Service) inspect(token string) (sess Session, revokedLocal, pending bool, err error) {
-	c, err := s.Store.Load()
+	c, err := s.loadCredentials()
 	if errors.Is(err, ErrNoCredentials) {
 		return Session{}, false, false, ErrNoSession
 	}
@@ -654,7 +814,7 @@ func (s *Service) ChangePassword(token, current, next string) (Session, error) {
 	if err != nil {
 		return Session{}, err
 	}
-	c, err := s.Store.Load()
+	c, err := s.loadCredentials()
 	if err != nil {
 		return Session{}, err
 	}
@@ -694,7 +854,7 @@ func (s *Service) ChangePassword(token, current, next string) (Session, error) {
 	if err := s.SetPassword(next); err != nil {
 		return Session{}, err
 	}
-	if c, err = s.Store.Load(); err != nil {
+	if c, err = s.loadCredentials(); err != nil {
 		return Session{}, err
 	}
 	fresh := s.issue(c, payload{ID: sess.id, User: sess.User, Name: sess.Name, Roles: sess.Roles})
