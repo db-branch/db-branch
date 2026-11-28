@@ -23,6 +23,7 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/modmask"
 	"github.com/db-branch/db-branch/internal/infrastructure/notifier"
 	"github.com/db-branch/db-branch/internal/infrastructure/portreserve"
+	"github.com/db-branch/db-branch/internal/infrastructure/retry"
 	"github.com/db-branch/db-branch/internal/interface/httpapi"
 	"github.com/db-branch/db-branch/internal/usecase/arccap"
 	"github.com/db-branch/db-branch/internal/usecase/auth"
@@ -373,17 +374,7 @@ func (r *moduleSyncer) afterTimer(d time.Duration) <-chan time.Time {
 }
 
 func (r *moduleSyncer) backoff(failures int) time.Duration {
-	if failures <= 0 {
-		return r.baseDelay
-	}
-	d := r.baseDelay
-	for range failures {
-		if d >= r.maxBackoff || d > r.maxBackoff/2 {
-			return r.maxBackoff
-		}
-		d *= 2
-	}
-	return min(d, r.maxBackoff)
+	return retry.ExponentialDelay(r.baseDelay, r.maxBackoff, failures)
 }
 
 func (r *moduleSyncer) run(ctx context.Context, kick <-chan struct{}) {

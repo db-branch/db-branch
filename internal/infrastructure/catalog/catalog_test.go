@@ -87,6 +87,33 @@ func TestAvailable_桁数が違う版も数値として比べる(t *testing.T) {
 	}
 }
 
+func TestAvailable_プレリリース版は正式版より後ろに並ぶ(t *testing.T) {
+	body := `{"runtimes": [
+  {"engine": "mysql", "version": "8.4.0-alpha.1", "artifacts": {"amd64": {"url": "https://x.test/a", "sha256": "` + sha + `"}}},
+  {"engine": "mysql", "version": "8.4.0-rc.1", "artifacts": {"amd64": {"url": "https://x.test/b", "sha256": "` + sha + `"}}},
+  {"engine": "mysql", "version": "8.4.0-beta", "artifacts": {"amd64": {"url": "https://x.test/c", "sha256": "` + sha + `"}}},
+  {"engine": "mysql", "version": "8.4.0", "artifacts": {"amd64": {"url": "https://x.test/d", "sha256": "` + sha + `"}}},
+  {"engine": "mysql", "version": "8.4-rc.1", "artifacts": {"amd64": {"url": "https://x.test/e", "sha256": "` + sha + `"}}},
+  {"engine": "mysql", "version": "8.3", "artifacts": {"amd64": {"url": "https://x.test/f", "sha256": "` + sha + `"}}}
+]}`
+	c, err := catalog.Parse([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := c.Available(domain.MySQL, "amd64")
+	want := []domain.RuntimeRef{
+		ref("mysql@8.4.0"),
+		ref("mysql@8.4.0-rc.1"),
+		ref("mysql@8.4-rc.1"),
+		ref("mysql@8.4.0-beta"),
+		ref("mysql@8.4.0-alpha.1"),
+		ref("mysql@8.3"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Available = %v, want %v", got, want)
+	}
+}
+
 func TestParse_不正なカタログを拒否する(t *testing.T) {
 	entry := func(engine, version, url, digest string) string {
 		return `{"runtimes": [{"engine": "` + engine + `", "version": "` + version +
@@ -275,6 +302,35 @@ func TestDefault_同梱のカタログにMySQL5系があり_amd64だけで_チ�
 		// Oracle publishes no arm64 build of 5.x.
 		if _, err := c.Lookup(ref, "arm64"); err == nil {
 			t.Errorf("%s has no arm64 build", v)
+		}
+	}
+}
+
+func TestNewerVersion_境界ケースを比較する(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"1.0.0", "1.0", true},
+		{"v1.1.0", "1.0.0", true},
+		{"1-rc.1", "1-beta.1", true},
+		{"1.0.0", "bad", true},
+		{"bad", "1.0.0", false},
+		{"", "1.0.0", false},
+		{"b", "a", true},
+		{"1.2.3.4-rc.1", "bad", true},
+		{"1.2.3.5", "1.2.3.4-rc.1", true},
+		{"1.2.3.4-rc.1", "1.2.3.5", false},
+		{"1.2.3.10", "1.2.3.2", true},
+		{"1.2.3.2", "1.2.3.1a", true},
+		{"1.2.3.10", "1.2.3.1a", true},
+		{"1.2.3.1a", "1.2.3.10", false},
+		{"10.0.0.1", "2.0.0.1", true},
+		{"2024.02.1", "2024.01.1", true},
+	}
+	for _, tc := range cases {
+		if got := catalog.NewerVersion(tc.a, tc.b); got != tc.want {
+			t.Errorf("NewerVersion(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
 		}
 	}
 }

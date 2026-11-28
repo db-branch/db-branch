@@ -3,6 +3,7 @@ import { api, Base, Branch, can, currentSession, isAdmin, ownerLabel } from "../
 import { Icon, Status, StorageBar } from "../components/marks";
 import { Dialog, Drawer, Empty, ErrorLine, ErrorText, Field } from "../components/ui";
 import { serverError } from "../lib/errors";
+import { parsePositiveDuration } from "../lib/duration";
 import { formatDateTime, relative } from "../lib/format";
 import { useLive, useNow } from "../lib/live";
 import { t } from "../lib/i18n";
@@ -178,13 +179,7 @@ const ttls: [string, string][] = [
 
 // parseTTL accepts what Go's time.ParseDuration does, plus days ("2d").
 export function parseTTL(v: string): string | null {
-  const t = v.trim().toLowerCase();
-  const d = t.match(/^(\d+)\s*d$/);
-  if (d) {
-    const days = Number(d[1]);
-    return days > 0 ? `${days * 24}h` : null;
-  }
-  return /^(\d+(\.\d+)?(h|m|s))+$/.test(t) && /[1-9]/.test(t) ? t : null;
+  return parsePositiveDuration(v, { allowDays: true, caseInsensitive: true });
 }
 
 function CreateBranch({ bases, onClose }: { bases: Base[]; onClose: () => void }) {

@@ -1,5 +1,6 @@
 // Limits on branches made without signing in, per base. Pure helpers for the
 // Bases page so they can be tested without a browser.
+import { parsePositiveDuration } from "./duration";
 
 // What a base allows besides the cluster-wide settings; null inherits them.
 export type AnonLimits = { max_branches: number | null; max_ttl: string | null };
@@ -22,13 +23,11 @@ export function parseMax(input: string): Parsed<number> {
   return /^\d+$/.test(s) ? { ok: true, value: Number(s) } : { ok: false };
 }
 
-const DURATION = /^(\d+(\.\d+)?(h|m|s))+$/;
-
 // parseTTL reads the "max TTL" box: empty or "inherit" inherits, else a positive duration such as 4h or 1h30m.
 export function parseTTL(input: string): Parsed<string> {
   if (INHERIT(input)) return { ok: true, value: null };
-  const s = input.trim();
-  return DURATION.test(s) && /[1-9]/.test(s) ? { ok: true, value: s } : { ok: false };
+  const ttl = parsePositiveDuration(input);
+  return ttl !== null ? { ok: true, value: ttl } : { ok: false };
 }
 
 // inputsOf is what the two boxes show for the current settings.

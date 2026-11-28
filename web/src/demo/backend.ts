@@ -4,6 +4,7 @@
 // publish the same events as the real server. No network, no real data.
 import type { APIToken, Base, BaseRefresh, Branch, Checkpoint, HistoryTx, MergeResult, Operation, SettingScope, Upload } from "../api";
 import { ownerPrefix } from "../lib/branchname";
+import { parseDurationMs } from "../lib/duration";
 import { t } from "../lib/i18n";
 import { upgradeProblem, type Finding, type UpgradeResult } from "../lib/upgrade";
 import {
@@ -49,12 +50,7 @@ const CONSOLE_ACTIONS = ["base.read", "base.create", "base.delete", "base.load",
 const BASE_ACTIONS = ["base.snapshot", "base.load", "base.delete", "base.describe", "base.publish", "base.sql", "base.start", "base.stop", "base.refresh", "base.refresh.read", "base.snapshot.delete", "base.snapshot_delete", "base.replicas"];
 
 /** Go-style durations: "4h", "90m", "1h30m0s". Null when it is not one. */
-export function parseDuration(s: string): number | null {
-  if (!/^(\d+(\.\d+)?[hms])+$/.test(s)) return null;
-  let ms = 0;
-  for (const m of s.matchAll(/(\d+(?:\.\d+)?)([hms])/g)) ms += Number(m[1]) * { h: 3600e3, m: 60e3, s: 1e3 }[m[2] as "h" | "m" | "s"];
-  return ms;
-}
+export const parseDuration = parseDurationMs;
 
 /** goDuration writes ms the way Go prints a time.Duration: "12h0m0s", "30m0s". */
 export function goDuration(ms: number): string {

@@ -1,6 +1,7 @@
 // The user page's view of branches: when they expire, what order they come
 // in, how far one click extends them, and the two-step confirmation of
 // destructive actions. Pure, so it can be tested without a browser.
+import { parseDurationMs } from "./duration";
 import { t } from "./i18n";
 
 export const ttlChoices: [string, string][] = [
@@ -13,10 +14,8 @@ export const ttlChoices: [string, string][] = [
 
 // hours reads a Go-style duration such as "4h", "1h30m", "1.5h", or "30s".
 export function hours(d: string): number {
-  if (!d) return 0;
-  const m = d.match(/^(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?$/);
-  if (!m || (!m[1] && !m[2] && !m[3])) return 0;
-  return Number(m[1] ?? 0) + Number(m[2] ?? 0) / 60 + Number(m[3] ?? 0) / 3600;
+  const ms = parseDurationMs(d);
+  return ms === null ? 0 : ms / HOUR;
 }
 
 const MIN = 60_000;

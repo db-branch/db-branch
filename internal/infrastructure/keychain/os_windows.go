@@ -3,40 +3,12 @@
 package keychain
 
 import (
+	"errors"
 	"fmt"
-	"unsafe"
 
+	"github.com/danieljoos/wincred"
 	"golang.org/x/sys/windows"
 )
-
-const (
-	credTypeGeneric         uint32 = 1
-	credPersistLocalMachine uint32 = 2
-	errNotFoundWin32               = windows.Errno(1168)
-)
-
-var (
-	advapi32        = windows.NewLazySystemDLL("advapi32.dll")
-	procCredWriteW  = advapi32.NewProc("CredWriteW")
-	procCredReadW   = advapi32.NewProc("CredReadW")
-	procCredDeleteW = advapi32.NewProc("CredDeleteW")
-	procCredFree    = advapi32.NewProc("CredFree")
-)
-
-type winCredential struct {
-	Flags              uint32
-	Type               uint32
-	TargetName         *uint16
-	Comment            *uint16
-	LastWritten        windows.Filetime
-	CredentialBlobSize uint32
-	CredentialBlob     *byte
-	Persist            uint32
-	AttributeCount     uint32
-	Attributes         uintptr
-	TargetAlias        *uint16
-	UserName           *uint16
-}
 
 // WinCredOps abstracts Win32 Credential Manager calls for unit testing.
 type WinCredOps interface {
@@ -48,70 +20,47 @@ type WinCredOps interface {
 
 type nativeWinCredOps struct{}
 
+var advapi32 = windows.NewLazySystemDLL("advapi32.dll")
+
 func (nativeWinCredOps) Available() bool {
-	return procCredWriteW.Find() == nil &&
-		procCredReadW.Find() == nil &&
-		procCredDeleteW.Find() == nil &&
-		procCredFree.Find() == nil
+	return advapi32.NewProc("CredWriteW").Find() == nil &&
+		advapi32.NewProc("CredReadW").Find() == nil &&
+		advapi32.NewProc("CredDeleteW").Find() == nil &&
+		advapi32.NewProc("CredFree").Find() == nil
 }
 
 func (nativeWinCredOps) Write(target, user string, blob []byte) error {
-	tPtr, err := windows.UTF16PtrFromString(target)
-	if err != nil {
-		return err
-	}
-	uPtr, err := windows.UTF16PtrFromString(user)
-	if err != nil {
-		return err
-	}
-	cred := winCredential{
-		Type:               credTypeGeneric,
-		TargetName:         tPtr,
-		CredentialBlobSize: uint32(len(blob)),
-		CredentialBlob:     &blob[0],
-		Persist:            credPersistLocalMachine,
-		UserName:           uPtr,
-	}
-	r1, _, callErr := procCredWriteW.Call(uintptr(unsafe.Pointer(&cred)), 0)
-	if r1 == 0 {
-		return fmt.Errorf("CredWriteW: %w", callErr)
+	cred := wincred.NewGenericCredential(target)
+	cred.UserName = user
+	cred.Persist = wincred.PersistLocalMachine
+	cred.CredentialBlob = append([]byte(nil), blob...)
+	if err := cred.Write(); err != nil {
+		return fmt.Errorf("CredWriteW: %w", err)
 	}
 	return nil
 }
 
 func (nativeWinCredOps) Read(target string) ([]byte, error) {
-	tPtr, err := windows.UTF16PtrFromString(target)
+	cred, err := wincred.GetGenericCredential(target)
 	if err != nil {
-		return nil, err
-	}
-	var cred *winCredential
-	r1, _, callErr := procCredReadW.Call(uintptr(unsafe.Pointer(tPtr)), uintptr(credTypeGeneric), 0, uintptr(unsafe.Pointer(&cred)))
-	if r1 == 0 {
-		if callErr == errNotFoundWin32 {
+		if errors.Is(err, wincred.ErrElementNotFound) {
 			return nil, ErrNotFound
 		}
-		return nil, fmt.Errorf("CredReadW: %w", callErr)
+		return nil, fmt.Errorf("CredReadW: %w", err)
 	}
-	defer func() {
-		_, _, _ = procCredFree.Call(uintptr(unsafe.Pointer(cred)))
-	}()
-	if cred.CredentialBlobSize == 0 || cred.CredentialBlob == nil {
+	if len(cred.CredentialBlob) == 0 {
 		return nil, ErrNotFound
 	}
-	return append([]byte(nil), unsafe.Slice(cred.CredentialBlob, cred.CredentialBlobSize)...), nil
+	return append([]byte(nil), cred.CredentialBlob...), nil
 }
 
 func (nativeWinCredOps) Delete(target string) error {
-	tPtr, err := windows.UTF16PtrFromString(target)
-	if err != nil {
-		return err
-	}
-	r1, _, callErr := procCredDeleteW.Call(uintptr(unsafe.Pointer(tPtr)), uintptr(credTypeGeneric), 0)
-	if r1 == 0 {
-		if callErr == errNotFoundWin32 {
+	cred := wincred.NewGenericCredential(target)
+	if err := cred.Delete(); err != nil {
+		if errors.Is(err, wincred.ErrElementNotFound) {
 			return ErrNotFound
 		}
-		return fmt.Errorf("CredDeleteW: %w", callErr)
+		return fmt.Errorf("CredDeleteW: %w", err)
 	}
 	return nil
 }

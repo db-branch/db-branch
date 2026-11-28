@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/db-branch/db-branch/internal/domain"
+	"golang.org/x/mod/semver"
 )
 
 //go:embed runtimes.json
@@ -187,19 +188,74 @@ func (c *Catalog) Available(engine domain.Engine, platform string) []domain.Runt
 			refs = append(refs, ref)
 		}
 	}
-	sort.Slice(refs, func(i, j int) bool { return newer(refs[i].Version, refs[j].Version) })
+	sort.Slice(refs, func(i, j int) bool { return NewerVersion(refs[i].Version, refs[j].Version) })
 	return refs
 }
 
-// newer reports whether version a sorts before b (numerically, newest first).
-func newer(a, b string) bool {
+func toSemver(v string) (string, bool) {
+	if v == "" {
+		return "", false
+	}
+	if !strings.HasPrefix(v, "v") {
+		v = "v" + v
+	}
+	if semver.IsValid(v) {
+		return v, true
+	}
+	// Expand shorthand MAJOR-pre or MAJOR.MINOR-pre (accepted by domain.ParseRuntimeRef)
+	// into MAJOR.0.0-pre / MAJOR.MINOR.0-pre for golang.org/x/mod/semver.
+	if idx := strings.IndexAny(v, "-+"); idx > 1 {
+		core, rest := v[:idx], v[idx:]
+		switch strings.Count(core, ".") {
+		case 0:
+			v = core + ".0.0" + rest
+		case 1:
+			v = core + ".0" + rest
+		}
+		if semver.IsValid(v) {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// NewerVersion reports whether version a sorts before b (newest first) using SemVer 2.0,
+// falling back to dot-separated numeric comparison for non-SemVer strings.
+func NewerVersion(a, b string) bool {
+	sa, oka := toSemver(a)
+	sb, okb := toSemver(b)
+	if oka && okb {
+		if c := semver.Compare(sa, sb); c != 0 {
+			return c > 0
+		}
+		return a > b
+	}
+	if oka != okb {
+		return oka
+	}
+	return compareNumeric(a, b)
+}
+
+func compareNumeric(a, b string) bool {
 	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
 	for i := 0; i < len(pa) && i < len(pb); i++ {
-		na, _ := strconv.Atoi(pa[i])
-		nb, _ := strconv.Atoi(pb[i])
+		na, erra := strconv.Atoi(pa[i])
+		nb, errb := strconv.Atoi(pb[i])
+		if erra != nil || errb != nil {
+			if (erra == nil) != (errb == nil) {
+				return erra == nil
+			}
+			if pa[i] != pb[i] {
+				return pa[i] > pb[i]
+			}
+			continue
+		}
 		if na != nb {
 			return na > nb
 		}
 	}
-	return len(pa) > len(pb)
+	if len(pa) != len(pb) {
+		return len(pa) > len(pb)
+	}
+	return a > b
 }

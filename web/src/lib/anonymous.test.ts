@@ -31,7 +31,7 @@ describe("parseTTL", () => {
     expect(parseTTL(" 1h30m ")).toEqual({ ok: true, value: "1h30m" });
   });
   it("0・負・単位なし・文字は受け付けない", () => {
-    for (const bad of ["0", "0s", "-1h", "4", "soon", "4 hours", "1d"]) expect(parseTTL(bad).ok).toBe(false);
+    for (const bad of ["0", "0s", "0h0m", "0.0h", "-1h", "4", "soon", "4 hours", "1d"]) expect(parseTTL(bad).ok).toBe(false);
   });
 });
 

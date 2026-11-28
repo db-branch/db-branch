@@ -102,7 +102,32 @@ func TestDarwinBackend_セキュリティコマンドで保存読込削除(t *te
 		}
 		return "wrong-tok\n", "", nil
 	})
-	if err := bMismatch.Save("prod", "want-tok"); err == nil {
-		t.Error("expected Save verification error")
+	if err := bMismatch.Save("prod", "want-tok"); err == nil || strings.Contains(err.Error(), "<nil>") {
+		t.Errorf("expected descriptive Save verification error, got %v", err)
+	}
+
+	// Non-ASCII tokens are hex-encoded by `security find-generic-password -w`, so darwinBackend
+	// must refuse them before touching the keychain (allowing Store to fall back to the 0600 file).
+	securityCalled := false
+	bNonASCII := keychain.NewDarwinBackendForTest(nil, func(_ string, _ string, _ ...string) (string, string, error) {
+		securityCalled = true
+		return "", "", nil
+	})
+	if err := bNonASCII.Save("prod", "tok-日本語"); err == nil {
+		t.Error("non-ASCII token should fail on macOS keychain")
+	}
+	if securityCalled {
+		t.Error("non-ASCII token should be rejected before invoking security")
+	}
+
+	// Printable ASCII metacharacters must round-trip cleanly through escapeSecurityArg.
+	for _, tok := range []string{`with space`, `with'single`, `with$dollar`, `with#hash`, `semi;colon`, `-leading-dash`, `a\"b\\c`} {
+		stored = ""
+		if err := b.Save("prod", tok); err != nil {
+			t.Fatalf("Save(%q) = %v", tok, err)
+		}
+		if got, err := b.Load("prod"); err != nil || got != tok {
+			t.Fatalf("Load(%q) = (%q, %v)", tok, got, err)
+		}
 	}
 }

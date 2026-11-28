@@ -25,6 +25,7 @@ import (
 	"github.com/db-branch/db-branch/internal/infrastructure/config"
 	"github.com/db-branch/db-branch/internal/infrastructure/filestore"
 	"github.com/db-branch/db-branch/internal/infrastructure/raftstore"
+	"github.com/db-branch/db-branch/internal/infrastructure/retry"
 	"github.com/db-branch/db-branch/internal/interface/nodeapi"
 	"github.com/db-branch/db-branch/internal/usecase/idalign"
 )
@@ -433,22 +434,27 @@ func (c *clusterRuntime) importSingleNodeState(ctx context.Context, log *slog.Lo
 }
 
 func (c *clusterRuntime) joinAsMember(ctx context.Context, client *nodeapi.Client, log *slog.Logger) {
-	for {
+	err := retry.Do(ctx, retry.Config{
+		InitialInterval: 500 * time.Millisecond,
+		MaxInterval:     5 * time.Second,
+		Multiplier:      2,
+		Jitter:          0.25,
+		OnRetry: func(err error, wait time.Duration) {
+			log.Warn("waiting to join the cluster", "via", c.self.JoinVia, "err", err, "retry_in", wait)
+		},
+	}, func() error {
 		err := client.AddMember(ctx, c.self.JoinVia, c.self.Node, c.self.RaftAddr)
-		if err == nil {
-			log.Info("joined the cluster; the leader promotes it to voter when one is needed", "via", c.self.JoinVia)
-			return
-		}
 		if errors.Is(err, domain.ErrAlreadyExists) {
-			log.Error("cannot join the cluster: node name already in use", "node", c.self.Node, "via", c.self.JoinVia, "err", err)
-			c.failJoin(err)
-			return
+			return retry.Permanent(err)
 		}
-		log.Warn("waiting to join the cluster", "via", c.self.JoinVia, "err", err)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(3 * time.Second):
-		}
+		return err
+	})
+	if err == nil {
+		log.Info("joined the cluster; the leader promotes it to voter when one is needed", "via", c.self.JoinVia)
+		return
+	}
+	if errors.Is(err, domain.ErrAlreadyExists) {
+		log.Error("cannot join the cluster: node name already in use", "node", c.self.Node, "via", c.self.JoinVia, "err", err)
+		c.failJoin(err)
 	}
 }
