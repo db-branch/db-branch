@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **Console & CLI `0.x → 1.x` updates (`major0`)**: clusters on `0.x` can now apply `1.x` releases from Settings → Updates, `db-branch update`, and `POST /v1/updates`, upgrading `0.x` modules to `1.x` alongside the core (while keeping `1.x → 2.x` and `0.x → 2.x` manual) and displaying a confirmation warning to read the release upgrade notes.
+
 ## [0.4.1] - 2026-11-28
 
 PostgreSQL 19 support and PostgreSQL major version upgrades for branches, plus authentication hardening and dependency cleanups.

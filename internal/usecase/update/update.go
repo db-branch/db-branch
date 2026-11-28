@@ -106,7 +106,7 @@ func (s *Service) leader() string {
 // Candidate is a version a package could move to.
 type Candidate struct {
 	Version string `json:"version"`
-	// Kind is domain.UpdateMinor or domain.UpdateMajor.
+	// Kind is domain.UpdateMinor, domain.UpdateMajor0 or domain.UpdateMajor.
 	Kind string `json:"kind"`
 	// Requires is the oldest db-branch the version works with.
 	Requires string `json:"requires,omitempty"`
@@ -259,7 +259,7 @@ func (s *Service) View(ctx context.Context) (View, error) {
 	sort.Slice(v.Nodes, func(i, j int) bool { return v.Nodes[i].Name < v.Nodes[j].Name })
 	v.Packages = append(v.Packages, PackageView{Name: domain.CorePackage, Installed: core, Mixed: coreMixed, Available: candidates(core, check.Packages[domain.CorePackage])})
 	for _, c := range v.Packages[0].Available {
-		if c.Kind == domain.UpdateMinor {
+		if domain.UpdateApplicable(c.Kind) {
 			v.LatestMinor = c.Version
 			break
 		}
@@ -330,17 +330,20 @@ func (s *Service) CheckDue(ctx context.Context, enabled bool) error {
 }
 
 // planModules picks, for each wanted module, its newest version of the same
-// major that works with the target core. A newer one that needs a newer core
-// is skipped with a note.
+// major (or 1.x when moving a 0.x module alongside a 1.x core target) that
+// works with the target core. A newer one that needs a newer core is skipped
+// with a note.
 func planModules(check domain.UpdateCheck, specs []domain.ModuleSpec, target string) (map[string]string, []string) {
 	plan := map[string]string{}
 	var notes []string
+	targetMajor, okTarget := domain.Major(target)
 	for _, m := range specs {
 		offered := slices.Clone(check.Packages[m.Package()])
 		sort.SliceStable(offered, func(i, j int) bool { return domain.CompareVersions(offered[i].Version, offered[j].Version) > 0 })
 		var skipped *domain.PackageVersion
 		for i, c := range offered {
-			if domain.UpdateKind(m.Version, c.Version) != domain.UpdateMinor {
+			kind := domain.UpdateKind(m.Version, c.Version)
+			if kind != domain.UpdateMinor && !(kind == domain.UpdateMajor0 && okTarget && targetMajor == "1") {
 				continue
 			}
 			if c.Requires != "" && domain.CompareVersions(c.Requires, target) > 0 {
@@ -377,8 +380,8 @@ func invalid(format string, args ...any) error {
 }
 
 // Apply starts a rollout to target. It refuses when one runs, when a node is
-// down, and when target is not a minor update (newer, same major) for every
-// node that is not on it yet.
+// down, and when target is neither a minor update nor a 0.x->1.x update for
+// every node that is not on it yet.
 func (s *Service) Apply(ctx context.Context, target, by string) (domain.Rollout, error) {
 	check, err := s.Store.GetUpdateCheck(ctx)
 	if err != nil {
@@ -409,12 +412,12 @@ func (s *Service) Apply(ctx context.Context, target, by string) (domain.Rollout,
 		versions[n.Name] = n.Version
 		switch kind := domain.UpdateKind(n.Version, target); {
 		case domain.CompareVersions(n.Version, target) == 0:
+		case domain.UpdateApplicable(kind):
+			pending++
 		case kind == domain.UpdateMajor:
 			return domain.Rollout{}, invalid("%s is a major update for node %s (%s); a major update is done by hand, see docs/updates.md", target, n.Name, n.Version)
-		case kind == "":
-			return domain.Rollout{}, invalid("%s is not newer than %s on node %s", target, n.Version, n.Name)
 		default:
-			pending++
+			return domain.Rollout{}, invalid("%s is not newer than %s on node %s", target, n.Version, n.Name)
 		}
 	}
 	if pending == 0 {

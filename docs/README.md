@@ -22,7 +22,7 @@ The documents in this directory are written in **Japanese**. English user docume
 | [mcp.md](mcp.md) | The MCP server for LLM agents: endpoint, tokens and scopes, tools, connecting Claude Code |
 | [monitoring.md](monitoring.md) | Prometheus metrics and health endpoints |
 | [notifications.md](notifications.md) | Slack and webhook notifications and the events that trigger them |
-| [updates.md](updates.md) | Minor-version cluster updates from the console or CLI |
+| [updates.md](updates.md) | Minor-version and 0.x-to-1.x cluster updates from the console or CLI |
 | [client-cli.md](client-cli.md) | Standalone remote client CLI (`login`, profiles, TOFU TLS, `connect`, cross-platform release & Homebrew/Scoop) |
 | [distribution.md](distribution.md) | The apt repository: user steps, contents, release pipeline and signing key handling |
 | [license-renewal.md](license-renewal.md) | Monthly and yearly license keys and how automatic renewal works |

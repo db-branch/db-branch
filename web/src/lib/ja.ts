@@ -312,11 +312,14 @@ export const ja: Record<string, string> = {
   "At least 1h, e.g. 24h.": "1 時間以上の期間です（例：24h）。",
   "The source data is unmasked. It is written to disk only while it is loaded, then deleted.": "接続先のデータはマスクされていません。読み込む間だけディスクに書き、終われば消します。",
   // Updates
-  "Update the cluster to a newer minor or patch version without logging in to the nodes. Followers update first, one at a time; the leader goes last. Each node restarts its agent.":
-    "ノードにログインせずに、クラスタをより新しいマイナー版・パッチ版へ更新します。フォロワーから 1 台ずつ更新し、リーダーは最後です。各ノードはエージェントを再起動します。",
+  "Update the cluster to a newer minor or patch version (or 1.x from 0.x) without logging in to the nodes. Followers update first, one at a time; the leader goes last. Each node restarts its agent.":
+    "ノードにログインせずに、クラスタをより新しいマイナー版・パッチ版（または 0.x から 1.x）へ更新します。フォロワーから 1 台ずつ更新し、リーダーは最後です。各ノードはエージェントを再起動します。",
   "Checked {when} by {node}": "{when} に {node} が確認しました",
   "Not checked yet. Checking contacts the package repository.": "まだ確認していません。確認するとパッケージリポジトリに接続します。",
   "major update — see docs": "メジャー更新（ドキュメント参照）",
+  "major update — 0.x → 1.x": "メジャー更新（0.x → 1.x）",
+  "Major update (0.x → 1.0). Read the upgrade notes in the release notes before starting.":
+    "メジャー更新（0.x → 1.0）です。リリースノートの更新上の注意を読んでから開始してください。",
   "Update every node to {version}? One node at a time restarts its agent (branches and bases stop and start again as on any service restart). It stops if a node fails; there is no automatic rollback.":
     "すべてのノードを {version} に更新しますか？ 1 台ずつエージェントを再起動します（ブランチとベースは、サービスの再起動と同じく停止して再び起動します）。ノードが失敗すると止まり、自動では元に戻しません。",
   "A major update is done by hand: see docs/updates.md.": "メジャー更新は手作業で行います。docs/updates.md を参照してください。",

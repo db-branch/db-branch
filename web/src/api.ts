@@ -262,7 +262,7 @@ export type Metrics = { time: string; cpu: number; load1: number; mem_total: num
 
 export type ClusterStatus = { mode: "single" | "cluster"; leader: string; protocol: number; service_ids?: ServiceIds; nodes: ClusterNode[] };
 
-export type UpdateCandidate = { version: string; kind: "minor" | "major"; requires?: string };
+export type UpdateCandidate = { version: string; kind: "minor" | "major" | "major0"; requires?: string };
 export type NodeUpdate = { state: "pending" | "updating" | "done" | "failed"; from?: string; started_at?: string; finished_at?: string; error?: string };
 export type Rollout = {
   id: string;

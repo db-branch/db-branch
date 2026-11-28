@@ -70,8 +70,9 @@ export function Settings() {
 }
 
 // Updates: installed versions per node, a check of the package repository,
-// the newest minor version with a confirmation step, and the live progress
-// of the rollout. A major version is only shown: it is updated by hand.
+// the newest applicable version (minor, or 0.x -> 1.x) with a confirmation
+// step, and the live progress of the rollout. Other major versions are only
+// shown: they are updated by hand.
 function Updates() {
   const { data, error, reload } = useLive(api.updates, ["update"]);
   const [busy, setBusy] = useState(false);
@@ -85,19 +86,81 @@ function Updates() {
       (e: unknown) => (setActionError(e), setBusy(false)),
     );
   };
-  const v: UpdateView | undefined = data;
+  return (
+    <UpdatesPanel
+      v={data}
+      error={error ?? actionError}
+      busy={busy}
+      confirming={confirming}
+      cancelling={cancelling}
+      onCheck={() => act(api.checkUpdates())}
+      onConfirmVersion={setConfirming}
+      onCancelConfirm={() => setConfirming(null)}
+      onStartUpdate={(version) => act(api.startUpdate(version), () => setConfirming(null))}
+      onCancelRollout={() => (cancelling ? (setCancelling(false), act(api.cancelUpdate())) : setCancelling(true))}
+    />
+  );
+}
+
+export function UpdateConfirm({ version, major0, busy, onCancel, onConfirm }: { version: string; major0: boolean; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="confirm-box" role="group" aria-label={t("Confirm the update")}>
+      {major0 && (
+        <p className="warn">
+          {t("Major update (0.x → 1.0). Read the upgrade notes in the release notes before starting.")}
+        </p>
+      )}
+      <p>
+        {t("Update every node to {version}? One node at a time restarts its agent (branches and bases stop and start again as on any service restart). It stops if a node fails; there is no automatic rollback.", { version })}
+      </p>
+      <div className="form-actions">
+        <button onClick={onCancel} disabled={busy}>
+          {t("Cancel")}
+        </button>
+        <button className="danger-button" disabled={busy} onClick={onConfirm}>
+          {busy ? t("Starting…") : t("Start the update")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function UpdatesPanel({
+  v,
+  error,
+  busy,
+  confirming,
+  cancelling,
+  onCheck,
+  onConfirmVersion,
+  onCancelConfirm,
+  onStartUpdate,
+  onCancelRollout,
+}: {
+  v: UpdateView | undefined;
+  error: unknown;
+  busy: boolean;
+  confirming: string | null;
+  cancelling: boolean;
+  onCheck: () => void;
+  onConfirmVersion: (version: string) => void;
+  onCancelConfirm: () => void;
+  onStartUpdate: (version: string) => void;
+  onCancelRollout: () => void;
+}) {
   const r = v?.rollout;
   const running = r?.status === "running";
   const core = v?.packages.find((p) => p.name === "db-branch");
   const majors = (core?.available ?? []).filter((c) => c.kind === "major");
+  const confirmingMajor0 = Boolean(confirming && core?.available.some((c) => c.version === confirming && c.kind === "major0"));
   const stateLabel: Record<string, string> = { pending: "Waiting", updating: "Updating…", done: "Updated", failed: "Failed" };
   return (
     <section className="settings-card">
       <h2 className="section-title">{t("Updates")}</h2>
       <p className="field-hint">
-        {t("Update the cluster to a newer minor or patch version without logging in to the nodes. Followers update first, one at a time; the leader goes last. Each node restarts its agent.")}
+        {t("Update the cluster to a newer minor or patch version (or 1.x from 0.x) without logging in to the nodes. Followers update first, one at a time; the leader goes last. Each node restarts its agent.")}
       </p>
-      <ErrorLine error={error ?? actionError} />
+      <ErrorLine error={error} />
       {v && (
         <table className="rows compact">
           <tbody>
@@ -124,7 +187,7 @@ function Updates() {
         </table>
       )}
       <div className="backup-bar">
-        <button onClick={() => act(api.checkUpdates())} disabled={busy || running}>
+        <button onClick={onCheck} disabled={busy || running}>
           {busy && !confirming ? t("Checking…") : t("Check for updates")}
         </button>
         <span className="muted small">
@@ -145,7 +208,14 @@ function Updates() {
                   {p.available.length === 0 && <span className="muted">{t("up to date")}</span>}
                   {p.available.map((c) => (
                     <span key={c.version} className="mono update-candidate">
-                      {c.version} {c.kind === "major" ? <span className="muted">{t("major update — see docs")}</span> : <span className="muted">{c.kind === "minor" ? t("minor") : c.kind}</span>}{" "}
+                      {c.version}{" "}
+                      {c.kind === "major" ? (
+                        <span className="muted">{t("major update — see docs")}</span>
+                      ) : c.kind === "major0" ? (
+                        <span className="muted">{t("major update — 0.x → 1.x")}</span>
+                      ) : (
+                        <span className="muted">{c.kind === "minor" ? t("minor") : c.kind}</span>
+                      )}{" "}
                     </span>
                   ))}
                 </td>
@@ -156,25 +226,13 @@ function Updates() {
       )}
       {v && v.latest_minor && !running && !confirming && (
         <div className="form-actions">
-          <button className="primary" onClick={() => setConfirming(v.latest_minor)} disabled={busy}>
+          <button className="primary" onClick={() => onConfirmVersion(v.latest_minor)} disabled={busy}>
             {t("Update to {version}", { version: v.latest_minor })}
           </button>
         </div>
       )}
       {confirming && !running && (
-        <div className="confirm-box" role="group" aria-label={t("Confirm the update")}>
-          <p>
-            {t("Update every node to {version}? One node at a time restarts its agent (branches and bases stop and start again as on any service restart). It stops if a node fails; there is no automatic rollback.", { version: confirming })}
-          </p>
-          <div className="form-actions">
-            <button onClick={() => setConfirming(null)} disabled={busy}>
-              {t("Cancel")}
-            </button>
-            <button className="danger-button" disabled={busy} onClick={() => act(api.startUpdate(confirming), () => setConfirming(null))}>
-              {busy ? t("Starting…") : t("Start the update")}
-            </button>
-          </div>
-        </div>
+        <UpdateConfirm version={confirming} major0={confirmingMajor0} busy={busy} onCancel={onCancelConfirm} onConfirm={() => onStartUpdate(confirming)} />
       )}
       {majors.length > 0 && !v?.latest_minor && <p className="muted small">{t("A major update is done by hand: see docs/updates.md.")}</p>}
       {r && (
@@ -204,7 +262,7 @@ function Updates() {
           ))}
           {running && (
             <div className="form-actions">
-              <button className="danger-button" disabled={busy} onClick={() => (cancelling ? (setCancelling(false), act(api.cancelUpdate())) : setCancelling(true))}>
+              <button className="danger-button" disabled={busy} onClick={onCancelRollout}>
                 {cancelling ? t("Really stop? Nodes that have not started will not.") : t("Stop the rollout")}
               </button>
             </div>
