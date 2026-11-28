@@ -1063,3 +1063,133 @@ func TestUpdateCancel_先行モジュールを持つノードでキャンセル�
 		t.Errorf("cluster record changed on cancel: %+v", mods[0])
 	}
 }
+
+func newMajor0Env(t *testing.T) *env {
+	t.Helper()
+	e := newEnv(t)
+	e.pkgs.installed = map[string]string{"db-branch": "0.4.1", "db-branch-auth": "0.1.5"}
+	e.pkgs.versions = map[string][]domain.PackageVersion{
+		"db-branch":      {{Version: "2.0.0"}, {Version: "1.0.0"}, {Version: "0.4.2"}, {Version: "0.4.1"}},
+		"db-branch-auth": {{Version: "2.0.0"}, {Version: "1.1.0", Requires: "1.1.0"}, {Version: "1.0.0", Requires: "1.0.0"}, {Version: "0.2.0"}},
+	}
+	e.nodes = []domain.Node{
+		{Name: "n1", Version: "0.4.1", LastSeen: e.now, Modules: []string{"auth 0.1.5"}},
+		{Name: "n2", Version: "0.4.1", LastSeen: e.now, Modules: []string{"auth 0.1.5"}},
+		{Name: "n3", Version: "0.4.1", LastSeen: e.now, Modules: []string{"auth 0.1.5"}},
+	}
+	_ = e.store.PutModule(ctx, domain.ModuleSpec{Name: "auth", Version: "0.1.5", Wanted: true})
+	return e
+}
+
+func TestCheck_0から1への更新はmajor0として一覧とLatestMinorに出る(t *testing.T) {
+	e := newMajor0Env(t)
+	v, err := e.Check(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.LatestMinor != "1.0.0" {
+		t.Errorf("latest minor = %q, want 1.0.0", v.LatestMinor)
+	}
+	core := v.Packages[0]
+	if len(core.Available) != 3 ||
+		core.Available[0] != (update.Candidate{Version: "2.0.0", Kind: domain.UpdateMajor}) ||
+		core.Available[1] != (update.Candidate{Version: "1.0.0", Kind: domain.UpdateMajor0}) ||
+		core.Available[2] != (update.Candidate{Version: "0.4.2", Kind: domain.UpdateMinor}) {
+		t.Errorf("core.Available = %+v", core.Available)
+	}
+	auth := v.Packages[1]
+	if len(auth.Available) != 4 ||
+		auth.Available[0].Kind != domain.UpdateMajor ||
+		auth.Available[1].Kind != domain.UpdateMajor0 ||
+		auth.Available[2].Kind != domain.UpdateMajor0 ||
+		auth.Available[3].Kind != domain.UpdateMinor {
+		t.Errorf("auth.Available = %+v", auth.Available)
+	}
+}
+
+func TestApply_0から1への更新を計画しモジュールも1xへ上げ全ノード完了する(t *testing.T) {
+	e := newMajor0Env(t)
+	_ = e.store.PutModule(ctx, domain.ModuleSpec{Name: "rt-clickhouse", Kind: domain.ModuleKindRuntime, Version: "0.3.0", Wanted: true})
+	e.pkgs.versions["db-branch-rt-clickhouse"] = []domain.PackageVersion{{Version: "1.0.0"}, {Version: "0.4.0"}}
+	_, _ = e.Check(ctx)
+
+	r := apply(t, e, "1.0.0")
+	if r.Target != "1.0.0" || strings.Join(r.Order, ",") != "n1,n2,n3" {
+		t.Fatalf("rollout = %+v", r)
+	}
+	if r.Modules["db-branch-auth"] != "1.0.0" || r.Modules["db-branch-rt-clickhouse"] != "1.0.0" || len(r.Modules) != 2 {
+		t.Fatalf("modules = %v", r.Modules)
+	}
+	if len(r.Notes) != 1 || !strings.Contains(r.Notes[0], "db-branch-auth 1.1.0") || !strings.Contains(r.Notes[0], "stays at 1.0.0") {
+		t.Fatalf("notes = %v", r.Notes)
+	}
+
+	e.step(t, "n1")
+	e.setVersion("n1", "1.0.0")
+	e.step(t, "n3")
+	e.step(t, "n2")
+	e.setVersion("n2", "1.0.0")
+	e.step(t, "n3") // leader transfers leadership
+	e.step(t, "n3") // former leader updates
+	e.setVersion("n3", "1.0.0")
+	e.members.leader = "n2"
+	e.step(t, "n2")
+
+	cur, _ := e.store.GetRollout(ctx)
+	if cur.Status != domain.RolloutDone {
+		t.Fatalf("status = %s (%s)", cur.Status, cur.Error)
+	}
+	mods, _ := e.store.ListModules(ctx)
+	gotMods := map[string]string{}
+	for _, m := range mods {
+		gotMods[m.Name] = m.Version
+	}
+	if gotMods["auth"] != "1.0.0" || gotMods["rt-clickhouse"] != "1.0.0" {
+		t.Errorf("recorded modules = %v", gotMods)
+	}
+}
+
+func TestApply_混在0xと1xクラスタで1xへ更新できる(t *testing.T) {
+	e := newMajor0Env(t)
+	e.pkgs.versions["db-branch"] = append([]domain.PackageVersion{{Version: "1.0.1"}}, e.pkgs.versions["db-branch"]...)
+	e.setVersion("n1", "1.0.0")
+	_, _ = e.Check(ctx)
+
+	r := apply(t, e, "1.0.0")
+	if r.Nodes["n1"].State != domain.NodeDone || r.Nodes["n2"].State != domain.NodePending || r.Nodes["n3"].State != domain.NodePending {
+		t.Errorf("nodes = %+v", r.Nodes)
+	}
+
+	// Moving both 0.4.1 and 1.0.0 nodes to 1.0.1 is also allowed.
+	_ = e.Cancel(ctx)
+	r2 := apply(t, e, "1.0.1")
+	if r2.Nodes["n1"].State != domain.NodePending || r2.Nodes["n2"].State != domain.NodePending {
+		t.Errorf("1.0.1 nodes = %+v", r2.Nodes)
+	}
+}
+
+func TestApply_0xのままマイナー更新するときは1xモジュールへ上げない(t *testing.T) {
+	e := newMajor0Env(t)
+	e.pkgs.versions["db-branch-auth"] = []domain.PackageVersion{{Version: "1.0.0"}, {Version: "0.2.0"}}
+	_, _ = e.Check(ctx)
+	r := apply(t, e, "0.4.2")
+	if r.Modules["db-branch-auth"] != "0.2.0" || len(r.Notes) != 0 {
+		t.Errorf("modules = %v notes = %v", r.Modules, r.Notes)
+	}
+	_ = e.Cancel(ctx)
+
+	e.pkgs.versions["db-branch-auth"] = []domain.PackageVersion{{Version: "1.0.0"}}
+	_, _ = e.Check(ctx)
+	r2 := apply(t, e, "0.4.2")
+	if len(r2.Modules) != 0 || len(r2.Notes) != 0 {
+		t.Errorf("modules = %v notes = %v", r2.Modules, r2.Notes)
+	}
+}
+
+func TestApply_0から2のメジャー更新は断る(t *testing.T) {
+	e := newMajor0Env(t)
+	_, _ = e.Check(ctx)
+	if _, err := e.Apply(ctx, "2.0.0", "admin"); !errors.Is(err, domain.ErrInvalidUpdate) || !strings.Contains(err.Error(), "major") {
+		t.Errorf("0->2 err = %v", err)
+	}
+}

@@ -76,3 +76,29 @@ func TestUpdates_走っているロールアウトはrollout_runningで断る(t 
 		t.Errorf("%d %v", resp.StatusCode, body)
 	}
 }
+
+func TestUpdates_0から1への候補と適用を返す(t *testing.T) {
+	f := newFixture(t)
+	u := &fakeUpdates{view: update.View{
+		LatestMinor: "1.0.0",
+		Nodes:       []update.NodeView{{Name: "n1", Version: "0.4.1"}},
+		Packages: []update.PackageView{{
+			Name:      "db-branch",
+			Installed: "0.4.1",
+			Available: []update.Candidate{{Version: "1.0.0", Kind: domain.UpdateMajor0}},
+		}},
+	}}
+	f.srv.Updates = u
+	resp, body := f.do(t, "GET", "/v1/updates", nil)
+	if resp.StatusCode != 200 || body["latest_minor"] != "1.0.0" {
+		t.Fatalf("get: %d %v", resp.StatusCode, body)
+	}
+	avail := body["packages"].([]any)[0].(map[string]any)["available"].([]any)[0].(map[string]any)
+	if avail["kind"] != "major0" {
+		t.Errorf("kind = %v, want major0", avail["kind"])
+	}
+	resp, body = f.do(t, "POST", "/v1/updates", map[string]any{"target": "1.0.0"})
+	if resp.StatusCode != 202 || body["target"] != "1.0.0" || u.target != "1.0.0" {
+		t.Errorf("apply 1.0.0: %d %v", resp.StatusCode, body)
+	}
+}

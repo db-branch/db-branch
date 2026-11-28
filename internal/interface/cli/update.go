@@ -69,8 +69,11 @@ func (a *App) printUpdates(v updateView) error {
 		var avail []string
 		for _, c := range p.Available {
 			s := c.Version + " (" + c.Kind + ")"
-			if c.Kind == "major" {
+			switch c.Kind {
+			case "major":
 				s = c.Version + " (major: by hand, see docs/updates.md)"
+			case "major0":
+				s = c.Version + " (major0: 0.x -> 1.x)"
 			}
 			avail = append(avail, s)
 		}
@@ -108,7 +111,7 @@ func dash(s string) string {
 }
 
 func (a *App) updateCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "update", Short: "Update the cluster to a newer minor version (a major update is done by hand)"}
+	cmd := &cobra.Command{Use: "update", Short: "Update the cluster to a newer minor version or 1.x from 0.x (later major updates are done by hand)"}
 	get := func(method, path string, in any) func(*cobra.Command, []string) error {
 		return func(cmd *cobra.Command, _ []string) error {
 			c, err := a.client()
@@ -128,7 +131,7 @@ func (a *App) updateCommand() *cobra.Command {
 		&cobra.Command{Use: "status", Short: "Show node versions, newer versions on offer and the rollout", Args: cobra.NoArgs,
 			RunE: get("GET", "/v1/updates", nil)},
 		&cobra.Command{
-			Use: "apply <version>", Short: "Update every node to a newer minor version, one at a time (followers first, the leader last)", Args: cobra.ExactArgs(1),
+			Use: "apply <version>", Short: "Update every node to a newer minor version (or 1.x from 0.x), one at a time (followers first, the leader last)", Args: cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				c, err := a.client()
 				if err != nil {

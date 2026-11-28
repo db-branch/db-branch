@@ -908,6 +908,21 @@ func TestUpdateコマンド_確認と状態と開始と取り消し(t *testing.T
 			}
 		}
 	}
+	major0API := newFakeAPI()
+	major0API.answers["GET /v1/updates"] = map[string]any{
+		"checked_at": "2026-11-28T10:00:00Z", "checked_by": "n1", "latest_minor": "1.0.0",
+		"nodes": []any{map[string]any{"name": "n1", "version": "0.4.1", "leader": true}},
+		"packages": []any{
+			map[string]any{"name": "db-branch", "installed": "0.4.1", "available": []any{
+				map[string]any{"version": "2.0.0", "kind": "major"},
+				map[string]any{"version": "1.0.0", "kind": "major0"}}},
+		},
+	}
+	if code, out, errOut := runAPI(t, major0API, "update", "status"); code != 0 {
+		t.Fatalf("major0 status: %d: %s", code, errOut)
+	} else if !strings.Contains(out, "1.0.0 (major0: 0.x -> 1.x)") || !strings.Contains(out, "2.0.0 (major: by hand") {
+		t.Errorf("major0 output = \n%s", out)
+	}
 	if code, out, _ := runAPI(t, api, "update", "status", "-o", "json"); code != 0 || !strings.Contains(out, `"latest_minor": "1.2.0"`) {
 		t.Errorf("json: %d %s", code, out)
 	}

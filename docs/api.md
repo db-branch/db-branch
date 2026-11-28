@@ -623,7 +623,7 @@ GET /v1/cluster
 
 #### 5.4.1 更新
 
-マイナー更新の確認とロールアウト（[updates.md](updates.md)）。
+マイナー更新および `0.x` → `1.x` 更新の確認とロールアウト（[updates.md](updates.md)）。
 
 | メソッド | パス | 応答 | action |
 |---|---|---|---|
@@ -645,9 +645,9 @@ GET /v1/updates
 }
 ```
 
-- `kind`: `minor`（同じ MAJOR の新しい版）か `major`（適用できない）
+- `kind`: `minor`（同じ MAJOR の新しい版）、`major0`（`0.x` から `1.x` への更新、適用できる）、または `major`（`1.x` 以降または `0.x` → `2.x` 以降、適用できない）
 - `rollout.status`: `running` / `done` / `failed` / `canceled`。ノードの `state`: `pending` / `updating` / `done` / `failed`
-- 開始できないとき: 400（メジャー更新・古い版・未確認の版）、409（ロールアウト実行中は `rollout_running`、ノードが落ちている）、503（リーダーなし、またはプロトコルが古いノードがいる）
+- 開始できないとき: 400（`major` に当たるメジャー更新・古い版・未確認の版）、409（ロールアウト実行中は `rollout_running`、ノードが落ちている）、503（リーダーなし、またはプロトコルが古いノードがいる）
 - 変化はイベント `update.updated` で届く
 
 ### 5.5 オペレーション

@@ -37,7 +37,7 @@ func TestCompareVersions_Debianの順序で比べる(t *testing.T) {
 	}
 }
 
-func TestUpdateKind_同じメジャーの新しい版だけが小さな更新(t *testing.T) {
+func TestUpdateKind_同じメジャーまたは0から1の新しい版を判定する(t *testing.T) {
 	for _, c := range []struct{ from, to, want string }{
 		{"1.2.0", "1.3.0", domain.UpdateMinor},
 		{"1.2.0", "1.2.1", domain.UpdateMinor},
@@ -46,11 +46,49 @@ func TestUpdateKind_同じメジャーの新しい版だけが小さな更新(t 
 		{"1.2.0", "1.1.0", ""},
 		{"2.0.0", "1.9.0", ""},
 		{"0.0.0~dev20261111070644.ee06010", "0.0.0~dev20261112000000.aaaaaaa", domain.UpdateMinor},
+		{"0.4.1", "0.5.0", domain.UpdateMinor},
+		{"0.4.1", "1.0.0", domain.UpdateMajor0},
+		{"0.4.1", "1.2.0", domain.UpdateMajor0},
+		{"0.4.1", "1.0.0~rc1", domain.UpdateMajor0},
+		{"0.0.0~dev20261128000000.aaaaaaa", "1.0.0~dev20261129000000.bbbbbbb", domain.UpdateMajor0},
+		{"0.4.1", "2.0.0", domain.UpdateMajor},
+		{"1.0.0~rc1", "1.0.0", domain.UpdateMinor},
+		{"1.0.0", "0.4.1", ""},
+		{"0.4.1", "1:1.0.0", domain.UpdateMajor},
 		{"1:1.2.0", "1:1.3.0", domain.UpdateMinor},
+		{"1:0.4.1", "1:1.0.0", domain.UpdateMajor0},
 		{"x", "1.0", ""},
 	} {
 		if got := domain.UpdateKind(c.from, c.to); got != c.want {
 			t.Errorf("UpdateKind(%q, %q) = %q, want %q", c.from, c.to, got, c.want)
+		}
+	}
+	for _, c := range []struct {
+		kind string
+		want bool
+	}{
+		{domain.UpdateMinor, true},
+		{domain.UpdateMajor0, true},
+		{domain.UpdateMajor, false},
+		{"", false},
+	} {
+		if got := domain.UpdateApplicable(c.kind); got != c.want {
+			t.Errorf("UpdateApplicable(%q) = %v, want %v", c.kind, got, c.want)
+		}
+	}
+	for _, c := range []struct {
+		v    string
+		want string
+		ok   bool
+	}{
+		{"0.4.1", "0", true},
+		{"00.4.1", "0", true},
+		{"1.0.0", "1", true},
+		{"1:0.4.1", "0", true},
+		{"x", "", false},
+	} {
+		if got, ok := domain.Major(c.v); got != c.want || ok != c.ok {
+			t.Errorf("Major(%q) = (%q, %v), want (%q, %v)", c.v, got, ok, c.want, c.ok)
 		}
 	}
 }

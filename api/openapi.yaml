@@ -3316,7 +3316,7 @@ paths:
       x-dbb-action: update.read
       x-dbb-token-scopes: [full]
       description: |-
-        Nodes with their versions, packages with the newer versions on offer, `latest_minor`, and the current rollout. Updates move every node to a newer minor or patch version, followers first and the leader last.
+        Nodes with their versions, packages with the newer versions on offer, `latest_minor`, and the current rollout. Updates move every node to a newer minor or patch version (or to 1.x from 0.x), followers first and the leader last.
 
         **Action:** `update.read`. Needs a console session, the local socket, or a `full` token.
       responses:
@@ -3339,7 +3339,7 @@ paths:
       x-dbb-action: update.apply
       x-dbb-token-scopes: [full]
       description: |-
-        Starts a rollout to `target`. Answers `202` with the rollout. It stops at the first failed node and does not roll back. Major versions are updated by hand.
+        Starts a rollout to `target`. Answers `202` with the rollout. It stops at the first failed node and does not roll back. Major updates from 1.x onward (and 0.x to 2.x) are updated by hand.
 
         **Action:** `update.apply`. Needs a console session of an admin, the local socket, or a `full` token.
       requestBody:
@@ -5437,7 +5437,8 @@ components:
                     version: {type: string}
                     kind:
                       type: string
-                      enum: [minor, major]
+                      enum: [minor, major, major0]
+                      description: 'Update kind: `minor` (same major), `major0` (0.x to 1.x, applicable), or `major` (later major, by hand).'
                     requires: {type: string, description: The oldest db-branch the version works with.}
                   required: [version, kind]
             required: [name, installed, mixed, available]

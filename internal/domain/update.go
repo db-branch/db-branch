@@ -18,9 +18,15 @@ var ErrRolloutRunning = fmt.Errorf("%w: a rollout is already running", ErrConfli
 
 // Kinds of update, by how the target compares to the installed version.
 const (
-	UpdateMinor = "minor"
-	UpdateMajor = "major"
+	UpdateMinor  = "minor"
+	UpdateMajor  = "major"
+	UpdateMajor0 = "major0"
 )
+
+// UpdateApplicable reports whether an update kind can be applied from the console and API.
+func UpdateApplicable(kind string) bool {
+	return kind == UpdateMinor || kind == UpdateMajor0
+}
 
 // CorePackage is the APT package of db-branch itself.
 const CorePackage = "db-branch"
@@ -119,8 +125,8 @@ func verrevcmp(a, b string) int {
 	return 0
 }
 
-// majorOf is the leading number of the version ("1" of "1.2.3").
-func majorOf(v string) (string, bool) {
+// Major returns the leading major version number ("1" of "1.2.3", "0" of "0.4.1").
+func Major(v string) (string, bool) {
 	if _, rest, ok := strings.Cut(v, ":"); ok {
 		v = rest
 	}
@@ -131,23 +137,31 @@ func majorOf(v string) (string, bool) {
 	if i == 0 {
 		return "", false
 	}
-	return strings.TrimLeft(v[:i], "0"), true
+	m := strings.TrimLeft(v[:i], "0")
+	if m == "" {
+		m = "0"
+	}
+	return m, true
 }
 
 // UpdateKind says what moving from one version to another is: UpdateMinor
-// (newer, same major), UpdateMajor (newer, another major) or "" (not newer,
-// or a version without a major).
+// (newer, same major), UpdateMajor0 (newer, 0.x to 1.x), UpdateMajor
+// (newer, another major) or "" (not newer, or a version without a major).
 func UpdateKind(from, to string) string {
 	if CompareVersions(to, from) <= 0 {
 		return ""
 	}
-	mf, okf := majorOf(from)
-	mt, okt := majorOf(to)
+	ef, _, _ := splitVersion(from)
+	et, _, _ := splitVersion(to)
+	mf, okf := Major(from)
+	mt, okt := Major(to)
 	switch {
 	case !okf || !okt:
 		return ""
 	case mf == mt:
 		return UpdateMinor
+	case ef == et && mf == "0" && mt == "1":
+		return UpdateMajor0
 	}
 	return UpdateMajor
 }
